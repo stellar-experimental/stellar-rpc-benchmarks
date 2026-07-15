@@ -917,7 +917,9 @@
       <div class="banner${tail ? " warn-tail" : ""}">
         <div class="banner-figure">${keeps}<span class="of"> / ${ORDER.length}</span></div>
         <div class="banner-copy">
-          <div class="lead">All profiles sustain the ${esc(D.checks ? D.checks.label : "block model")} in steady state. <span class="chip">✓ KEEPS UP</span>${tail ? ` <span class="chip warn">TAIL CAVEAT</span>` : ""}</div>
+          <div class="lead">${keeps === ORDER.length
+            ? `All profiles sustain the ${esc(D.checks ? D.checks.label : "block model")} in steady state. <span class="chip">✓ KEEPS UP</span>`
+            : `${keeps} of ${ORDER.length} profiles sustain the ${esc(D.checks ? D.checks.label : "block model")} in steady state. <span class="chip warn">${ORDER.length - keeps} OVER INTERVAL</span>`}${tail ? ` <span class="chip warn">TAIL CAVEAT</span>` : ""}</div>
           <p id="banner-note"></p>
         </div>
       </div>

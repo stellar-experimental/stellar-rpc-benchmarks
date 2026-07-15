@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       gcs_path:
-        description: "gs:// path to a results directory to ingest (e.g. gs://rpc-full-history/benchmarks/pubnet-2026-07-13-user-dev-063a)"
+        description: "gs:// path to a results directory to ingest (e.g. gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a)"
         required: true
         type: string
       run_id:

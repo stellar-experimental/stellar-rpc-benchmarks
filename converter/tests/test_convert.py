@@ -158,6 +158,20 @@ class ValidatorTests(unittest.TestCase):
         del d["machine"]
         self.assertTrue(any("machine" in e for e in convert.validate_run(d, reps=3)))
 
+    def test_median_mismatch_flagged(self):
+        # m must equal median_low(r), not just fall inside [lo, hi].
+        d = self._minimal()
+        d["ingest_cold"]["sac"]["driver"]["backfill_wall"]["total"]["m"] = 5  # inside range, wrong median
+        self.assertTrue(any("median_low" in e for e in convert.validate_run(d, reps=3)))
+
+    def test_setup_nitems_type_checked(self):
+        # setup rows are V + n_items; a non-int n_items must be flagged.
+        d = self._minimal()
+        d["queries"] = {"cold": {"6345": {"setup": {
+            "probe": {"m": 3, "lo": 1, "hi": 5, "r": [3, 1, 5], "n_items": "oops"}}}}}
+        d["sections"] = ["ingest_cold", "queries"]
+        self.assertTrue(any("n_items is not an int" in e for e in convert.validate_run(d, reps=3)))
+
 
 class ManifestTests(unittest.TestCase):
     def test_insert_replace_and_sort(self):

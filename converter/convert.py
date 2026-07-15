@@ -18,6 +18,7 @@ import argparse
 import csv
 import glob
 import json
+import numbers
 import os
 import re
 import statistics
@@ -369,8 +370,11 @@ def _walk(node, errors, reps, path):
                 errors.append(f"{path}: lo {node['lo']} != min(r) {min(r)}")
             if node["hi"] != max(r):
                 errors.append(f"{path}: hi {node['hi']} != max(r) {max(r)}")
-            if not (node["lo"] <= node["m"] <= node["hi"]):
-                errors.append(f"{path}: not lo<=m<=hi ({node['lo']},{node['m']},{node['hi']})")
+            if node["m"] != statistics.median_low(r):
+                errors.append(f"{path}: m {node['m']} != median_low(r) {statistics.median_low(r)}")
+            # setup rows carry an extra n_items alongside the V fields
+            if "n_items" in node and not isinstance(node["n_items"], numbers.Integral):
+                errors.append(f"{path}: n_items is not an int")
             return
         if _is_stage_agg(node):
             for k in ("n", "n_items"):

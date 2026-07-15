@@ -44,19 +44,20 @@ On a laptop that's authenticated to GCS (`gcloud auth login`), pull a results di
 down, convert it, and commit. Worked example:
 
 ```bash
-# 1. Pull the results directory from GCS.
+# 1. Pull the results directory from GCS. (This is the exact path recorded as this
+#    run's provenance in docs/runs/pubnet-2026-07-13.json.)
 gcloud storage cp -r \
-  gs://rpc-full-history/benchmarks/pubnet-2026-07-13-user-dev-063a \
+  gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a \
   ./results-in
 
 # 2. Convert it into docs/runs/pubnet-2026-07-13.json and update docs/runs/index.json.
 make convert \
-  RESULTS=./results-in/pubnet-2026-07-13-user-dev-063a \
+  RESULTS=./results-in/2026-07-13-user-dev-063a \
   RUN_ID=pubnet-2026-07-13 \
   RUN_NAME="Pubnet full history — 4 chunks (user-dev-063a)" \
   KIND=pubnet \
   RUN_DATE=2026-07-13 \
-  GCS=gs://rpc-full-history/benchmarks/pubnet-2026-07-13-user-dev-063a
+  GCS=gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a
 
 # 3. Review the diff, then commit + push. Pages redeploys from main:/docs.
 git add docs/runs
