@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "id": "synthetic-2026-07-15",
+      "name": "Synthetic apply-load — sac/token/soroswap (user-dev-063a)",
+      "date": "2026-07-15",
+      "kind": "synthetic",
+      "path": "runs/synthetic-2026-07-15.json"
+    },
+    {
+      "id": "pubnet-2026-07-13",
+      "name": "Pubnet full history — 4 chunks (user-dev-063a)",
+      "date": "2026-07-13",
+      "kind": "pubnet",
+      "path": "runs/pubnet-2026-07-13.json"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "stellar-rpc-bench-viewer-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless smoke test for the docs/ benchmark-report viewer (jsdom, no server).",
+  "scripts": {
+    "test": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  }
+}
