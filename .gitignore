@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Converter / ingestion scratch
+converter/out/
+results-in/
+
+# Node (dev-only jsdom smoke test may be added later)
+node_modules/

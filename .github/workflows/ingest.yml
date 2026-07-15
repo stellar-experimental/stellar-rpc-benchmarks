@@ -1,0 +1,115 @@
+name: Ingest benchmark run
+
+# Manually pull one results directory from GCS, convert it to a run JSON,
+# and commit it to main so GitHub Pages (main:/docs) redeploys.
+on:
+  workflow_dispatch:
+    inputs:
+      gcs_path:
+        description: "gs:// path to a results directory to ingest (e.g. gs://rpc-full-history/benchmarks/pubnet-2026-07-13-user-dev-063a)"
+        required: true
+        type: string
+      run_id:
+        description: "Run slug — becomes docs/runs/<run_id>.json (e.g. pubnet-2026-07-13)"
+        required: true
+        type: string
+      run_name:
+        description: "Human-readable run name"
+        required: true
+        type: string
+      dataset_kind:
+        description: "Dataset kind"
+        required: true
+        type: choice
+        options:
+          - pubnet
+          - synthetic
+      run_date:
+        description: "Run date (YYYY-MM-DD)"
+        required: true
+        type: string
+      unit_facts:
+        description: "Optional repo path to a --unit-facts sidecar JSON (e.g. converter/facts/synthetic-2026-07-15.json)"
+        required: false
+        type: string
+
+# Minimal: write the committed run JSON, and mint an OIDC token for GCP WIF.
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # The GCP side (WIF pool/provider + service account) is not set up yet.
+      # Fail loudly and honestly rather than erroring deep inside the auth action.
+      - name: Verify Workload Identity Federation is configured
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$WIF_PROVIDER" ] || [ -z "$WIF_SERVICE_ACCOUNT" ]; then
+            echo "::error::GCP Workload Identity Federation is not configured — this workflow cannot run yet."
+            echo "Create these repository variables (Settings > Secrets and variables > Actions > Variables):"
+            echo "  - GCP_WORKLOAD_IDENTITY_PROVIDER"
+            echo "  - GCP_SERVICE_ACCOUNT"
+            echo "They require a workload identity pool/provider and a service account with"
+            echo "roles/storage.objectViewer on gs://rpc-full-history, created in GCP project dev-hubble."
+            echo "See the README (GitHub Action flow) for the full setup. This setup is pending."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download results from GCS
+        env:
+          GCS_PATH: ${{ inputs.gcs_path }}
+        run: |
+          rm -rf ./results-in
+          mkdir -p ./results-in
+          gcloud storage cp -r "$GCS_PATH" ./results-in
+          # gcloud nests the copied directory under ./results-in/<basename>.
+          echo "RESULTS_DIR=./results-in/$(basename "${GCS_PATH%/}")" >> "$GITHUB_ENV"
+
+      - name: Convert run into docs/runs
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+          RUN_NAME: ${{ inputs.run_name }}
+          RUN_DATE: ${{ inputs.run_date }}
+          DATASET_KIND: ${{ inputs.dataset_kind }}
+          GCS_PATH: ${{ inputs.gcs_path }}
+          UNIT_FACTS: ${{ inputs.unit_facts }}
+        run: |
+          python3 converter/convert.py "$RESULTS_DIR" \
+            --run-id "$RUN_ID" \
+            --run-name "$RUN_NAME" \
+            --run-date "$RUN_DATE" \
+            --dataset-kind "$DATASET_KIND" \
+            --source-gcs "$GCS_PATH" \
+            ${UNIT_FACTS:+--unit-facts "$UNIT_FACTS"} \
+            --out-dir docs/runs
+
+      - name: Commit and push the new run
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/runs
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Ingest benchmark run ${RUN_ID}"
+          git push
