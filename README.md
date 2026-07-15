@@ -34,6 +34,10 @@ Then open http://localhost:8000. The viewer fetches `runs/index.json` and the ru
 over HTTP, so opening `docs/index.html` as a `file://` URL will **not** work — use
 `make serve`.
 
+To smoke-test the viewer headlessly (loads each run in a jsdom DOM, asserts zero JS
+errors and the expected figure/section counts and sanity values), run `make smoke`
+(needs Node; installs `jsdom` under `tests/smoke/` on first run).
+
 ## Add a run locally (the primary flow today)
 
 On a laptop that's authenticated to GCS (`gcloud auth login`), pull a results directory
@@ -126,9 +130,14 @@ stellar-rpc-benchmarks/
 │       └── ingest.yml       # workflow_dispatch: GCS results dir → committed run
 ├── converter/
 │   ├── convert.py           # results dir → docs/runs/<id>.json (+ manifest), stdlib only
+│   ├── facts/               # per-unit sidecar facts (e.g. synthetic model/tps/pack)
 │   └── tests/               # make test → python3 -m unittest discover converter/tests
+├── tests/
+│   └── smoke/               # make smoke → jsdom viewer smoke test (Node, dev-only)
 └── docs/                    # GitHub Pages root (static vanilla-JS viewer)
-    ├── index.html           # the viewer (dropdown / ?run=<id>)
+    ├── index.html           # the viewer shell (dropdown / ?run=<id>)
+    ├── app.js               # renderers (per dataset.kind) + charts
+    ├── styles.css           # design system (light + dark)
     └── runs/
         ├── index.json       # manifest of runs (newest date first)
         └── <run-id>.json    # one file per run (schema v1)

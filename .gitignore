@@ -10,5 +10,8 @@ __pycache__/
 converter/out/
 results-in/
 
-# Node (dev-only jsdom smoke test may be added later)
+# Node (dev-only jsdom smoke test)
 node_modules/
+
+# Editor / tool scratch
+.serena/

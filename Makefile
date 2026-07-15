@@ -2,7 +2,7 @@
 # `make` (or `make help`) lists targets. `make convert` is the primary local flow.
 
 .DEFAULT_GOAL := help
-.PHONY: help convert test serve
+.PHONY: help convert test smoke serve
 
 # Variables required by `convert`. `convert` fails early if any is empty.
 CONVERT_REQUIRED := RESULTS RUN_ID RUN_NAME KIND RUN_DATE
@@ -29,8 +29,12 @@ convert: ## Convert a results dir into docs/runs/<id>.json and update the manife
 	  $(if $(strip $(GCS)),--source-gcs "$(GCS)",) \
 	  --out-dir docs/runs
 
-test: ## Run the converter unit tests
+test: ## Run the converter unit + golden tests
 	python3 -m unittest discover converter/tests
+
+smoke: ## Run the jsdom viewer smoke test (needs node; installs deps on first run)
+	npm --prefix tests/smoke install --silent
+	npm --prefix tests/smoke test
 
 serve: ## Serve docs/ at http://localhost:8000 (the viewer needs http; file:// won't work)
 	python3 -m http.server 8000 -d docs
