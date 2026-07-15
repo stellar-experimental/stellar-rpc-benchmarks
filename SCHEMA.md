@@ -31,7 +31,7 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
 {
   "schema_version": 1,
   "run_id": "pubnet-2026-07-13",          // slug; file is runs/<run_id>.json
-  "run_name": "Pubnet full history — 4 chunks (user-dev-063a)",
+  "run_name": "Pubnet — 4 sampled chunks (user-dev-063a)",
   "run_date": "2026-07-13",
   "machine": {                             // parsed from machine-metadata.txt
     "raw": "<file verbatim>",              // required; parsed fields below best-effort

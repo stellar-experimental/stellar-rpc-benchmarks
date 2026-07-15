@@ -522,7 +522,9 @@ def convert(args):
     if args.description:
         description = args.description
     elif args.dataset_kind == "pubnet":
-        description = f"Pubnet full-history ingest and query benchmarks across {len(unit_order)} chunk(s)."
+        description = (f"Ingest & query benchmarks of the full-history storage engine on "
+                       f"{len(unit_order)} sampled 10k-ledger chunks of real pubnet history "
+                       f"(chunks {'/'.join(unit_order)}).")
     else:
         description = (f"Synthetic apply-load ingest benchmarks across "
                        f"{len(unit_order)} profile(s): {', '.join(unit_order)}.")

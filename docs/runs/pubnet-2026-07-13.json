@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "run_id": "pubnet-2026-07-13",
-  "run_name": "Pubnet full history — 4 chunks (user-dev-063a)",
+  "run_name": "Pubnet — 4 sampled chunks (user-dev-063a)",
   "run_date": "2026-07-13",
   "machine": {
     "raw": "Tue Jul 14 02:53:56 UTC 2026\ninstance-type: m6id.2xlarge\ninstance-id:   i-0439629bf3f8622db\nLinux user-dev-063a 6.14.0-1018-aws #18~24.04.1-Ubuntu SMP Mon Nov 24 19:46:27 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux\nUbuntu 24.04.3 LTS\nCPU(s):                                  8\nModel name:                              Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz\n               total        used        free      shared  buff/cache   available\nMem:            30Gi       1.6Gi       3.6Gi       2.8Mi        26Gi        29Gi\nNAME           SIZE MODEL\nloop0         27.6M \nloop1           74M \nloop2         50.9M \nloop3         28.4M \nnvme0n1         50G Amazon Elastic Block Store\n├─nvme0n1p1     49G \n├─nvme0n1p14     4M \n├─nvme0n1p15   106M \n└─nvme0n1p16   913M \nnvme1n1      441.4G Amazon EC2 NVMe Instance Storage\nrepo: 84a3043d299625600b0c2f7e7c3da9db5a18cbc3 (bench-ci-775)\ngo version go1.26.5 linux/amd64\nrustc 1.97.0 (2d8144b78 2026-07-07)\nchunks: 3000 5000 6100 6345\nfsync probe: 8192000 bytes (8.2 MB, 7.8 MiB) copied, 0.324195 s, 25.3 MB/s\n",
@@ -23,7 +23,7 @@
   },
   "dataset": {
     "kind": "pubnet",
-    "description": "Pubnet full-history ingest and query benchmarks across 4 chunk(s).",
+    "description": "Ingest & query benchmarks of the full-history storage engine on 4 sampled 10k-ledger chunks of real pubnet history (chunks 3000/5000/6100/6345).",
     "units": "chunk",
     "unit_label": "Chunk",
     "unit_order": [

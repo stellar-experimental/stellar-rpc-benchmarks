@@ -54,7 +54,7 @@ gcloud storage cp -r \
 make convert \
   RESULTS=./results-in/2026-07-13-user-dev-063a \
   RUN_ID=pubnet-2026-07-13 \
-  RUN_NAME="Pubnet full history — 4 chunks (user-dev-063a)" \
+  RUN_NAME="Pubnet — 4 sampled chunks (user-dev-063a)" \
   KIND=pubnet \
   RUN_DATE=2026-07-13 \
   GCS=gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a
