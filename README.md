@@ -17,7 +17,8 @@ results are mirrored to GCS under `gs://rpc-full-history/benchmarks/`.
 
 `converter/convert.py` (Python 3, standard library only) turns one results directory into
 `docs/runs/<run-id>.json` (schema v1) and updates the manifest `docs/runs/index.json`. The
-static viewer in `docs/` renders any committed run via a dropdown or `?run=<id>`.
+static viewer in `docs/` renders any committed run via a dropdown or `?run=<id>`. Appending
+`&view=hot` (or the toolbar toggle) shows a focused, stakeholder-facing hot-ingestion-only view.
 
 **Why GitHub Pages from `main:/docs`:** there is no build step — the viewer is static
 vanilla JS and the run JSONs are committed alongside it — so serving the `/docs` folder

@@ -1,5 +1,5 @@
 {
   "sac":      {"model": "SAC transfer",      "tps": 10000, "tx_per_ledger": 6000, "pack": "19.5 GiB", "source_chunks": "1"},
-  "token":    {"model": "custom_token (oz)", "tps": 9000,  "tx_per_ledger": 5400, "pack": "16.1 GiB", "source_chunks": "1"},
+  "token":    {"model": "OpenZeppelin custom token", "label": "OZ token", "tps": 9000,  "tx_per_ledger": 5400, "pack": "16.1 GiB", "source_chunks": "1"},
   "soroswap": {"model": "AMM swap",          "tps": 2500,  "tx_per_ledger": 1500, "pack": "9.7 GiB",  "source_chunks": "1–2"}
 }

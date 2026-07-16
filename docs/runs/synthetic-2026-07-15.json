@@ -19,7 +19,7 @@
   },
   "dataset": {
     "kind": "synthetic",
-    "description": "Synthetic apply-load ingest benchmarks across 3 profile(s): sac, token, soroswap.",
+    "description": "Synthetic apply-load ingest benchmarks across 3 profile(s): sac, OZ token, soroswap.",
     "units": "profile",
     "unit_label": "Profile",
     "unit_order": [
@@ -42,7 +42,8 @@
         "ledgers": 10000,
         "txs": 53848828,
         "events": 53859600,
-        "model": "custom_token (oz)",
+        "model": "OpenZeppelin custom token",
+        "label": "OZ token",
         "tps": 9000,
         "tx_per_ledger": 5400,
         "pack": "16.1 GiB",

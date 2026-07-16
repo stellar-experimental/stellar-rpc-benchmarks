@@ -197,6 +197,7 @@ figcaption { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 8
 .vallab-in { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: #ffffff; font-variant-numeric: tabular-nums; }
 .gridline { stroke: var(--grid); stroke-width: 1; }
 .baseline-l { stroke: var(--baseline); stroke-width: 1; }
+.group-sep { stroke: var(--baseline); stroke-width: 1; opacity: 0.55; }
 .paneltitle { font-size: 12.5px; fill: var(--ink); font-weight: 620; }
 .refline { stroke: var(--hot); stroke-width: 1.5; stroke-dasharray: 4 4; }
 .reflab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: var(--hot); letter-spacing: 0.04em; }
@@ -289,6 +290,14 @@ pre.metadata {
   font-size: 13.5px; color: var(--ink-2); max-width: 52em;
 }
 .note-callout strong { color: var(--ink); }
+
+/* phase guide (hot view) */
+.phase-guide { border: 1px solid var(--border); background: var(--surface); border-radius: 10px; padding: 16px 20px; margin: 18px 0; max-width: 60em; }
+.phase-guide p { color: var(--ink-2); font-size: 13.5px; margin: 0 0 10px; }
+.phase-guide ul { margin: 0 0 10px; padding-left: 20px; }
+.phase-guide li { color: var(--ink-2); font-size: 13.5px; line-height: 1.55; margin: 4px 0; max-width: 58em; }
+.phase-guide li strong { color: var(--ink); }
+.phase-guide p:last-child { margin-bottom: 0; }
 
 /* generic fallback tables (unknown section/stage) */
 .generic-block { margin: 18px 0; }

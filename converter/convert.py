@@ -526,8 +526,9 @@ def convert(args):
                        f"{len(unit_order)} sampled 10k-ledger chunks of real pubnet history "
                        f"(chunks {'/'.join(unit_order)}).")
     else:
+        labels = [unit_meta.get(u, {}).get("label", u) for u in unit_order]
         description = (f"Synthetic apply-load ingest benchmarks across "
-                       f"{len(unit_order)} profile(s): {', '.join(unit_order)}.")
+                       f"{len(unit_order)} profile(s): {', '.join(labels)}.")
 
     data = {
         "schema_version": 1,
