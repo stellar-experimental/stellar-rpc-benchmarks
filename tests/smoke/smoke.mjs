@@ -144,6 +144,34 @@ for (const run of manifest.runs) {
   window.close();
 }
 
+/* ---------------- hot-ingestion view (?view=hot) ---------------- */
+const synthRun = manifest.runs.find((r) => r.kind === "synthetic");
+if (synthRun) {
+  const group = "synthetic hot-view";
+  console.log(`\n=== ${synthRun.id} (?view=hot) ===`);
+  const { window, errors } = await loadViewer(`?run=${synthRun.id}&view=hot`);
+  const doc = window.document;
+  const report = doc.getElementById("report");
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "masthead present", !!report.querySelector(".masthead"), "missing");
+  check(group, "extended chart rendered", !!doc.querySelector("#fig42-body svg"), "missing");
+  const f42 = txt(doc.querySelector("#fig42-tv"));
+  check(group, "all phases in fig42 table", /commit \(fsync\)/.test(f42) && /extract/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
+  const targetRows = report.querySelectorAll("#target-table tr").length;
+  check(group, "keep-up table populated", targetRows >= 2, targetRows + " rows");
+  check(group, "keep-up table has KEEPS UP", /KEEPS UP/.test(txt(doc.getElementById("target-table"))), "missing");
+  const meta = txt(doc.getElementById("machine-metadata"));
+  check(group, "methodology metadata filled", meta.length > 100, meta.length + " chars");
+  const reportTxt = txt(report);
+  check(group, "Hot-run semantics present", /Hot-run semantics/.test(reportTxt), "missing");
+  check(group, "Cold-run semantics dropped", !/Cold-run semantics/.test(reportTxt), "present");
+  const guide = report.querySelector(".phase-guide");
+  check(group, "phase guide present", !!guide, "missing");
+  check(group, "phase guide mentions IngestLedger", /IngestLedger/.test(txt(guide)), "missing");
+  check(group, "OZ token label shown", txt(report).includes("OZ token"), "missing");
+  window.close();
+}
+
 console.log(`\nSMOKE SUMMARY: ${pass} passed, ${fail} failed (${manifest.runs.length} runs)`);
 if (fail) {
   console.log("Failures:");

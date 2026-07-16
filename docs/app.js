@@ -9,7 +9,9 @@
   const reportEl = document.getElementById("report");
   const selectEl = document.getElementById("run-select");
   const themeBtn = document.getElementById("theme-toggle");
+  const viewBtn = document.getElementById("view-toggle");
   const tip = document.getElementById("tip");
+  function currentView() { return new URL(location.href).searchParams.get("view") === "hot" ? "hot" : "full"; }
 
   let MANIFEST = null;
   let CURRENT = null;   // { meta, data } of the run on screen
@@ -273,7 +275,7 @@
     }
     S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: "per-op latency · log scale" }, svg);
     let y = m.t;
-    rows.forEach(row => {
+    rows.forEach((row, ri) => {
       row.lanes.forEach((lane, li) => {
         const cy = y + laneH / 2;
         if (li === 0) {
@@ -297,6 +299,10 @@
         hoverable(hit, `${row.label} — ${lane.name}`, tipRows);
         y += laneH;
       });
+      if (opts.groupSeparators && ri < rows.length - 1) {
+        const sy = y + rowGap / 2;
+        S("line", { x1: 8, y1: sy, x2: W - m.r, y2: sy, class: "group-sep" }, svg);
+      }
       y += rowGap;
     });
     el.appendChild(svg);
@@ -896,6 +902,7 @@
     const ds = D.dataset;
     const ORDER = ds.unit_order;
     const um = ds.unit_meta;
+    const disp = p => (um[p] && um[p].label) || p;
     const cold = D.ingest_cold, hot = D.ingest_hot;
     const interval = D.checks && D.checks.interval_ns ? D.checks.interval_ns : 600e6;
     const intervalMs = interval / MS;
@@ -983,7 +990,7 @@
       let L = 0, T = 0, Ev = 0;
       ORDER.forEach(p => {
         const d = um[p]; L += d.ledgers; T += d.txs; Ev += d.events;
-        const row = [p, d.model || "—", d.tps ? (d.tps / 1000).toFixed(1).replace(".0", "") + " K TPS" : "—",
+        const row = [disp(p), d.model || "—", d.tps ? (d.tps / 1000).toFixed(1).replace(".0", "") + " K TPS" : "—",
           fmtInt(d.txs / d.ledgers), (d.events / d.txs).toFixed(2), fmtInt(d.ledgers), d.source_chunks || "—",
           fmtInt(d.txs), fmtInt(d.events), d.pack || "—"];
         const r = document.createElement("tr");
@@ -1019,7 +1026,7 @@
       // banner note
       const worstP = ORDER.reduce((a, p) => hot[p].driver.ingest_total.p99.m > hot[a].driver.ingest_total.p99.m ? p : a, ORDER[0]);
       const bn = document.getElementById("banner-note");
-      if (tail) bn.innerHTML = `The caveat lives in the tail: the <strong>${esc(worstP)}</strong> profile's slowest 1 % of ledgers exceed one block interval (p99 <strong>${fmtNs(hot[worstP].driver.ingest_total.p99.m)}</strong>, worst single ledger ${fmtNs(hot[worstP].driver.ingest_total.max.m)}) — a stall localized to the RocksDB <code>apply</code> phase, not the fsync (§4). The other profiles keep even their worst ledger under one interval.`;
+      if (tail) bn.innerHTML = `The caveat lives in the tail: the <strong>${esc(disp(worstP))}</strong> profile's slowest 1 % of ledgers exceed one block interval (p99 <strong>${fmtNs(hot[worstP].driver.ingest_total.p99.m)}</strong>, worst single ledger ${fmtNs(hot[worstP].driver.ingest_total.max.m)}) — a stall localized to the RocksDB <code>apply</code> phase, not the fsync (§4). The other profiles keep even their worst ledger under one interval.`;
       else bn.textContent = "Every profile keeps even its worst ledger comfortably inside one block interval.";
     })();
 
@@ -1031,7 +1038,7 @@
         const segs = segsDef.map(([k, name, col]) => ({ name, color: col, val: d[k] ? d[k].total.m : 0 }));
         const other = d.backfill_wall.total.m - segs.reduce((a, s) => a + s.val, 0);
         segs.push({ name: "driver / unattributed", color: C.de, val: Math.max(other, 0) });
-        return { label: p, sub: sub(p), segs, total: d.backfill_wall.total.m };
+        return { label: disp(p), sub: sub(p), segs, total: d.backfill_wall.total.m };
       });
       stackedH("fig31-body", rows);
       legend("fig31-legend", [...segsDef.map(([, n, col]) => ({ label: n, color: col })), { label: "driver / unattributed", color: C.de }]);
@@ -1039,7 +1046,7 @@
         ORDER.map(p => {
           const d = cold[p].driver;
           const rest = d.backfill_wall.total.m - d.events_total.total.m - d.cold_extract.total.m - d.ledgers_total.total.m - d.txhash_total.total.m;
-          return [p, fmtNs(d.backfill_wall.total.m), fmtNs(d.events_total.total.m), fmtNs(d.cold_extract.total.m), fmtNs(d.ledgers_total.total.m), fmtNs(d.txhash_total.total.m), fmtNs(rest)];
+          return [disp(p), fmtNs(d.backfill_wall.total.m), fmtNs(d.events_total.total.m), fmtNs(d.cold_extract.total.m), fmtNs(d.ledgers_total.total.m), fmtNs(d.txhash_total.total.m), fmtNs(rest)];
         }));
     })();
 
@@ -1050,12 +1057,12 @@
       const rows = ORDER.map(p => {
         const st = cold[p].files.events;
         const segs = evStages.map(name => ({ name: name === "finalize" ? "finalize (MPHF)" : name, color: palette[name] || C.de, val: st[name].total.m }));
-        return { label: p, sub: sub(p), segs, total: segs.reduce((a, s) => a + s.val, 0) };
+        return { label: disp(p), sub: sub(p), segs, total: segs.reduce((a, s) => a + s.val, 0) };
       });
       stackedH("fig32-body", rows);
       legend("fig32-legend", evStages.map(name => ({ label: name === "finalize" ? "finalize (MPHF)" : name, color: palette[name] || C.de })));
       tableView("fig32", ["profile", ...evStages, "events pipeline total"],
-        ORDER.map(p => { const st = cold[p].files.events; const tot = evStages.reduce((a, n) => a + st[n].total.m, 0); return [p, ...evStages.map(n => fmtNs(st[n].total.m)), fmtNs(tot)]; }));
+        ORDER.map(p => { const st = cold[p].files.events; const tot = evStages.reduce((a, n) => a + st[n].total.m, 0); return [disp(p), ...evStages.map(n => fmtNs(st[n].total.m)), fmtNs(tot)]; }));
     })();
 
     /* ---- fig 3.3 s per M events ---- */
@@ -1063,13 +1070,13 @@
       const bars = ORDER.map(p => {
         const evM = um[p].events / 1e6;
         const w = cold[p].driver.backfill_wall.total;
-        return { label: p, val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
+        return { label: disp(p), val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
       });
       barPanels("fig33-body", [{ title: "seconds per million events", unit: "s", color: C.s1, bars }]);
       tableView("fig33", ["profile", "s / M events (median)", "min", "max", "backfill wall", "events/s (wall-incl.)"],
         ORDER.map((p, i) => {
           const b = bars[i], w = cold[p].driver.backfill_wall.total;
-          return [p, trim(b.val), trim(b.lo), trim(b.hi), fmtNs(w.m), fmtK(um[p].events / (w.m / NS)) + "/s"];
+          return [disp(p), trim(b.val), trim(b.lo), trim(b.hi), fmtNs(w.m), fmtK(um[p].events / (w.m / NS)) + "/s"];
         }));
       const perM = bars.map(b => b.val);
       const walls = ORDER.map(p => cold[p].driver.backfill_wall.total.m / NS);
@@ -1087,12 +1094,12 @@
           name: name === "commit" ? "commit (fsync)" : name, color: palette[name] || C.de, val: h.phases[name].total.m,
           extra: [{ value: fmtNs(h.phases[name].p50.m), label: "p50 / ledger" }, { value: fmtNs(h.phases[name].p99.m), label: "p99 / ledger" }],
         }));
-        return { label: p, sub: fmtInt(um[p].txs / um[p].ledgers) + " tx/ledger", segs, total: h.driver.run_wall.total.m };
+        return { label: disp(p), sub: fmtInt(um[p].txs / um[p].ledgers) + " tx/ledger", segs, total: h.driver.run_wall.total.m };
       });
       stackedH("fig41-body", rows);
       legend("fig41-legend", phaseNames.map(n => ({ label: n === "commit" ? "commit (fsync)" : n, color: palette[n] || C.de })));
       tableView("fig41", ["profile", "run wall", ...phaseNames, "source wait + startup"],
-        ORDER.map(p => { const h = hot[p]; const sum = phaseNames.reduce((a, n) => a + h.phases[n].total.m, 0); return [p, fmtNs(h.driver.run_wall.total.m), ...phaseNames.map(n => fmtNs(h.phases[n].total.m)), fmtNs(h.driver.run_wall.total.m - sum)]; }));
+        ORDER.map(p => { const h = hot[p]; const sum = phaseNames.reduce((a, n) => a + h.phases[n].total.m, 0); return [disp(p), fmtNs(h.driver.run_wall.total.m), ...phaseNames.map(n => fmtNs(h.phases[n].total.m)), fmtNs(h.driver.run_wall.total.m - sum)]; }));
     })();
 
     /* ---- fig 4.2 per-ledger latency ---- */
@@ -1102,11 +1109,11 @@
         ["commit (fsync)", C.s6, hot[p].phases.commit],
         ["apply", C.s5, hot[p].phases.apply],
       ].filter(s => s[2]);
-      const rows = ORDER.map(p => ({ label: p, sub: sub(p), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
+      const rows = ORDER.map(p => ({ label: disp(p), sub: sub(p), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
       dotRangeChart("fig42-body", rows, { reflineNs: interval, reflineLabel: intervalMs + " ms — block interval" });
       legend("fig42-legend", [{ label: "end to end", color: C.s1 }, { label: "commit (fsync)", color: C.s6 }, { label: "apply", color: C.s5 }, { label: intervalMs + " ms block interval", color: CVAR("--hot"), line: true }]);
       tableView("fig42", ["profile", "series", "p50", "p90", "p99", "worst ledger"],
-        ORDER.flatMap(p => series(p).map(([name, , st]) => [p, name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m)])));
+        ORDER.flatMap(p => series(p).map(([name, , st]) => [disp(p), name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m)])));
       const p99 = ORDER.map(p => hot[p].driver.ingest_total.p99.m);
       document.getElementById("hot-prose").innerHTML =
         `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across profiles. Where it crosses ${intervalMs} ms the gap is almost entirely RocksDB <code>apply</code> — a write-stall signature (flat median, cliff tail) reproduced in all five runs, not fsync.`;
@@ -1120,7 +1127,7 @@
         const hotR = L / (hot[p].driver.run_wall.total.m / NS);
         const coldLo = L / (cold[p].driver.backfill_wall.total.hi / NS), coldHi = L / (cold[p].driver.backfill_wall.total.lo / NS);
         const hotLo = L / (hot[p].driver.run_wall.total.hi / NS), hotHi = L / (hot[p].driver.run_wall.total.lo / NS);
-        return { label: p, sub: sub(p), lanes: [
+        return { label: disp(p), sub: sub(p), lanes: [
           { name: "cold (batch freeze)", color: C.s1, val: coldR, lo: coldLo, hi: coldHi },
           { name: "hot (live, fsync/ledger)", color: C.hot, val: hotR, lo: hotLo, hi: hotHi },
         ] };
@@ -1131,15 +1138,15 @@
         ORDER.map(p => {
           const L = um[p].ledgers;
           const coldR = L / (cold[p].driver.backfill_wall.total.m / NS), hotR = L / (hot[p].driver.run_wall.total.m / NS);
-          return [p, trim(coldR), trim(hotR), (hotR / floor).toFixed(1) + "×", fmtInt(um[p].txs / (hot[p].driver.run_wall.total.m / NS)), (coldR / hotR).toFixed(1) + "×"];
+          return [disp(p), trim(coldR), trim(hotR), (hotR / floor).toFixed(1) + "×", fmtInt(um[p].txs / (hot[p].driver.run_wall.total.m / NS)), (coldR / hotR).toFixed(1) + "×"];
         }));
     })();
 
     /* ---- fig 5.1 variance dots ---- */
     (function fig51() {
       const rows = [];
-      ORDER.forEach(p => rows.push({ label: p, sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
-      ORDER.forEach(p => rows.push({ label: p, sub: "hot", runs: hot[p].driver.run_wall.total.r, color: C.hot }));
+      ORDER.forEach(p => rows.push({ label: disp(p), sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
+      ORDER.forEach(p => rows.push({ label: disp(p), sub: "hot", runs: hot[p].driver.run_wall.total.r, color: C.hot }));
       const el = document.getElementById("fig51-body");
       el.replaceChildren();
       const W = Math.max(el.clientWidth, 360);
@@ -1184,7 +1191,145 @@
         const it = hot[p].driver.ingest_total;
         const cell = ns => { const ms = ns / MS; const flag = ns > interval ? ` ▲ ${(ns / interval).toFixed(1)}× interval` : ""; return Math.round(ms) + " ms" + flag; };
         const r = document.createElement("tr");
-        const cells = [p, `${Math.round(sus / MS)} ms`, `${(interval / sus).toFixed(1)}×`, cell(it.p50.m), cell(it.p90.m), cell(it.p99.m), cell(it.max.m)];
+        const cells = [disp(p), `${Math.round(sus / MS)} ms`, `${(interval / sus).toFixed(1)}×`, cell(it.p50.m), cell(it.p90.m), cell(it.p99.m), cell(it.max.m)];
+        cells.forEach((v, ci) => {
+          const td = document.createElement("td");
+          if (ci === 0) td.textContent = v;
+          else if (ci === 1) { td.textContent = v; const ok = document.createElement("span"); ok.className = "cell-ok"; ok.textContent = " ✓ KEEPS UP"; td.appendChild(ok); }
+          else if (v.includes("▲")) { const parts = v.split(" ▲"); td.textContent = parts[0]; const w = document.createElement("span"); w.className = "cell-warn"; w.textContent = " ▲" + parts[1]; td.appendChild(w); }
+          else td.textContent = v;
+          r.appendChild(td);
+        });
+        t.appendChild(r);
+      });
+    })();
+
+    document.getElementById("machine-metadata").textContent = (D.machine && D.machine.raw || "").trim();
+  }
+
+  /* ============================ HOT-INGESTION view ============================ */
+  // Selected by ?view=hot regardless of dataset.kind; a stakeholder-facing cut
+  // of just the hot-ingestion latency, keep-up check, and phase guide.
+  function renderHot(D) {
+    const ds = D.dataset;
+    const ORDER = ds.unit_order || Object.keys(ds.unit_meta || {});
+    const um = ds.unit_meta || {};
+    const disp = u => (um[u] && um[u].label) || u;
+    const hot = D.ingest_hot || {};
+    const hasKeepup = D.checks && D.checks.kind === "block_keepup";
+    const interval = hasKeepup ? D.checks.interval_ns : null;
+    const intervalMs = interval ? interval / MS : null;
+
+    const sub = u => fmtK((um[u] && um[u].events) || 0) + " events";
+    const phaseDefs = [
+      ["extract", "extract"], ["ledgers", "ledgers"], ["txhash", "txhash"],
+      ["events", "events"], ["commit", "commit (fsync)"], ["apply", "apply"],
+    ];
+    // color map is self-contained for this figure (set once C is available)
+    let seriesFor = () => [];
+
+    const keepupUnits = hasKeepup
+      ? ORDER.filter(u => hot[u] && hot[u].driver && hot[u].driver.run_wall && um[u] && um[u].ledgers)
+      : [];
+    const showKeepup = keepupUnits.length > 0;
+    const allE2E = ORDER.length > 0 && ORDER.every(u => hot[u] && hot[u].driver && hot[u].driver.ingest_total);
+
+    const phaseGuideHTML = `<div class="phase-guide">
+      <p>The six phases partition the wall-clock of one <code>IngestLedger</code> call (their sum ≈ <code>ingest_total</code>; source wait is outside, in <code>read_blocked</code>). The key mental model: nothing touches RocksDB until <strong>commit</strong> — the middle phases only stage work into one atomic WriteBatch.</p>
+      <ul>
+        <li><strong>extract</strong> — decode the raw ledger once: walk the transactions, build the tx-hash entries, shape the events. Pure CPU/XDR work before anything is staged; any decode failure lands here by construction.</li>
+        <li><strong>ledgers</strong> — the ledger store's staging step: queue the ledger record (the zstd-compressed ledger bytes — why this is the priciest of the three stores) into the shared batch.</li>
+        <li><strong>txhash</strong> — same staging step for the tx-hash lookup entries, routed into 16 column families by hash high-nibble. Near-free (~1 % of ledger time).</li>
+        <li><strong>events</strong> — same staging step for the event records.</li>
+        <li><strong>commit (fsync)</strong> — the single RocksDB batch write for everything staged: WAL append + <strong>fsync</strong> + memtable insert. This is the durability point, one per ledger, and the phase pprof can't attribute (it's I/O wait, measured as the whole Batch call minus the three queue steps). ~Half of every ledger's time.</li>
+        <li><strong>apply</strong> — post-commit, in-memory only: refresh the roaring-bitmap event indexes and offset mirrors (copy-on-write clones). Runs only after the batch is durable, so a failed ledger can never be half-applied.</li>
+      </ul>
+      <p>So a ledger's life is: decode it (<code>extract</code>) → stage three stores' writes (<code>ledgers</code>/<code>txhash</code>/<code>events</code>) → make it durable in one fsync'd batch (<code>commit</code>) → update the in-memory query indexes (<code>apply</code>).</p>
+    </div>`;
+
+    const modelsKnown = ORDER.length > 0 && ORDER.every(u => um[u] && um[u].model);
+    const profilesLine = modelsKnown
+      ? `<p class="sec-intro" style="margin-top:6px">Profiles — ${ORDER.map(u => `<strong>${esc(disp(u))}</strong> (${esc(um[u].model)})`).join(", ")}.</p>`
+      : "";
+
+    reportEl.innerHTML = mastheadHTML(D) + `
+    <section id="ingest-hot">
+      <div class="sec-head"><span class="sec-num">01</span><h2>Hot ingestion — per-ledger latency</h2></div>
+      <p class="sec-intro">Hot ingestion is the live RocksDB path — one fsync per ledger. This chart shows where each ledger's time goes, end to end plus every phase, measured against one block interval.</p>
+      ${profilesLine}
+      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). The dashed line is one block interval — see the phase guide below for what each phase measures.")}
+      ${phaseGuideHTML}
+      <p id="hot-prose" class="sec-intro"></p>
+    </section>
+
+    <section id="target">
+      <div class="sec-head"><span class="sec-num">02</span><h2>Keep-up check${hasKeepup ? " — the " + intervalMs + " ms block model" : ""}</h2></div>
+      ${showKeepup
+        ? `<p class="sec-intro">The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.</p>
+           <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
+           <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). Values are medians of 5 runs; "worst ledger" is the median across runs of each run's slowest ledger.</p>`
+        : `<div class="note-callout">This run defines no block-model keep-up check, so there is no per-interval budget to measure sustained ingestion against.</div>`}
+    </section>
+    ` + methodologyHTML(D, "03",
+      `<dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and drives the daemon's bounded ingestion loop over the full range. <code>ingest_total</code> times one ledger's complete ingest — the sum of its phase burst, source wait excluded; run wall includes source wait.</dd>
+       <dt>Counter semantics</dt><dd><code>n</code> counts non-zero-duration samples; <code>n_items</code> counts natural units (ledgers, txs, events). Percentiles are per-ledger, never averaged across runs — the reported percentile is the median run's.</dd>`)
+      + footerHTML(D);
+
+    const C = COLORS();
+    const laneColors = { "end to end": C.s1, extract: C.s2, ledgers: C.s3, txhash: C.de, events: C.s4, "commit (fsync)": C.s6, apply: C.s5 };
+    seriesFor = u => {
+      const h = hot[u];
+      if (!h || !h.phases) return [];
+      const out = [];
+      if (h.driver && h.driver.ingest_total) out.push({ name: "end to end", color: laneColors["end to end"], st: h.driver.ingest_total });
+      for (const [key, name] of phaseDefs) if (h.phases[key]) out.push({ name, color: laneColors[name], st: h.phases[key] });
+      return out;
+    };
+
+    /* ---- fig 4.2 extended per-ledger latency ---- */
+    (function fig42() {
+      const hotOrder = ORDER.filter(u => seriesFor(u).length);
+      const rows = hotOrder.map(u => ({
+        label: disp(u), sub: sub(u),
+        lanes: seriesFor(u).map(l => ({
+          name: l.name, color: l.color,
+          pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
+          spread: `${fmtNs(l.st.p99.lo)} – ${fmtNs(l.st.p99.hi)}`,
+        })),
+      }));
+      const dotOpts = { groupSeparators: true };
+      if (interval) { dotOpts.reflineNs = interval; dotOpts.reflineLabel = intervalMs + " ms — block interval"; }
+      dotRangeChart("fig42-body", rows, dotOpts);
+      const legendLanes = hotOrder.length ? seriesFor(hotOrder[0]) : [];
+      legend("fig42-legend", [
+        ...legendLanes.map(l => ({ label: l.name, color: l.color })),
+        { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
+        ...(interval ? [{ label: intervalMs + " ms block interval", color: CVAR("--hot"), line: true }] : []),
+      ]);
+      tableView("fig42", [ds.unit_label || "unit", "Series", "p50", "p90", "p99", "max", "p99 min–max across runs"],
+        hotOrder.flatMap(u => seriesFor(u).map(l => {
+          const st = l.st;
+          return [disp(u), l.name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m), `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`];
+        })));
+      if (allE2E) {
+        const p99 = ORDER.map(u => hot[u].driver.ingest_total.p99.m);
+        document.getElementById("hot-prose").innerHTML =
+          `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across ${ORDER.length} ${(ds.unit_label || "unit").toLowerCase()}${ORDER.length === 1 ? "" : "s"}.`;
+      }
+    })();
+
+    /* ---- keep-up table ---- */
+    if (showKeepup) (function targetTable() {
+      const t = document.getElementById("target-table");
+      const tr = document.createElement("tr");
+      [ds.unit_label || "profile", "sustained / ledger", "headroom", "p50", "p90", "p99", "worst ledger"].forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
+      t.appendChild(tr);
+      keepupUnits.forEach(u => {
+        const sus = hot[u].driver.run_wall.total.m / um[u].ledgers;
+        const it = hot[u].driver.ingest_total;
+        const cell = ns => { const ms = ns / MS; const flag = ns > interval ? ` ▲ ${(ns / interval).toFixed(1)}× interval` : ""; return Math.round(ms) + " ms" + flag; };
+        const r = document.createElement("tr");
+        const cells = [disp(u), `${Math.round(sus / MS)} ms`, `${(interval / sus).toFixed(1)}×`, cell(it.p50.m), cell(it.p90.m), cell(it.p99.m), cell(it.max.m)];
         cells.forEach((v, ci) => {
           const td = document.createElement("td");
           if (ci === 0) td.textContent = v;
@@ -1222,13 +1367,15 @@
     if (!CURRENT || !CURRENT.data) return;
     const D = CURRENT.data;
     const kind = D.dataset && D.dataset.kind;
-    const fn = RENDERERS[kind] || renderGeneric;
+    const view = currentView();
+    const fn = view === "hot" ? renderHot : (RENDERERS[kind] || renderGeneric);
     try { fn(D); }
     catch (err) {
       console.error("render failed for kind=" + kind, err);
       reportEl.innerHTML = `<div class="error-box">Failed to render run “${esc(D.run_id || "")}”: ${esc(err.message)}. Falling back to generic view.</div>`;
       try { renderGeneric(D); } catch (e2) { console.error(e2); }
     }
+    viewBtn.textContent = view === "hot" ? "◱ Full report" : "◲ Hot ingestion";
   }
 
   async function loadRun(entry) {
@@ -1272,6 +1419,13 @@
       selectEl.appendChild(o);
     });
     selectEl.addEventListener("change", () => selectRun(selectEl.value, true));
+    viewBtn.addEventListener("click", () => {
+      const url = new URL(location.href);
+      if (url.searchParams.get("view") === "hot") url.searchParams.delete("view");
+      else url.searchParams.set("view", "hot");
+      history.pushState({}, "", url);
+      if (CURRENT) draw();
+    });
     window.addEventListener("popstate", () => {
       const id = new URL(location.href).searchParams.get("run");
       if (id) selectRun(id, false);
