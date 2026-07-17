@@ -20,10 +20,13 @@ results are mirrored to GCS under `gs://rpc-full-history/benchmarks/`.
 static viewer in `docs/` renders any committed run via a dropdown or `?run=<id>`. Appending
 `&view=hot` (or the toolbar toggle) shows a focused, stakeholder-facing hot-ingestion-only view.
 
-**Why GitHub Pages from `main:/docs`:** there is no build step — the viewer is static
-vanilla JS and the run JSONs are committed alongside it — so serving the `/docs` folder
-directly off `main` is the simplest correct option. No Actions-based Pages build, nothing
-to deploy.
+**How deploys work:** there is no build step — the viewer is static vanilla JS and the
+run JSONs are committed alongside it. GitHub Pages serves the `gh-pages` branch, and the
+`deploy-pages.yml` workflow syncs `main:/docs` to it on every push to `main`, so
+deploying is still just committing to `main`. The indirection exists for one reason:
+PR previews. `pr-preview.yml` deploys each PR's `docs/` to
+`https://stellar-experimental.github.io/stellar-rpc-benchmarks/pr-preview/pr-<number>/`
+and comments the link on the PR (removed automatically when the PR closes).
 
 ## View locally
 
@@ -60,7 +63,8 @@ make convert \
   RUN_DATE=2026-07-13 \
   GCS=gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a
 
-# 3. Review the diff, then commit + push. Pages redeploys from main:/docs.
+# 3. Review the diff, then commit + push. The deploy-pages workflow syncs
+#    docs/ to the gh-pages branch and Pages redeploys.
 git add docs/runs
 git commit -m "Add run pubnet-2026-07-13"
 git push

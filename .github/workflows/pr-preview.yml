@@ -1,0 +1,28 @@
+name: PR preview
+
+# Deploy each PR's docs/ to gh-pages:/pr-preview/pr-<number>/ and comment the
+# preview URL on the PR. The preview is deleted when the PR closes.
+# Runs on every PR (no paths filter): the close-time cleanup must always fire,
+# and deploying an unchanged docs/ is harmless. PRs from forks are not
+# previewed — their GITHUB_TOKEN is read-only.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+concurrency: preview-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: docs

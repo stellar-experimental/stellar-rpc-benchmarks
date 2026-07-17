@@ -1,0 +1,31 @@
+name: Deploy site
+
+# Sync main:/docs to the gh-pages branch, which GitHub Pages serves.
+# "Deploy = commit to main" still holds — this runs on every docs/ change.
+# PR previews live under gh-pages:/pr-preview/ (see pr-preview.yml) and are
+# preserved via clean-exclude.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+  workflow_dispatch:
+
+concurrency: gh-pages-sync
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Deploy docs/ to gh-pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: docs
+          clean-exclude: pr-preview
+          force: false
