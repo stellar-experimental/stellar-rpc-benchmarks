@@ -488,14 +488,31 @@
   }
 
   function methodologyHTML(D, num, extraDL) {
+    const raw = (D.machine && D.machine.fsync_probe) || "";
+    // The probe is `dd if=/dev/zero bs=4k count=2000 oflag=dsync` = 2,000 synced
+    // 4 KiB writes (8,192,000 bytes). Derive per-synced-write latency only when the
+    // byte count pins count=2000; any other shape or parse miss shows the raw
+    // string with no derived number. Missing probe keeps the "—" placeholder.
+    let fsyncDD;
+    if (!raw) {
+      fsyncDD = `<dt>fsync probe</dt><dd>—</dd>`;
+    } else {
+      let secs = null;
+      if (/^8192000 bytes/.test(raw)) {
+        const m = raw.match(/copied,\s*([\d.]+)\s*s\b/) || raw.match(/in\s+([\d.]+)\s*secs?\b/);
+        const v = m ? parseFloat(m[1]) : NaN;
+        if (isFinite(v) && v > 0) secs = v;
+      }
+      const perWrite = secs != null ? ` ≈ ${trim(secs / 2000 * 1e6)} µs per synced write` : "";
+      fsyncDD = `<dt>fsync probe</dt><dd>Before each campaign the harness times 2,000 individually-synced 4&nbsp;KiB writes (<code>dd … oflag=dsync</code>) on the benchmark volume — an honesty check that the device really pays for fsync, and the floor under the one-fsync-per-ledger commit. This box: <code>${esc(raw)}</code>${perWrite}.</dd>`;
+    }
     return `<section id="methodology" class="method">
       <div class="sec-head"><span class="sec-num">${num}</span><h2>Methodology &amp; machine metadata</h2></div>
       <dl>
         <dt>Process isolation &amp; aggregation</dt>
         <dd>${D.campaign && D.campaign.reps || 5} repetitions per configuration, each a fresh process. Every reported value is the median across runs; spread is min–max. Nothing is interpolated or smoothed — every plotted number traces to a raw CSV field.</dd>
         ${extraDL || ""}
-        <dt>fsync probe</dt>
-        <dd>${esc((D.machine && D.machine.fsync_probe) || "—")} — the device-level context for the per-ledger commit distribution.</dd>
+        ${fsyncDD}
       </dl>
       <pre class="metadata" id="machine-metadata"></pre>
     </section>`;
@@ -506,6 +523,15 @@
     const ds = D.dataset;
     const CH = ds.unit_order;
     const um = ds.unit_meta;
+    // Row-label display: an explicit unit label wins; a purely numeric id (e.g.
+    // "3000") gets the dataset's unit_label prefixed ("Chunk 3000") so a bare
+    // number never stands alone; named ids ("soroswap") are shown verbatim.
+    const disp = u => {
+      const meta = um[u] || {};
+      if (meta.label) return meta.label;
+      if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
+      return u;
+    };
     const cold = D.ingest_cold, hot = D.ingest_hot, Q = D.queries, gold = D.golden || {};
     // discover query types + concurrency levels from data (degrade gracefully)
     const firstTier = Q && (Q.cold || Q.hot) ? (Q.cold || Q.hot) : {};
@@ -567,7 +593,7 @@
       <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — live RocksDB with per-ledger fsync</h2></div>
       <p class="sec-intro">Hot ingestion is the streaming path: each ledger is extracted, applied to the RocksDB stores, and committed with <strong>one fsync per ledger</strong> — the durability contract of live ingestion.</p>
       ${figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole chunk (median of 5 runs). <code>source wait</code> is time blocked on the ledger source.")}
-      ${figHTML("fig42", "Fig 4.2", "Per-ledger ingest latency — end to end, and its fsync commit", "fig42-legend", "Latency percentiles over 10,000 ledgers (median of 5 runs; log scale). <em>End-to-end</em> is the complete ingest of one ledger (<code>ingest_total</code>), source wait excluded.")}
+      ${figHTML("fig42", "Fig 4.2", "Per-ledger ingest latency — end to end, and its fsync commit", "fig42-legend", "Latency percentiles over 10,000 ledgers (median of 5 runs; log scale). <em>End-to-end</em> is the complete ingest of one ledger (recorded as <code>ingest_total</code> in the raw CSVs), source wait excluded.")}
       ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot", "fig43-legend", "Ledgers per second over the full chunk (median of 5 runs; log scale). The fsync-per-ledger contract costs hot ingestion against the batch cold path — the price of live durability.")}
       <p id="hot-prose" class="sec-intro"></p>
     </section>
@@ -601,7 +627,7 @@
     </section>
     ` + methodologyHTML(D, "08",
       `<dt>Golden-pack sourcing</dt><dd>Each chunk was downloaded from S3 once (golden runs, excluded from every aggregate). All timed cold-ingest runs re-ingest from the local pack — no timed number includes network transfer.</dd>
-       <dt>Counter semantics</dt><dd><code>n</code> counts non-zero-duration samples; <code>n_items</code> counts natural units, so throughput = n_items ÷ total time. On the hot path <code>ingest_total</code> times each ledger's complete ingest; <code>read_blocked</code> separately times source waits.</dd>`)
+       <dt>Counter semantics</dt><dd>Throughput divides the number of natural units processed — ledgers, transactions, or events — by the time spent producing them (the raw CSVs record these as <code>n_items</code> over <code>n</code>, where <code>n</code> counts only non-zero-duration samples). On the hot path, each ledger's complete end-to-end ingest time is recorded as <code>ingest_total</code>, and time blocked waiting on the ledger source is timed separately as <code>read_blocked</code>.</dd>`)
       + footerHTML(D);
 
     const C = COLORS();
@@ -651,7 +677,7 @@
         const segs = segsDef.map(([k, name, col]) => ({ name, color: col, val: drv[k].total.m }));
         const other = drv.chunk_wall.total.m - segs.reduce((a, s) => a + s.val, 0);
         segs.push({ name: "driver / unattributed", color: C.de, val: Math.max(other, 0) });
-        return { label: c, sub: chunkSub(c), segs, total: drv.chunk_wall.total.m };
+        return { label: disp(c), sub: chunkSub(c), segs, total: drv.chunk_wall.total.m };
       });
       stackedH("fig31-body", rows);
       legend("fig31-legend", [...segsDef.map(([, n, col]) => ({ label: n, color: col })), { label: "driver / unattributed", color: C.de }]);
@@ -659,7 +685,7 @@
         CH.map(c => {
           const d = cold[c].driver;
           const other = d.chunk_wall.total.m - d.ledgers_total.total.m - d.txhash_total.total.m - d.events_total.total.m;
-          return [c, fmtNs(d.ledgers_total.total.m), fmtNs(d.txhash_total.total.m), fmtNs(d.events_total.total.m), fmtNs(other), fmtNs(d.chunk_wall.total.m), `${fmtNs(d.chunk_wall.total.lo)} – ${fmtNs(d.chunk_wall.total.hi)}`];
+          return [disp(c), fmtNs(d.ledgers_total.total.m), fmtNs(d.txhash_total.total.m), fmtNs(d.events_total.total.m), fmtNs(other), fmtNs(d.chunk_wall.total.m), `${fmtNs(d.chunk_wall.total.lo)} – ${fmtNs(d.chunk_wall.total.hi)}`];
         }));
     })();
 
@@ -671,7 +697,7 @@
       const rows = CH.map(c => {
         const st = cold[c].files.events;
         const segs = stages.map(([name, col]) => ({ name, color: col, val: st[name].total.m }));
-        return { label: c, sub: chunkSub(c), segs, total: segs.reduce((a, s) => a + s.val, 0) };
+        return { label: disp(c), sub: chunkSub(c), segs, total: segs.reduce((a, s) => a + s.val, 0) };
       });
       stackedH("fig32-body", rows);
       legend("fig32-legend", stages.map(([n, col]) => ({ label: n, color: col })));
@@ -679,7 +705,7 @@
         CH.map(c => {
           const st = cold[c].files.events;
           const tot = evStages.reduce((a, n) => a + st[n].total.m, 0);
-          return [c, ...evStages.map(n => fmtNs(st[n].total.m)), fmtNs(tot), Math.round(tot / um[c].events) + " ns"];
+          return [disp(c), ...evStages.map(n => fmtNs(st[n].total.m)), fmtNs(tot), Math.round(tot / um[c].events) + " ns"];
         }));
     })();
 
@@ -688,13 +714,13 @@
       const defs = [["tp_ledgers", "ledger store · ledgers/s", fmtInt], ["tp_txs", "tx-hash store · tx/s", fmtK], ["tp_events", "event store · events/s", fmtK]];
       const panels = defs.map(([k, title, f]) => ({
         title, unit: "", color: C.s1,
-        bars: CH.map(c => { const s = cold[c].derived[k]; return { label: c, val: s.m, lo: s.lo, hi: s.hi, fmt: f }; }),
+        bars: CH.map(c => { const s = cold[c].derived[k]; return { label: disp(c), val: s.m, lo: s.lo, hi: s.hi, fmt: f }; }),
       }));
       barPanels("fig33-body", panels);
       tableView("fig33", [ds.unit_label, "Ledgers/s", "Tx/s", "Events/s", "Wall", "s per 1 M events"],
         CH.map(c => {
           const ic = cold[c];
-          return [c, fmtInt(ic.derived.tp_ledgers.m), fmtInt(ic.derived.tp_txs.m), fmtInt(ic.derived.tp_events.m), fmtNs(ic.driver.chunk_wall.total.m), trim(ic.driver.chunk_wall.total.m / 1e9 / (um[c].events / 1e6))];
+          return [disp(c), fmtInt(ic.derived.tp_ledgers.m), fmtInt(ic.derived.tp_txs.m), fmtInt(ic.derived.tp_events.m), fmtNs(ic.driver.chunk_wall.total.m), trim(ic.driver.chunk_wall.total.m / 1e9 / (um[c].events / 1e6))];
         }));
       const walls = CH.map(c => cold[c].driver.chunk_wall.total.m / 1e9);
       const perM = CH.map(c => cold[c].driver.chunk_wall.total.m / 1e9 / (um[c].events / 1e6));
@@ -711,7 +737,7 @@
         const segs = [];
         if (ih.driver.read_blocked) segs.push({ name: "source wait", color: C.de, val: ih.driver.read_blocked.total.m });
         for (const name of phaseNames) segs.push({ name: name === "commit" ? "commit (fsync)" : name, color: palette[name] || C.de, val: ih.phases[name].total.m });
-        return { label: c, sub: chunkSub(c), segs, total: ih.driver.chunk_wall.total.m };
+        return { label: disp(c), sub: chunkSub(c), segs, total: ih.driver.chunk_wall.total.m };
       });
       stackedH("fig41-body", rows);
       legend("fig41-legend", [{ label: "source wait", color: C.de }, ...phaseNames.map(n => ({ label: n === "commit" ? "commit (fsync)" : n, color: palette[n] || C.de }))]);
@@ -720,7 +746,7 @@
           const ih = hot[c];
           const sw = ih.driver.read_blocked ? fmtNs(ih.driver.read_blocked.total.m) : "—";
           const commit = ih.phases.commit ? (ih.phases.commit.total.m / ih.driver.chunk_wall.total.m * 100).toFixed(0) + " %" : "—";
-          return [c, sw, ...phaseNames.map(n => fmtNs(ih.phases[n].total.m)), fmtNs(ih.driver.chunk_wall.total.m), commit];
+          return [disp(c), sw, ...phaseNames.map(n => fmtNs(ih.phases[n].total.m)), fmtNs(ih.driver.chunk_wall.total.m), commit];
         }));
     })();
 
@@ -731,7 +757,7 @@
         ["commit (fsync)", C.s6, hot[c].phases.commit],
       ].filter(s => s[2]);
       const rows = CH.map(c => ({
-        label: c, sub: chunkSub(c),
+        label: disp(c), sub: chunkSub(c),
         lanes: series(c).map(([name, color, st]) => ({
           name, color,
           pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m },
@@ -741,7 +767,7 @@
       dotRangeChart("fig42-body", rows);
       legend("fig42-legend", [{ label: "end-to-end ingest", color: C.hot }, { label: "commit (fsync)", color: C.s6 }, { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" }]);
       tableView("fig42", [ds.unit_label, "Series", "p50", "p90", "p99", "max", "p99 min–max across runs"],
-        CH.flatMap(c => series(c).map(([name, , st]) => [c, name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m), `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`])));
+        CH.flatMap(c => series(c).map(([name, , st]) => [disp(c), name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m), `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`])));
       const p99s = CH.map(c => hot[c].driver.ingest_total.p99.m / 1e6);
       const commitShare = CH.map(c => hot[c].phases.commit ? hot[c].phases.commit.total.m / hot[c].driver.chunk_wall.total.m * 100 : 0);
       document.getElementById("hot-prose").innerHTML =
@@ -751,7 +777,7 @@
     /* ---- fig 4.3 rate cold vs hot ---- */
     (function fig43() {
       const rows = CH.map(c => ({
-        label: c, sub: chunkSub(c),
+        label: disp(c), sub: chunkSub(c),
         lanes: [
           { name: "cold (pack build)", color: C.cold, val: cold[c].derived.ledgers_per_s.m, lo: cold[c].derived.ledgers_per_s.lo, hi: cold[c].derived.ledgers_per_s.hi },
           { name: "hot (fsync/ledger)", color: C.hot, val: hot[c].derived.ledgers_per_s.m, lo: hot[c].derived.ledgers_per_s.lo, hi: hot[c].derived.ledgers_per_s.hi },
@@ -760,7 +786,7 @@
       rateChart("fig43-body", rows, { fmt: fmtInt });
       legend("fig43-legend", [{ label: "cold (pack build)", color: C.cold }, { label: "hot (one fsync per ledger)", color: C.hot }]);
       tableView("fig43", [ds.unit_label, "Cold ledgers/s", "Hot ledgers/s", "Cold wall", "Hot wall", "Hot cost ×"],
-        CH.map(c => [c, fmtInt(cold[c].derived.ledgers_per_s.m), fmtInt(hot[c].derived.ledgers_per_s.m), fmtNs(cold[c].driver.chunk_wall.total.m), fmtNs(hot[c].driver.chunk_wall.total.m), (hot[c].driver.chunk_wall.total.m / cold[c].driver.chunk_wall.total.m).toFixed(1) + "×"]));
+        CH.map(c => [disp(c), fmtInt(cold[c].derived.ledgers_per_s.m), fmtInt(hot[c].derived.ledgers_per_s.m), fmtNs(cold[c].driver.chunk_wall.total.m), fmtNs(hot[c].driver.chunk_wall.total.m), (hot[c].driver.chunk_wall.total.m / cold[c].driver.chunk_wall.total.m).toFixed(1) + "×"]));
     })();
 
     /* ---- query section (chunk-scoped) ---- */
@@ -902,7 +928,14 @@
     const ds = D.dataset;
     const ORDER = ds.unit_order;
     const um = ds.unit_meta;
-    const disp = p => (um[p] && um[p].label) || p;
+    // Explicit label wins; a purely numeric id gets the unit_label prefixed
+    // ("Chunk 3000") so a bare number never stands alone; named ids verbatim.
+    const disp = p => {
+      const meta = um[p] || {};
+      if (meta.label) return meta.label;
+      if (ds.unit_label && /^\d+$/.test(p)) return `${ds.unit_label} ${p}`;
+      return p;
+    };
     const cold = D.ingest_cold, hot = D.ingest_hot;
     const interval = D.checks && D.checks.interval_ns ? D.checks.interval_ns : 600e6;
     const intervalMs = interval / MS;
@@ -917,6 +950,14 @@
       if (sus <= interval) keeps++;
       if (hot[p].driver.ingest_total.p99.m > interval) tail = true;
     });
+
+    // Concrete ledger-range phrase for the hot-run methodology note (units differ
+    // in size, so state the span; omit gracefully when ledger counts are absent).
+    const unitWord = (ds.unit_label || "unit").toLowerCase();
+    const uniqLedgers = [...new Set(ORDER.map(p => um[p] && um[p].ledgers).filter(n => n > 0))].sort((a, b) => a - b);
+    const rangePhrase = uniqLedgers.length === 0 ? ""
+      : uniqLedgers.length === 1 ? `${fmtInt(uniqLedgers[0])} ledgers`
+      : `${fmtInt(uniqLedgers[0])}–${fmtInt(uniqLedgers[uniqLedgers.length - 1])} ledgers depending on the ${unitWord}`;
 
     reportEl.innerHTML = mastheadHTML(D) + `
     <section id="glance">
@@ -974,8 +1015,8 @@
     </section>
     ` + methodologyHTML(D, "07",
       `<dt>Cold-run semantics</dt><dd>Each cold run wipes its scratch output tree and backfills the whole configuration via the production backfill — plan, freeze all three data types, build the txhash MPHF. <code>backfill_wall</code> is that whole plan-and-execute wall.</dd>
-       <dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and drives the daemon's bounded ingestion loop over the full range. <code>ingest_total</code> times one ledger's complete ingest — the sum of its phase burst, source wait excluded; run wall includes source wait.</dd>
-       <dt>Counter semantics</dt><dd><code>n</code> counts non-zero-duration samples; <code>n_items</code> counts natural units (ledgers, txs, events). Percentiles are per-ledger, never averaged across runs — the reported percentile is the median run's.</dd>`)
+       <dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and ingests a single ${unitWord}'s entire ledger range${rangePhrase ? ` — ${rangePhrase} — ` : " "}through the daemon's bounded ingestion loop; one run never spans more than one ${unitWord}. The per-ledger end-to-end ingest time (recorded as <code>ingest_total</code> in the raw CSVs) is the sum of that ledger's phase burst with source wait excluded; run wall includes source wait.</dd>
+       <dt>Counter semantics</dt><dd>Percentiles are per-ledger and never averaged across runs — the reported percentile is the median run's. Item counts track the natural units processed (ledgers, transactions, events), recorded in the raw CSVs as <code>n_items</code>; sample counts (<code>n</code>) include only non-zero-duration measurements.</dd>`)
       + footerHTML(D);
 
     const C = COLORS();
@@ -1214,7 +1255,14 @@
     const ds = D.dataset;
     const ORDER = ds.unit_order || Object.keys(ds.unit_meta || {});
     const um = ds.unit_meta || {};
-    const disp = u => (um[u] && um[u].label) || u;
+    // Explicit label wins; a purely numeric id gets the unit_label prefixed
+    // ("Chunk 3000") so a bare number never stands alone; named ids verbatim.
+    const disp = u => {
+      const meta = um[u] || {};
+      if (meta.label) return meta.label;
+      if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
+      return u;
+    };
     const hot = D.ingest_hot || {};
     const hasKeepup = D.checks && D.checks.kind === "block_keepup";
     const interval = hasKeepup ? D.checks.interval_ns : null;
@@ -1235,30 +1283,44 @@
     const allE2E = ORDER.length > 0 && ORDER.every(u => hot[u] && hot[u].driver && hot[u].driver.ingest_total);
 
     const phaseGuideHTML = `<div class="phase-guide">
-      <p>The six phases partition the wall-clock of one <code>IngestLedger</code> call (their sum ≈ <code>ingest_total</code>; source wait is outside, in <code>read_blocked</code>). The key mental model: nothing touches RocksDB until <strong>commit</strong> — the middle phases only stage work into one atomic WriteBatch.</p>
+      <p>The six phases partition the wall-clock of one <code>IngestLedger</code> call — their sum is the per-ledger end-to-end time plotted below (recorded as <code>ingest_total</code> in the raw CSVs); the wait for the next ledger from the source sits outside the phases and is excluded from every per-ledger number here. The key mental model: nothing touches RocksDB until <strong>commit</strong> — the middle phases only stage work into one atomic WriteBatch.</p>
       <ul>
-        <li><strong>extract</strong> — decode the raw ledger once: walk the transactions, build the tx-hash entries, shape the events. Pure CPU/XDR work before anything is staged; any decode failure lands here by construction.</li>
-        <li><strong>ledgers</strong> — the ledger store's staging step: queue the ledger record (the zstd-compressed ledger bytes — why this is the priciest of the three stores) into the shared batch.</li>
-        <li><strong>txhash</strong> — same staging step for the tx-hash lookup entries, routed into 16 column families by hash high-nibble. Near-free (~1 % of ledger time).</li>
-        <li><strong>events</strong> — same staging step for the event records.</li>
-        <li><strong>commit (fsync)</strong> — the single RocksDB batch write for everything staged: WAL append + <strong>fsync</strong> + memtable insert. This is the durability point, one per ledger, and the phase pprof can't attribute (it's I/O wait, measured as the whole Batch call minus the three queue steps). ~Half of every ledger's time.</li>
-        <li><strong>apply</strong> — post-commit, in-memory only: refresh the roaring-bitmap event indexes and offset mirrors (copy-on-write clones). Runs only after the batch is durable, so a failed ledger can never be half-applied.</li>
+        <li><strong>extract</strong> — decode the raw ledger once: a single transaction walk builds the tx-hash entries and shapes the events. Pure CPU/XDR work before anything is staged; any decode failure lands here by construction.</li>
+        <li><strong>ledgers</strong> — the ledger store's staging step: zstd-compress the ledger bytes and queue the record into the shared batch — the compression makes this the priciest of the three staging steps.</li>
+        <li><strong>txhash</strong> — same staging step for the tx-hash lookup entries: each transaction's full 32-byte hash → ledger sequence, written into a single <code>txhash</code> column family. The cheapest staging step — no compression, no marshaling.</li>
+        <li><strong>events</strong> — same staging step for the events: each event's payload, its term-index rows, and the ledger's event-count row are queued into the batch (the term keys are derived here).</li>
+        <li><strong>commit (fsync)</strong> — the single synced RocksDB batch write for everything staged: WAL append + <strong>fsync</strong> + memtable insert. The one durability point per ledger — and the phase pprof can't attribute (it's I/O wait, measured as the whole batch call minus the three staging steps).</li>
+        <li><strong>apply</strong> — post-commit, in-memory only: refresh the roaring-bitmap event index and offset mirror that serve queries. Runs only after the batch is durable, so a failed ledger can never be half-applied.</li>
       </ul>
       <p>So a ledger's life is: decode it (<code>extract</code>) → stage three stores' writes (<code>ledgers</code>/<code>txhash</code>/<code>events</code>) → make it durable in one fsync'd batch (<code>commit</code>) → update the in-memory query indexes (<code>apply</code>).</p>
     </div>`;
 
-    const modelsKnown = ORDER.length > 0 && ORDER.every(u => um[u] && um[u].model);
-    const profilesLine = modelsKnown
-      ? `<p class="sec-intro" style="margin-top:6px">Profiles — ${ORDER.map(u => `<strong>${esc(disp(u))}</strong> (${esc(um[u].model)})`).join(", ")}.</p>`
+    // One-line unit roster: name + (model, if known) + ledger count. Works for
+    // both synthetic profiles and pubnet chunks; ledger counts here resolve the
+    // "40,000 total across 3 profiles" confusion (each run covers one unit).
+    const unitWord = (ds.unit_label || "unit").toLowerCase();
+    const uniqLedgers = [...new Set(ORDER.map(u => um[u] && um[u].ledgers).filter(n => n > 0))].sort((a, b) => a - b);
+    const rangePhrase = uniqLedgers.length === 0 ? ""
+      : uniqLedgers.length === 1 ? `${fmtInt(uniqLedgers[0])} ledgers`
+      : `${fmtInt(uniqLedgers[0])}–${fmtInt(uniqLedgers[uniqLedgers.length - 1])} ledgers depending on the ${unitWord}`;
+    const unitDetail = u => {
+      const meta = um[u] || {};
+      const bits = [];
+      if (meta.model) bits.push(esc(meta.model));
+      if (meta.ledgers) bits.push(`${fmtInt(meta.ledgers)} ledgers`);
+      return bits.length ? ` (${bits.join(", ")})` : "";
+    };
+    const unitsLine = ORDER.length
+      ? `<p class="sec-intro" style="margin-top:6px">${esc(ds.unit_label || "Unit")}s — ${ORDER.map(u => `<strong>${esc(disp(u))}</strong>${unitDetail(u)}`).join(", ")}.</p>`
       : "";
 
     reportEl.innerHTML = mastheadHTML(D) + `
     <section id="ingest-hot">
       <div class="sec-head"><span class="sec-num">01</span><h2>Hot ingestion — per-ledger latency</h2></div>
       <p class="sec-intro">Hot ingestion is the live RocksDB path — one fsync per ledger. This chart shows where each ledger's time goes, end to end plus every phase, measured against one block interval.</p>
-      ${profilesLine}
-      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). The dashed line is one block interval — see the phase guide below for what each phase measures.")}
+      ${unitsLine}
       ${phaseGuideHTML}
+      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). The dashed line is one block interval — see the phase guide above for what each phase measures.")}
       <p id="hot-prose" class="sec-intro"></p>
     </section>
 
@@ -1271,8 +1333,8 @@
         : `<div class="note-callout">This run defines no block-model keep-up check, so there is no per-interval budget to measure sustained ingestion against.</div>`}
     </section>
     ` + methodologyHTML(D, "03",
-      `<dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and drives the daemon's bounded ingestion loop over the full range. <code>ingest_total</code> times one ledger's complete ingest — the sum of its phase burst, source wait excluded; run wall includes source wait.</dd>
-       <dt>Counter semantics</dt><dd><code>n</code> counts non-zero-duration samples; <code>n_items</code> counts natural units (ledgers, txs, events). Percentiles are per-ledger, never averaged across runs — the reported percentile is the median run's.</dd>`)
+      `<dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and ingests a single ${unitWord}'s entire ledger range${rangePhrase ? ` — ${rangePhrase} — ` : " "}through the daemon's bounded ingestion loop; one run never spans more than one ${unitWord}. The per-ledger end-to-end ingest time (recorded as <code>ingest_total</code> in the raw CSVs) is the sum of that ledger's phase burst with source wait excluded; run wall includes source wait.</dd>
+       <dt>Counter semantics</dt><dd>Percentiles are per-ledger and never averaged across runs — the reported percentile is the median run's. Item counts track the natural units processed (ledgers, transactions, events), recorded in the raw CSVs as <code>n_items</code>; sample counts (<code>n</code>) include only non-zero-duration measurements.</dd>`)
       + footerHTML(D);
 
     const C = COLORS();

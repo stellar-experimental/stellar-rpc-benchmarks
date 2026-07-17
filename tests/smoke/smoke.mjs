@@ -115,9 +115,16 @@ function checkSanity(kind, doc, group) {
   } else if (kind === "synthetic") {
     check(group, "banner 3 / 3 KEEPS UP", /3 \/ 3/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 60));
     const tgt = txt(doc.getElementById("target-table"));
-    check(group, "sac p99 920 ms flagged over interval", /920 ms ▲/.test(tgt), tgt.slice(0, 160));
     const f42 = txt(doc.querySelector("#fig42-tv"));
-    check(group, "sac end-to-end p50 ≈ 144 ms", /14[34](\.\d)? ms/.test(f42), f42.slice(0, 120));
+    // Sanity values are per-run: the 2026-07-16 apply-tail fix pulled sac's
+    // ingest_total p99 back under one 600 ms interval (was 920 ms on 2026-07-15).
+    if (group === "synthetic-2026-07-15") {
+      check(group, "sac p99 920 ms flagged over interval", /920 ms ▲/.test(tgt), tgt.slice(0, 160));
+      check(group, "sac end-to-end p50 ≈ 144 ms", /14[34](\.\d)? ms/.test(f42), f42.slice(0, 120));
+    } else if (group === "synthetic-2026-07-16-apply-fix") {
+      check(group, "sac p99 305 ms within interval (apply-tail fix)", /305 ms/.test(tgt) && !/305 ms ▲/.test(tgt), tgt.slice(0, 200));
+      check(group, "sac end-to-end p50 ≈ 122 ms (apply-tail fix)", /122 ms/.test(f42), f42.slice(0, 120));
+    }
   }
 }
 
@@ -169,6 +176,21 @@ if (synthRun) {
   check(group, "phase guide present", !!guide, "missing");
   check(group, "phase guide mentions IngestLedger", /IngestLedger/.test(txt(guide)), "missing");
   check(group, "OZ token label shown", txt(report).includes("OZ token"), "missing");
+  window.close();
+}
+
+/* ---------------- hot-ingestion view — pubnet (?view=hot) ---------------- */
+const pubnetRun = manifest.runs.find((r) => r.kind === "pubnet");
+if (pubnetRun) {
+  const group = "pubnet hot-view";
+  console.log(`\n=== ${pubnetRun.id} (?view=hot) ===`);
+  const { window, errors } = await loadViewer(`?run=${pubnetRun.id}&view=hot`);
+  const doc = window.document;
+  const report = doc.getElementById("report");
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "extended chart rendered", !!doc.querySelector("#fig42-body svg"), "missing");
+  // Guards the numeric-id label prefix (T6) and the data-driven units line (T5).
+  check(group, "Chunk 3000 label present", txt(report).includes("Chunk 3000"), "missing");
   window.close();
 }
 
