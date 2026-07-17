@@ -1,7 +1,7 @@
 name: Ingest benchmark run
 
 # Manually pull one results directory from GCS, convert it to a run JSON,
-# and commit it to main so GitHub Pages (main:/docs) redeploys.
+# and commit it to main so the deploy-pages workflow redeploys GitHub Pages.
 on:
   workflow_dispatch:
     inputs:
