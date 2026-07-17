@@ -32,13 +32,15 @@ function fetchShim(input) {
   });
 }
 
-async function loadViewer(query) {
+async function loadViewer(query, opts = {}) {
+  const page = opts.page || "index.html";
+  const script = opts.script || "app.js";
   const errors = [];
   const vc = new VirtualConsole();
   vc.on("jsdomError", (e) => errors.push("jsdomError: " + (e.detail?.message || e.message || e)));
   vc.on("error", (...a) => errors.push("console.error: " + a.join(" ")));
 
-  const html = fs.readFileSync(path.join(DOCS, "index.html"), "utf8");
+  const html = fs.readFileSync(path.join(DOCS, page), "utf8");
   const dom = new JSDOM(html, {
     url: `${ORIGIN}/${query}`,
     runScripts: "dangerously",
@@ -54,9 +56,9 @@ async function loadViewer(query) {
     value: () => ({ width: 100, height: 30, top: 0, left: 0, right: 100, bottom: 30 }), configurable: true,
   });
 
-  // index.html references app.js via <script src>, which jsdom does not fetch
+  // The page references its script via <script src>, which jsdom does not fetch
   // without `resources: "usable"` (an HTTP loader we deliberately avoid) — inject it.
-  const app = fs.readFileSync(path.join(DOCS, "app.js"), "utf8");
+  const app = fs.readFileSync(path.join(DOCS, script), "utf8");
   const s = window.document.createElement("script");
   s.textContent = app;
   window.document.body.appendChild(s);
