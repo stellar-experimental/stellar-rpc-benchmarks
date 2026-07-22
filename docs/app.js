@@ -85,6 +85,16 @@
     for (let v = 0; v <= hi * 1.0001; v += step) out.push(v);
     return out;
   }
+  // Row-label gutter: keep each chart's default width, widen only when a
+  // label or sub needs it (long campaign unit names), cap short of the plot.
+  function gutterW(base, W, rows) {
+    let need = base;
+    for (const r of rows || []) {
+      if (r.label) need = Math.max(need, String(r.label).length * 7 + 14);
+      if (r.sub) need = Math.max(need, String(r.sub).length * 6.4 + 14);
+    }
+    return Math.min(need, Math.round(W * 0.32));
+  }
   const CVAR = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
   const COLORS = () => ({
     s1: CVAR("--s1"), s2: CVAR("--s2"), s3: CVAR("--s3"), s4: CVAR("--s4"),
@@ -162,7 +172,7 @@
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 128;
+    const labW = gutterW(W < 560 ? 96 : 128, W, rows);
     const m = { l: labW, r: 76, t: 6, b: 30 };
     const rowH = 26, gap = 18;
     const H = m.t + rows.length * (rowH + gap) - gap + m.b;
@@ -202,14 +212,16 @@
   }
 
   // panels: [{title, unit, color, bars:[{label,val,lo,hi,fmt}]}]
-  function barPanels(bodyId, panels) {
+  // opts: { medLabel } — tooltip label for the bar value (default 5-run median)
+  function barPanels(bodyId, panels, opts = {}) {
     const el = document.getElementById(bodyId);
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
     const cols = W < 640 ? 1 : panels.length;
     const pw = (W - (cols - 1) * 28) / cols;
-    const rowH = 22, gap = 12, labW = 70;
+    const rowH = 22, gap = 12;
+    const labW = gutterW(70, pw, panels.flatMap(p => p.bars));
     const rows = panels[0].bars.length;
     const panelH = 26 + rows * (rowH + gap) - gap + 30;
     const H = cols === 1 ? panels.length * (panelH + 16) : panelH;
@@ -228,7 +240,7 @@
         const bw = Math.max(x(b.val) - m.l, 1);
         const mark = S("path", { d: roundedRight(m.l, y, bw, rowH, 4), fill: p.color }, svg);
         hoverable(mark, `${p.title} — ${b.label}`, [
-          { color: p.color, value: b.fmt(b.val), label: "median of 5 runs" },
+          { color: p.color, value: b.fmt(b.val), label: opts.medLabel || "median of 5 runs" },
           { value: `${b.fmt(b.lo)} – ${b.fmt(b.hi)}`, label: "min–max spread" },
         ]);
         if (b.lo != null && x(b.hi) - x(b.lo) > 3) {
@@ -245,18 +257,24 @@
   }
 
   // rows: [{label, sub, lanes:[{name,color,pts:{p50,p90,p99,max}(ns), spread?}]}]
-  // opts: { reflineNs, reflineLabel }
+  // opts: { reflineNs, reflineLabel, reflines: [{ns, label}] }
   function dotRangeChart(bodyId, rows, opts = {}) {
     const el = document.getElementById(bodyId);
     if (!el) return;
     el.replaceChildren();
+    const reflines = (opts.reflines
+      || (opts.reflineNs ? [{ ns: opts.reflineNs, label: opts.reflineLabel || "" }] : []))
+      .slice().sort((a, b) => a.ns - b.ns);
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 140;
-    const m = { l: labW, r: 34, t: 10, b: 46 };
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
+    // With several reflines the labels stack in reserved headroom instead of
+    // colliding on one line.
+    const extraTop = reflines.length > 1 ? (reflines.length - 1) * 13 : 0;
+    const m = { l: labW, r: 34, t: 10 + extraTop, b: 46 };
     const laneH = 26;
     let allVals = [];
     rows.forEach(r => r.lanes.forEach(l => allVals.push(l.pts.p50, l.pts.max)));
-    if (opts.reflineNs) allVals.push(opts.reflineNs);
+    reflines.forEach(rl => allVals.push(rl.ns));
     const lo = Math.min(...allVals) / 1.35, hi = Math.max(...allVals) * 1.25;
     const x = v => m.l + (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (W - m.l - m.r);
     const nLanes = rows.reduce((a, r) => a + r.lanes.length, 0);
@@ -268,11 +286,18 @@
       S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "gridline" }, svg);
       S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: fmtNsAxis(tv) }, svg);
     }
-    if (opts.reflineNs && opts.reflineNs > lo && opts.reflineNs < hi) {
-      const px = x(opts.reflineNs);
+    reflines.forEach((rl, i) => {
+      if (!(rl.ns > lo && rl.ns < hi)) return;
+      const px = x(rl.ns);
       S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "refline" }, svg);
-      S("text", { x: px, y: m.t + 2, "text-anchor": "middle", class: "reflab", text: opts.reflineLabel || "" }, svg);
-    }
+      // Clamp the label inside the chart (estimated width; SVG text cannot be
+      // measured before render in every environment).
+      const est = String(rl.label || "").length * 6.3;
+      let anchor = "middle", tx = px;
+      if (px + est / 2 > W - 4) { anchor = "end"; tx = W - 4; }
+      else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
+      S("text", { x: tx, y: 12 + i * 13, "text-anchor": anchor, class: "reflab", text: rl.label || "" }, svg);
+    });
     S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: "per-op latency · log scale" }, svg);
     let y = m.t;
     rows.forEach((row, ri) => {
@@ -392,7 +417,7 @@
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 140;
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
     const m = { l: labW, r: 60, t: 8, b: 44 };
     const rowH = 40;
     const H = m.t + rows.length * rowH + m.b;
@@ -419,7 +444,7 @@
       for (const lane of row.lanes) {
         const dot = S("circle", { cx: x(lane.val), cy: cy, r: 6, fill: lane.color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
         hoverable(dot, `${row.label} — ${lane.name}`, [
-          { color: lane.color, value: opts.fmt(lane.val) + " ledgers/s", label: "median of 5 runs" },
+          { color: lane.color, value: opts.fmt(lane.val) + " ledgers/s", label: opts.medLabel || "median of 5 runs" },
           { value: `${opts.fmt(lane.lo)} – ${opts.fmt(lane.hi)}`, label: "min–max" },
         ]);
       }
@@ -439,7 +464,7 @@
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 140;
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
     const m = { l: labW, r: 60, t: 12, b: 32 };
     const rowH = 24, gap = 16;
     const H = m.t + rows.length * (rowH + gap) - gap + m.b;
@@ -531,7 +556,7 @@
         <div class="meta-cell"><div class="meta-k">Build</div><div class="meta-v">${esc(buildBits.join(" · ")) || "—"}</div></div>
         <div class="meta-cell"><div class="meta-k">OS / Instance</div><div class="meta-v">${esc(osLine) || "—"}</div></div>
         <div class="meta-cell"><div class="meta-k">Dataset</div><div class="meta-v">${esc(dsLine)}</div></div>
-        <div class="meta-cell"><div class="meta-k">Protocol</div><div class="meta-v">${camp.reps || 5} runs / config · fresh process per run · median reported</div></div>
+        <div class="meta-cell"><div class="meta-k">Protocol</div><div class="meta-v">${camp.reps || 5} run${(camp.reps || 5) === 1 ? "" : "s"} / config · fresh process per run · ${(camp.reps || 5) === 1 ? "single run reported" : "median reported"}</div></div>
         <div class="meta-cell"><div class="meta-k">Source data</div><div class="meta-v">${src}</div></div>
         ${provCells}
       </div>
@@ -542,7 +567,7 @@
     const b = D.build || {}, camp = D.campaign || {}, mac = D.machine || {};
     return `<div class="footer">
       ${esc(D.run_name || "")} · ${esc(mac.instance || "")}, local NVMe · build ${esc(shortCommit(b.commit))}${b.branch ? " (" + esc(b.branch) + ")" : ""}.<br>
-      Aggregates are medians of ${camp.reps || 5} process-level runs with min–max spread; no value was invented, interpolated, or smoothed.
+      ${(camp.reps || 5) === 1 ? "Values come from a single process-level run" : `Aggregates are medians of ${camp.reps || 5} process-level runs with min–max spread`}; no value was invented, interpolated, or smoothed.
     </div>`;
   }
 
@@ -553,6 +578,109 @@
       <figcaption>${caption}</figcaption>
       <details class="tv" id="${id}-tv"><summary>Table view</summary><div class="tv-scroll"></div></details>
     </figure>`;
+  }
+
+  /* ============================ campaign unit ids ============================ */
+  // A campaign unit id is "<dataset>-c<chunk>" (see SCHEMA "Inputs"), and
+  // dataset names follow "<model>-<txPerLedger>". The trailing number is
+  // dropped from the display name only when the run's own counts
+  // (txs ÷ ledgers) confirm it is the tx-per-ledger figure — nothing is
+  // renamed on data the run cannot verify. Returns null for non-campaign ids.
+  function campaignUnitParts(u, meta) {
+    const m = /^(.+)-c(\d+)$/.exec(String(u));
+    if (!m) return null;
+    let name = m[1];
+    const chunk = m[2];
+    const k = meta || {};
+    const tpl = k.ledgers > 0 && k.txs > 0 ? Math.round(k.txs / k.ledgers) : null;
+    const nm = /^(.+)-(\d+)$/.exec(name);
+    if (nm && tpl != null && +nm[2] === tpl) name = nm[1];
+    name = name.replace(/_/g, " ");
+    return {
+      name, chunk, tpl,
+      sub: (tpl != null ? fmtInt(tpl) + " TPL · " : "") + "chunk " + chunk,
+      line: `${name} (${tpl != null ? fmtInt(tpl) + " TPL, " : ""}c${chunk})`,
+    };
+  }
+
+  /* ============================ phase targets ============================ */
+  // Phase 1/2/3 performance targets ship inside each campaign run's JSON
+  // (campaign.phase_targets, duplicated at convert time) — the viewer holds no
+  // target constants of its own. PH is null when a run carries no phase data;
+  // every phase feature then disappears and legacy runs render exactly as
+  // before. The selected phase comes from ?phase=N, defaulting to the matched
+  // phase (campaign.phase); both can be absent.
+  function phaseState(D) {
+    const camp = D.campaign || {};
+    const targets = Array.isArray(camp.phase_targets)
+      ? camp.phase_targets.filter(p => p && p.phase != null && p.block_time_ns > 0) : [];
+    if (!targets.length) return null;
+    const byNum = {};
+    targets.forEach(p => { byNum[p.phase] = p; });
+    const matched = camp.phase != null && byNum[camp.phase] ? byNum[camp.phase] : null;
+    const q = parseInt(new URL(location.href).searchParams.get("phase"), 10);
+    const sel = byNum[q] || matched;
+    return { targets, matched, sel, closeNs: camp.close_interval_ns || 0 };
+  }
+
+  function phasePaceText(PH) {
+    if (PH.closeNs > 0) {
+      return "paced at a " + fmtNsAxis(PH.closeNs) + " close interval"
+        + (PH.matched ? " (Phase " + PH.matched.phase + ")" : ", which matches no phase");
+    }
+    return "not paced (catch-up run)";
+  }
+
+  function phaseBlockHTML(PH) {
+    const selNo = PH.sel ? PH.sel.phase : null;
+    const cls = p => (selNo === p.phase ? ' class="ph-sel"' : "");
+    const head = PH.targets.map(p =>
+      `<th${cls(p)}>Phase ${p.phase}${PH.matched && PH.matched.phase === p.phase ? '<span class="ph-badge">this run</span>' : ""}</th>`).join("");
+    const row = (label, f) =>
+      `<tr><td>${label}</td>${PH.targets.map(p => `<td${cls(p)}>${f(p)}</td>`).join("")}</tr>`;
+    let rows = "";
+    rows += row("Block time", p => fmtNsAxis(p.block_time_ns));
+    rows += row("End-to-end budget (externalized → client)", p => p.e2e_budget_ns ? fmtNsAxis(p.e2e_budget_ns) : "—");
+    rows += row("Ingest slice, p99 (meta available → ingested in RPC)", p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) : "—");
+    for (const name of (PH.targets[0].workloads || []).map(w => w.name)) {
+      rows += row(esc(name), p => {
+        const w = (p.workloads || []).find(x => x.name === name);
+        return w ? `${fmtInt(w.tps)} TPS (${fmtInt(w.tx_per_ledger)} TPL)` : "—";
+      });
+    }
+    rows += row("Orgs", p => p.orgs != null ? fmtInt(p.orgs) : "—");
+    rows += row("Retention", p => p.retention ? esc(p.retention) : "—");
+    const btns = PH.targets.map(p =>
+      `<button type="button" class="chunk-btn phase-btn" data-phase="${p.phase}" aria-pressed="${selNo === p.phase}">Phase ${p.phase}</button>`).join("");
+    const caveat = PH.sel && (!PH.matched || PH.sel.phase !== PH.matched.phase)
+      ? `<div class="note-callout phase-caveat">Viewing against <strong>Phase ${PH.sel.phase}</strong> targets; this run was ${phasePaceText(PH)}.</div>`
+      : (!PH.sel
+        ? `<div class="note-callout phase-caveat">This run was ${phasePaceText(PH)} — no phase targets apply by default. Select a phase to view its targets.</div>`
+        : "");
+    return `<div class="phase-block" id="phase-block">
+      <div class="fig-head"><div><span class="fig-no">Targets</span><span class="fig-title">Phase 1/2/3 performance targets</span></div>
+        <div class="filter-row" style="margin:0"><span class="filter-lab">View against</span>${btns}</div></div>
+      <div class="tv-scroll"><table class="data phase-table"><tr><th>Target</th>${head}</tr>${rows}</table></div>
+      <p class="phase-caption">This benchmark measures the per-ledger ingest slice only: the time from meta available in captive core to data ingested in RPC (recorded as <code>ingest_total</code>). Cold ingestion (backfill) has no phase targets.</p>
+      ${caveat}
+    </div>`;
+  }
+
+  // Pass/miss readout for the selected phase's ingest-slice p99 target.
+  function ingestTargetHTML(PH, order, hot, disp) {
+    if (!PH || !PH.sel) return "";
+    const units = order.filter(u => hot[u] && hot[u].driver && hot[u].driver.ingest_total);
+    if (!units.length) return "";
+    const sel = PH.sel, t = sel.ingest_p99_target_ns;
+    if (!t) {
+      return `<p class="sec-intro" id="ingest-target-readout">Phase ${sel.phase} defines no ingest-slice target — no pass/miss verdict applies.</p>`;
+    }
+    const bits = units.map(u => {
+      const p99 = hot[u].driver.ingest_total.p99.m;
+      const ok = p99 <= t;
+      return `<strong>${esc(disp(u))}</strong> ingest p99 ${fmtNs(p99)} vs Phase ${sel.phase} target ${fmtNsAxis(t)} <span class="${ok ? "cell-ok" : "cell-warn"}">${ok ? "✓ PASS" : "▲ MISS"}</span>`;
+    });
+    return `<p class="sec-intro" id="ingest-target-readout">${bits.join(" · ")}</p>`;
   }
 
   function methodologyHTML(D, num, extraDL) {
@@ -578,7 +706,7 @@
       <div class="sec-head"><span class="sec-num">${num}</span><h2>Methodology &amp; machine metadata</h2></div>
       <dl>
         <dt>Process isolation &amp; aggregation</dt>
-        <dd>${D.campaign && D.campaign.reps || 5} repetitions per configuration, each a fresh process. Every reported value is the median across runs; spread is min–max. Nothing is interpolated or smoothed — every plotted number traces to a raw CSV field.</dd>
+        <dd>${D.campaign && D.campaign.reps || 5} repetition${(D.campaign && D.campaign.reps || 5) === 1 ? "" : "s"} per configuration, each a fresh process. ${(D.campaign && D.campaign.reps || 5) === 1 ? "Every reported value comes from that single run." : "Every reported value is the median across runs; spread is min–max."} Nothing is interpolated or smoothed — every plotted number traces to a raw CSV field.</dd>
         ${extraDL || ""}
         ${fsyncDD}
       </dl>
@@ -597,10 +725,13 @@
     const disp = u => {
       const meta = um[u] || {};
       if (meta.label) return meta.label;
+      const cp = campaignUnitParts(u, meta);
+      if (cp) return cp.line;
       if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
       return u;
     };
     const cold = D.ingest_cold, hot = D.ingest_hot, Q = D.queries, gold = D.golden || {};
+    const PH = phaseState(D);   // phase targets, campaign runs only (null otherwise)
     // discover query types + concurrency levels from data (degrade gracefully)
     const firstTier = Q && (Q.cold || Q.hot) ? (Q.cold || Q.hot) : {};
     const firstUnit = firstTier[CH[0]] || {};
@@ -637,6 +768,7 @@
           <p>Worst cell: ${esc(worstTxt)}${worst && worst.cell.p99.m <= thr ? ", within budget" : ""}. Every other cell clears the target with more headroom. Details in §7.</p>
         </div>
       </div>
+      ${PH ? phaseBlockHTML(PH) : ""}
       <div class="tiles" id="tiles"></div>
       <p class="sec-intro">Cold ingestion (pack build) freezes each chunk into packfiles plus the event term index; hot ingestion is the live RocksDB path with one fsync per ledger. Queries are swept over cold and hot tiers at increasing concurrency. All numbers below are medians of ${D.campaign.reps} process-level runs with min–max spread.</p>
     </section>
@@ -662,6 +794,7 @@
       <p class="sec-intro">Hot ingestion is the streaming path: each ledger is extracted, applied to the RocksDB stores, and committed with <strong>one fsync per ledger</strong> — the durability contract of live ingestion.</p>
       ${figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole chunk (median of 5 runs). <code>source wait</code> is time blocked on the ledger source.")}
       ${figHTML("fig42", "Fig 4.2", "Per-ledger ingest latency — end to end, and its fsync commit", "fig42-legend", "Latency percentiles over 10,000 ledgers (median of 5 runs; log scale). <em>End-to-end</em> is the complete ingest of one ledger (recorded as <code>ingest_total</code> in the raw CSVs), source wait excluded.")}
+      ${ingestTargetHTML(PH, CH, hot, disp)}
       ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot", "fig43-legend", "Ledgers per second over the full chunk (median of 5 runs; log scale). The fsync-per-ledger contract costs hot ingestion against the batch cold path — the price of live durability.")}
       <p id="hot-prose" class="sec-intro"></p>
     </section>
@@ -832,8 +965,16 @@
           spread: `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`,
         })),
       }));
-      dotRangeChart("fig42-body", rows);
-      legend("fig42-legend", [{ label: "end-to-end ingest", color: C.hot }, { label: "commit (fsync)", color: C.s6 }, { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" }]);
+      const dotOpts = {};
+      if (PH && PH.sel) {
+        dotOpts.reflines = [{ ns: PH.sel.block_time_ns, label: `${fmtNsAxis(PH.sel.block_time_ns)} — Phase ${PH.sel.phase} block time` }];
+        if (PH.sel.ingest_p99_target_ns) dotOpts.reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
+      }
+      dotRangeChart("fig42-body", rows, dotOpts);
+      legend("fig42-legend", [
+        { label: "end-to-end ingest", color: C.hot }, { label: "commit (fsync)", color: C.s6 }, { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
+        ...(dotOpts.reflines || []).map(rl => ({ label: rl.label.replace(" — ", " "), color: CVAR("--hot"), line: true })),
+      ]);
       tableView("fig42", [ds.unit_label, "Series", "p50", "p90", "p99", "max", "p99 min–max across runs"],
         CH.flatMap(c => series(c).map(([name, , st]) => [disp(c), name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m), `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`])));
       const p99s = CH.map(c => hot[c].driver.ingest_total.p99.m / 1e6);
@@ -996,24 +1137,52 @@
     const ds = D.dataset;
     const ORDER = ds.unit_order;
     const um = ds.unit_meta;
-    // Explicit label wins; a purely numeric id gets the unit_label prefixed
+    // Explicit label wins; campaign ids ("sac-6000-c1") are broken up into
+    // model / TPL / chunk; a purely numeric id gets the unit_label prefixed
     // ("Chunk 3000") so a bare number never stands alone; named ids verbatim.
+    const parts = p => ((um[p] || {}).label ? null : campaignUnitParts(p, um[p]));
     const disp = p => {
       const meta = um[p] || {};
       if (meta.label) return meta.label;
+      const cp = parts(p);
+      if (cp) return cp.line;
       if (ds.unit_label && /^\d+$/.test(p)) return `${ds.unit_label} ${p}`;
       return p;
     };
+    // Chart-gutter form: two short lines instead of one long id.
+    const rowLab = (p, fallbackSub) => {
+      const cp = parts(p);
+      return cp ? { label: cp.name, sub: cp.sub } : { label: disp(p), sub: fallbackSub };
+    };
     const cold = D.ingest_cold, hot = D.ingest_hot;
-    const interval = D.checks && D.checks.interval_ns ? D.checks.interval_ns : 600e6;
-    const intervalMs = interval / MS;
-    const floor = 1e9 / interval;   // ledgers/s a block interval demands
+    const paced = ((D.campaign && D.campaign.close_interval_ns) || 0) > 0;
+    const reps = (D.campaign && D.campaign.reps) || 5;
+    // Run-to-run variance is meaningless for a single rep — the whole section
+    // disappears and the following sections renumber.
+    const showVariance = reps > 1;
+    const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
+    const secTarget = showVariance ? "06" : "05";
+    const secMethod = showVariance ? "07" : "06";
+    const PH = phaseState(D);
+    // Judged budget: the selected phase's block time on phase-aware runs, else
+    // this run's checks (legacy behavior, 600 ms fallback). Null means no
+    // keep-up budget applies (unpaced campaign run with no phase selected).
+    const checksNs = D.checks && D.checks.interval_ns ? D.checks.interval_ns : null;
+    const interval = PH ? (PH.sel ? PH.sel.block_time_ns : checksNs) : (checksNs || 600e6);
+    const intervalMs = interval ? interval / MS : null;
+    const intervalTxt = interval ? fmtNsAxis(interval) : "";
+    const bannerLabel = PH && PH.sel
+      ? `Phase ${PH.sel.phase} block model (${intervalTxt})`
+      : (D.checks ? D.checks.label : "block model");
+    const floor = interval ? 1e9 / interval : null;   // ledgers/s a block interval demands
+    // Dataset-generation pace — a property of the run, never of the selected phase.
+    const genNs = PH ? (PH.closeNs || null) : interval;
 
     const sub = p => fmtK(um[p].events) + " events";
 
     // banner keep-up (data-driven)
     let keeps = 0, tail = false;
-    ORDER.forEach(p => {
+    if (interval) ORDER.forEach(p => {
       const sus = hot[p].driver.run_wall.total.m / um[p].ledgers;
       if (sus <= interval) keeps++;
       if (hot[p].driver.ingest_total.p99.m > interval) tail = true;
@@ -1027,61 +1196,88 @@
       : uniqLedgers.length === 1 ? `${fmtInt(uniqLedgers[0])} ledgers`
       : `${fmtInt(uniqLedgers[0])}–${fmtInt(uniqLedgers[uniqLedgers.length - 1])} ledgers depending on the ${unitWord}`;
 
-    reportEl.innerHTML = mastheadHTML(D) + `
-    <section id="glance">
-      <div class="sec-head"><span class="sec-num">01</span><h2>At a glance</h2></div>
+    const bannerHTML = interval ? `
       <div class="banner${tail ? " warn-tail" : ""}">
         <div class="banner-figure">${keeps}<span class="of"> / ${ORDER.length}</span></div>
         <div class="banner-copy">
           <div class="lead">${keeps === ORDER.length
-            ? `All profiles sustain the ${esc(D.checks ? D.checks.label : "block model")} in steady state. <span class="chip">✓ KEEPS UP</span>`
-            : `${keeps} of ${ORDER.length} profiles sustain the ${esc(D.checks ? D.checks.label : "block model")} in steady state. <span class="chip warn">${ORDER.length - keeps} OVER INTERVAL</span>`}${tail ? ` <span class="chip warn">TAIL CAVEAT</span>` : ""}</div>
+            ? `All profiles sustain the ${esc(bannerLabel)} in steady state. <span class="chip">✓ KEEPS UP</span>`
+            : `${keeps} of ${ORDER.length} profiles sustain the ${esc(bannerLabel)} in steady state. <span class="chip warn">${ORDER.length - keeps} OVER INTERVAL</span>`}${tail ? ` <span class="chip warn">TAIL CAVEAT</span>` : ""}</div>
           <p id="banner-note"></p>
         </div>
-      </div>
+      </div>` : `
+      <div class="banner">
+        <div class="banner-copy">
+          <div class="lead">No keep-up target — this run was ${PH ? phasePaceText(PH) : "not paced"}.</div>
+          <p id="banner-note"></p>
+        </div>
+      </div>`;
+    const judgedTail = interval
+      ? (PH && PH.sel ? ` judged against the ${esc(bannerLabel)}` : ` judged against a ${intervalMs} ms block model`)
+      : "";
+    const densitySentence = genNs
+      ? (PH
+        ? ` Per-ledger density models a <strong>${fmtNsAxis(genNs)} block time</strong> (tx/ledger = target TPS × ${(genNs / 1e9).toFixed(1)}); the keep-up bar is the selected phase's block time.`
+        : ` Per-ledger density models a <strong>${intervalMs} ms block time</strong> (tx/ledger = target TPS × ${(interval / 1e9).toFixed(1)}), which is also the keep-up bar every hot number is judged against.`)
+      : "";
+
+    reportEl.innerHTML = mastheadHTML(D) + `
+    <section id="glance">
+      <div class="sec-head"><span class="sec-num">01</span><h2>At a glance</h2></div>
+      ${bannerHTML}
+      ${PH ? phaseBlockHTML(PH) : ""}
       <div class="tiles" id="tiles"></div>
-      <p class="sec-intro">Hot ingestion is the daemon's live loop with one fsync per ledger; cold ingestion freezes each profile into packfiles plus the event term index. Every number is a median of ${D.campaign.reps} process-level runs judged against a ${intervalMs} ms block model.</p>
+      <p class="sec-intro">Hot ingestion is the daemon's live loop with one fsync per ledger; cold ingestion freezes each profile into packfiles plus the event term index. ${reps === 1 ? `Every number comes from a single process-level run${judgedTail}.` : `Every number is a median of ${D.campaign.reps} process-level runs${judgedTail}.`}</p>
     </section>
 
     <section id="dataset">
       <div class="sec-head"><span class="sec-num">02</span><h2>Dataset &amp; environment</h2></div>
-      <p class="sec-intro">Synthetic Stellar ledgers generated by stellar-core <code>apply-load</code> at three model-transaction profiles. Per-ledger density models a <strong>${intervalMs} ms block time</strong> (tx/ledger = target TPS × ${(interval / 1e9).toFixed(1)}), which is also the keep-up bar every hot number is judged against.</p>
+      <p class="sec-intro">Synthetic Stellar ledgers generated by stellar-core <code>apply-load</code> at three model-transaction profiles.${densitySentence}</p>
       <div class="tv-scroll" style="margin-top:16px"><table class="data" id="profile-table" style="width:100%"></table></div>
-      <p style="margin-top:16px">Machine and durability context are summarised in the masthead; full machine metadata is in §7.</p>
+      <p style="margin-top:16px">Machine and durability context are summarised in the masthead; full machine metadata is in §${+secMethod}.</p>
     </section>
 
     <section id="ingest-cold">
       <div class="sec-head"><span class="sec-num">03</span><h2>Cold ingestion — freezing synthetic history into packfiles</h2></div>
       <p class="sec-intro">Cold ingestion drives the production backfill from the golden pack into a fresh cold tree: a shared per-ledger extract (<code>cold_extract</code>), then per-type pipelines — ledgers, txhash, and events (term indexing → write → one-shot <code>finalize</code> that builds the MPHF event index).</p>
-      ${figHTML("fig31", "Fig 3.1", "Backfill wall time, attributed by pipeline", "fig31-legend", "Median of 5 runs. Bar length = whole-campaign backfill wall. The remainder is coordination outside the instrumented pipelines.")}
-      ${figHTML("fig32", "Fig 3.2", "Event pipeline composition", "fig32-legend", "Total time in each event-pipeline stage (median of 5 runs). The MPHF <code>finalize</code> is priced in distinct terms, not events.")}
-      ${figHTML("fig33", "Fig 3.3", "Normalized cold cost — seconds per million events", "", "Whole-campaign backfill wall ÷ events ingested, median of 5 runs (whiskers = min–max).")}
+      ${figHTML("fig31", "Fig 3.1", "Backfill wall time, attributed by pipeline", "fig31-legend", (reps === 1 ? "Single run." : `Median of ${reps} runs.`) + " Bar length = whole-campaign backfill wall. The remainder is coordination outside the instrumented pipelines.")}
+      ${figHTML("fig32", "Fig 3.2", "Event pipeline composition", "fig32-legend", `Total time in each event-pipeline stage (${medRuns}). The MPHF <code>finalize</code> is priced in distinct terms, not events.`)}
+      ${figHTML("fig33", "Fig 3.3", "Normalized cold cost — seconds per million events", "", `Whole-campaign backfill wall ÷ events ingested, ${medRuns} (whiskers = min–max).`)}
       <p id="cold-prose" class="sec-intro"></p>
     </section>
 
     <section id="ingest-hot">
-      <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — the live loop against a ${intervalMs} ms block model</h2></div>
+      <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — the live loop${interval ? (PH && PH.sel ? ` against the ${esc(bannerLabel)}` : ` against a ${intervalMs} ms block model`) : ""}</h2></div>
       <p class="sec-intro">Hot ingestion runs the daemon's production loop: per ledger — extract, apply to the RocksDB stores, commit with <strong>one fsync per ledger</strong>, then <code>apply</code> makes the write batch live.</p>
-      ${figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole run (median of 5). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.")}
-      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, its fsync commit, and the apply stall tail", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). The dashed line is one block interval.")}
-      ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot vs the block-model floor", "fig43-legend", "Ledgers per second over the full run (median of 5; log scale). The dashed line is the rate a block interval demands.")}
+      ${paced
+        ? figHTML("fig41", "Fig 4.1", "Hot-ingest busy time, by phase", "fig41-legend", "Sum of per-ledger phase times over the whole run (" + medRuns + "). This run is paced: wall clock is dominated by waiting on the close schedule, so the bar shows busy time only — see the table view for run wall and pacing wait.")
+        : figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", `Sum of per-ledger phase times over the whole run (${reps === 1 ? "single run" : "median of " + reps}). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.`)}
+      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, its fsync commit, and the apply stall tail", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale).` + (PH && PH.sel ? " Dashed lines mark the selected phase's block time and ingest-slice target." : (interval ? " The dashed line is one block interval." : "")))}
+      ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot vs the block-model floor", "fig43-legend", `Ledgers per second over the full run (${reps === 1 ? "single run" : "median of " + reps}; log scale).` + (interval ? " The dashed line is the rate a block interval demands." : ""))}
       <p id="hot-prose" class="sec-intro"></p>
     </section>
-
+    ${showVariance ? `
     <section id="variance">
       <div class="sec-head"><span class="sec-num">05</span><h2>Run-to-run variance</h2></div>
-      <p class="sec-intro">Every configuration ran as five independent processes against identical inputs. The spread is tight enough that every number above can be read at face value — including the tail.</p>
-      ${figHTML("fig51", "Fig 5.1", "Run wall time — all 5 runs, deviation from median", "fig51-legend", "Each dot is one run's whole-campaign wall as % deviation from its configuration's median.")}
+      <p class="sec-intro">Every configuration ran as ${reps === 5 ? "five" : reps} independent processes against identical inputs. The spread is tight enough that every number above can be read at face value — including the tail.</p>
+      ${figHTML("fig51", "Fig 5.1", `Run wall time — all ${reps} runs, deviation from median`, "fig51-legend", "Each dot is one run's whole-campaign wall as % deviation from its configuration's median.")}
       <p id="variance-prose" class="sec-intro"></p>
-    </section>
+    </section>` : ""}
 
     <section id="target">
-      <div class="sec-head"><span class="sec-num">06</span><h2>Keep-up check — the ${intervalMs} ms block model</h2></div>
-      <p class="sec-intro">The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.</p>
+      <div class="sec-head"><span class="sec-num">${secTarget}</span><h2>Keep-up check${interval ? ` — the ${PH && PH.sel ? esc(bannerLabel) : `${intervalMs} ms block model`}` : ""}</h2></div>
+      ${interval ? `
+      <p class="sec-intro">${PH
+        ? (PH.sel
+          ? `Phase ${PH.sel.phase} sets a ${intervalTxt} block time, so ${intervalTxt} is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`
+          : `This run was paced at a ${intervalTxt} close interval, so ${intervalTxt} is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`)
+        : `The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`}</p>
       <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
-      <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). Values are medians of 5 runs; "worst ledger" is the median across runs of each run's slowest ledger.</p>
+      ${ingestTargetHTML(PH, ORDER, hot, disp)}
+      <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). ${reps === 1 ? `Values are from a single run; "worst ledger" is that run's slowest ledger.` : `Values are medians of ${reps} runs; "worst ledger" is the median across runs of each run's slowest ledger.`}</p>`
+      : `<div class="note-callout">This run was not paced (catch-up run) — no keep-up budget applies. Select a phase in the target table above to view this run against Phase 1/2/3 targets.</div>`}
     </section>
-    ` + methodologyHTML(D, "07",
+    ` + methodologyHTML(D, secMethod,
       `<dt>Cold-run semantics</dt><dd>Each cold run wipes its scratch output tree and backfills the whole configuration via the production backfill — plan, freeze all three data types, build the txhash MPHF. <code>backfill_wall</code> is that whole plan-and-execute wall.</dd>
        <dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and ingests a single ${unitWord}'s entire ledger range${rangePhrase ? ` — ${rangePhrase} — ` : " "}through the daemon's bounded ingestion loop; one run never spans more than one ${unitWord}. The per-ledger end-to-end ingest time (recorded as <code>ingest_total</code> in the raw CSVs) is the sum of that ledger's phase burst with source wait excluded; run wall includes source wait.</dd>
        <dt>Counter semantics</dt><dd>Percentiles are per-ledger and never averaged across runs — the reported percentile is the median run's. Item counts track the natural units processed (ledgers, transactions, events), recorded in the raw CSVs as <code>n_items</code>; sample counts (<code>n</code>) include only non-zero-duration measurements.</dd>`)
@@ -1135,7 +1331,9 @@
       // banner note
       const worstP = ORDER.reduce((a, p) => hot[p].driver.ingest_total.p99.m > hot[a].driver.ingest_total.p99.m ? p : a, ORDER[0]);
       const bn = document.getElementById("banner-note");
-      if (tail) bn.innerHTML = `The caveat lives in the tail: the <strong>${esc(disp(worstP))}</strong> profile's slowest 1 % of ledgers exceed one block interval (p99 <strong>${fmtNs(hot[worstP].driver.ingest_total.p99.m)}</strong>, worst single ledger ${fmtNs(hot[worstP].driver.ingest_total.max.m)}) — a stall localized to the RocksDB <code>apply</code> phase, not the fsync (§4). The other profiles keep even their worst ledger under one interval.`;
+      if (!interval) bn.textContent = "Select a phase in the target table below to view this run against Phase 1/2/3 targets.";
+      else if (tail) bn.innerHTML = `The caveat lives in the tail: the <strong>${esc(disp(worstP))}</strong> profile's slowest 1 % of ledgers exceed one block interval (p99 <strong>${fmtNs(hot[worstP].driver.ingest_total.p99.m)}</strong>, worst single ledger ${fmtNs(hot[worstP].driver.ingest_total.max.m)}) — a stall localized to the RocksDB <code>apply</code> phase, not the fsync (§4). The other profiles keep even their worst ledger under one interval.`;
+      else if (keeps < ORDER.length) bn.textContent = `Sustained per-ledger cost exceeds the ${intervalTxt} budget on ${ORDER.length - keeps} of ${ORDER.length} profiles — see the keep-up check.`;
       else bn.textContent = "Every profile keeps even its worst ledger comfortably inside one block interval.";
     })();
 
@@ -1147,7 +1345,7 @@
         const segs = segsDef.map(([k, name, col]) => ({ name, color: col, val: d[k] ? d[k].total.m : 0 }));
         const other = d.backfill_wall.total.m - segs.reduce((a, s) => a + s.val, 0);
         segs.push({ name: "driver / unattributed", color: C.de, val: Math.max(other, 0) });
-        return { label: disp(p), sub: sub(p), segs, total: d.backfill_wall.total.m };
+        return { ...rowLab(p, sub(p)), segs, total: d.backfill_wall.total.m };
       });
       stackedH("fig31-body", rows);
       legend("fig31-legend", [...segsDef.map(([, n, col]) => ({ label: n, color: col })), { label: "driver / unattributed", color: C.de }]);
@@ -1166,7 +1364,7 @@
       const rows = ORDER.map(p => {
         const st = cold[p].files.events;
         const segs = evStages.map(name => ({ name: name === "finalize" ? "finalize (MPHF)" : name, color: palette[name] || C.de, val: st[name].total.m }));
-        return { label: disp(p), sub: sub(p), segs, total: segs.reduce((a, s) => a + s.val, 0) };
+        return { ...rowLab(p, sub(p)), segs, total: segs.reduce((a, s) => a + s.val, 0) };
       });
       stackedH("fig32-body", rows);
       legend("fig32-legend", evStages.map(name => ({ label: name === "finalize" ? "finalize (MPHF)" : name, color: palette[name] || C.de })));
@@ -1179,9 +1377,10 @@
       const bars = ORDER.map(p => {
         const evM = um[p].events / 1e6;
         const w = cold[p].driver.backfill_wall.total;
-        return { label: disp(p), val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
+        const cp = parts(p);
+        return { label: cp ? cp.name : disp(p), val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
       });
-      barPanels("fig33-body", [{ title: "seconds per million events", unit: "s", color: C.s1, bars }]);
+      barPanels("fig33-body", [{ title: "seconds per million events", unit: "s", color: C.s1, bars }], { medLabel: medRuns });
       tableView("fig33", ["profile", "s / M events (median)", "min", "max", "backfill wall", "events/s (wall-incl.)"],
         ORDER.map((p, i) => {
           const b = bars[i], w = cold[p].driver.backfill_wall.total;
@@ -1203,12 +1402,15 @@
           name: name === "commit" ? "commit (fsync)" : name, color: palette[name] || C.de, val: h.phases[name].total.m,
           extra: [{ value: fmtNs(h.phases[name].p50.m), label: "p50 / ledger" }, { value: fmtNs(h.phases[name].p99.m), label: "p99 / ledger" }],
         }));
-        return { label: disp(p), sub: fmtInt(um[p].txs / um[p].ledgers) + " tx/ledger", segs, total: h.driver.run_wall.total.m };
+        // On a paced run the wall is dominated by waiting for the close
+        // schedule, so the bar shows busy time (sum of phases) instead.
+        const busy = segs.reduce((a, s) => a + s.val, 0);
+        return { ...rowLab(p, fmtInt(um[p].txs / um[p].ledgers) + " tx/ledger"), segs, total: paced ? busy : h.driver.run_wall.total.m };
       });
       stackedH("fig41-body", rows);
       legend("fig41-legend", phaseNames.map(n => ({ label: n === "commit" ? "commit (fsync)" : n, color: palette[n] || C.de })));
-      tableView("fig41", ["profile", "run wall", ...phaseNames, "source wait + startup"],
-        ORDER.map(p => { const h = hot[p]; const sum = phaseNames.reduce((a, n) => a + h.phases[n].total.m, 0); return [disp(p), fmtNs(h.driver.run_wall.total.m), ...phaseNames.map(n => fmtNs(h.phases[n].total.m)), fmtNs(h.driver.run_wall.total.m - sum)]; }));
+      tableView("fig41", ["profile", "run wall", ...phaseNames, ...(paced ? ["busy total", "pacing wait + startup"] : ["source wait + startup"])],
+        ORDER.map(p => { const h = hot[p]; const sum = phaseNames.reduce((a, n) => a + h.phases[n].total.m, 0); return [disp(p), fmtNs(h.driver.run_wall.total.m), ...phaseNames.map(n => fmtNs(h.phases[n].total.m)), ...(paced ? [fmtNs(sum)] : []), fmtNs(h.driver.run_wall.total.m - sum)]; }));
     })();
 
     /* ---- fig 4.2 per-ledger latency ---- */
@@ -1218,14 +1420,22 @@
         ["commit (fsync)", C.s6, hot[p].phases.commit],
         ["apply", C.s5, hot[p].phases.apply],
       ].filter(s => s[2]);
-      const rows = ORDER.map(p => ({ label: disp(p), sub: sub(p), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
-      dotRangeChart("fig42-body", rows, { reflineNs: interval, reflineLabel: intervalMs + " ms — block interval" });
-      legend("fig42-legend", [{ label: "end to end", color: C.s1 }, { label: "commit (fsync)", color: C.s6 }, { label: "apply", color: C.s5 }, { label: intervalMs + " ms block interval", color: CVAR("--hot"), line: true }]);
+      const rows = ORDER.map(p => ({ ...rowLab(p, sub(p)), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
+      const reflines = [];
+      if (interval) reflines.push({ ns: interval, label: PH && PH.sel ? `${intervalTxt} — Phase ${PH.sel.phase} block time` : intervalMs + " ms — block interval" });
+      if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
+      dotRangeChart("fig42-body", rows, { reflines });
+      legend("fig42-legend", [
+        { label: "end to end", color: C.s1 }, { label: "commit (fsync)", color: C.s6 }, { label: "apply", color: C.s5 },
+        ...reflines.map(rl => ({ label: rl.label.replace(" — ", " "), color: CVAR("--hot"), line: true })),
+      ]);
       tableView("fig42", ["profile", "series", "p50", "p90", "p99", "worst ledger"],
         ORDER.flatMap(p => series(p).map(([name, , st]) => [disp(p), name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m)])));
       const p99 = ORDER.map(p => hot[p].driver.ingest_total.p99.m);
       document.getElementById("hot-prose").innerHTML =
-        `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across profiles. Where it crosses ${intervalMs} ms the gap is almost entirely RocksDB <code>apply</code> — a write-stall signature (flat median, cliff tail) reproduced in all five runs, not fsync.`;
+        `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across profiles.` + (interval
+          ? ` Where it crosses ${intervalTxt} the gap is almost entirely RocksDB <code>apply</code> — a write-stall signature (flat median, cliff tail) reproduced in all five runs, not fsync.`
+          : "");
     })();
 
     /* ---- fig 4.3 rate cold vs hot vs floor ---- */
@@ -1236,26 +1446,31 @@
         const hotR = L / (hot[p].driver.run_wall.total.m / NS);
         const coldLo = L / (cold[p].driver.backfill_wall.total.hi / NS), coldHi = L / (cold[p].driver.backfill_wall.total.lo / NS);
         const hotLo = L / (hot[p].driver.run_wall.total.hi / NS), hotHi = L / (hot[p].driver.run_wall.total.lo / NS);
-        return { label: disp(p), sub: sub(p), lanes: [
+        return { ...rowLab(p, sub(p)), lanes: [
           { name: "cold (batch freeze)", color: C.s1, val: coldR, lo: coldLo, hi: coldHi },
           { name: "hot (live, fsync/ledger)", color: C.hot, val: hotR, lo: hotLo, hi: hotHi },
         ] };
       });
-      rateChart("fig43-body", rows, { fmt: v => trim(v), floor, floorLabel: floor.toFixed(1) + " l/s — " + intervalMs + " ms floor" });
-      legend("fig43-legend", [{ label: "cold (batch freeze)", color: C.s1 }, { label: "hot (live, fsync/ledger)", color: C.hot }, { label: intervalMs + " ms block floor", color: CVAR("--hot"), line: true }]);
+      const floorLab = floor ? (PH && PH.sel ? `${floor.toFixed(1)} l/s — Phase ${PH.sel.phase} floor` : `${floor.toFixed(1)} l/s — ${intervalMs} ms floor`) : "";
+      rateChart("fig43-body", rows, { fmt: v => trim(v), floor, floorLabel: floorLab, medLabel: medRuns });
+      legend("fig43-legend", [
+        { label: "cold (batch freeze)", color: C.s1 }, { label: "hot (live, fsync/ledger)", color: C.hot },
+        ...(floor ? [{ label: PH && PH.sel ? `Phase ${PH.sel.phase} block floor (${intervalTxt})` : intervalMs + " ms block floor", color: CVAR("--hot"), line: true }] : []),
+      ]);
       tableView("fig43", ["profile", "cold l/s", "hot l/s", "hot vs floor", "hot tx/s", "cold ÷ hot"],
         ORDER.map(p => {
           const L = um[p].ledgers;
           const coldR = L / (cold[p].driver.backfill_wall.total.m / NS), hotR = L / (hot[p].driver.run_wall.total.m / NS);
-          return [disp(p), trim(coldR), trim(hotR), (hotR / floor).toFixed(1) + "×", fmtInt(um[p].txs / (hot[p].driver.run_wall.total.m / NS)), (coldR / hotR).toFixed(1) + "×"];
+          return [disp(p), trim(coldR), trim(hotR), floor ? (hotR / floor).toFixed(1) + "×" : "—", fmtInt(um[p].txs / (hot[p].driver.run_wall.total.m / NS)), (coldR / hotR).toFixed(1) + "×"];
         }));
     })();
 
     /* ---- fig 5.1 variance dots ---- */
-    (function fig51() {
+    if (showVariance) (function fig51() {
+      const shortLab = p => { const cp = parts(p); return cp ? `${cp.name} c${cp.chunk}` : disp(p); };
       const rows = [];
-      ORDER.forEach(p => rows.push({ label: disp(p), sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
-      ORDER.forEach(p => rows.push({ label: disp(p), sub: "hot", runs: hot[p].driver.run_wall.total.r, color: C.hot }));
+      ORDER.forEach(p => rows.push({ label: shortLab(p), sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
+      ORDER.forEach(p => rows.push({ label: shortLab(p), sub: "hot", runs: hot[p].driver.run_wall.total.r, color: C.hot }));
       const el = document.getElementById("fig51-body");
       el.replaceChildren();
       const W = Math.max(el.clientWidth, 360);
@@ -1282,7 +1497,7 @@
       });
       el.appendChild(svg);
       legend("fig51-legend", [{ label: "cold runs", color: C.s1 }, { label: "hot runs", color: C.hot }]);
-      tableView("fig51", ["config", "run 1", "run 2", "run 3", "run 4", "run 5", "spread"],
+      tableView("fig51", ["config", ...Array.from({ length: reps }, (_, i) => `run ${i + 1}`), "spread"],
         rows.map(r => { const med = median5(r.runs); const spread = ((Math.max(...r.runs) - Math.min(...r.runs)) / med * 100).toFixed(1) + " %"; return [`${r.label} ${r.sub}`, ...r.runs.map(v => fmtNs(v)), spread]; }));
       const worstDev = Math.max(...rows.flatMap(r => { const med = median5(r.runs); return r.runs.map(v => Math.abs((v / med - 1) * 100)); }));
       document.getElementById("variance-prose").innerHTML =
@@ -1290,7 +1505,7 @@
     })();
 
     /* ---- keep-up table ---- */
-    (function targetTable() {
+    if (interval) (function targetTable() {
       const t = document.getElementById("target-table");
       const tr = document.createElement("tr");
       ["profile", "sustained / ledger", "headroom", "p50", "p90", "p99", "worst ledger"].forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
@@ -1304,7 +1519,7 @@
         cells.forEach((v, ci) => {
           const td = document.createElement("td");
           if (ci === 0) td.textContent = v;
-          else if (ci === 1) { td.textContent = v; const ok = document.createElement("span"); ok.className = "cell-ok"; ok.textContent = " ✓ KEEPS UP"; td.appendChild(ok); }
+          else if (ci === 1) { td.textContent = v; const ok = document.createElement("span"); const keepsUp = sus <= interval; ok.className = keepsUp ? "cell-ok" : "cell-warn"; ok.textContent = keepsUp ? " ✓ KEEPS UP" : " ▲ OVER INTERVAL"; td.appendChild(ok); }
           else if (v.includes("▲")) { const parts = v.split(" ▲"); td.textContent = parts[0]; const w = document.createElement("span"); w.className = "cell-warn"; w.textContent = " ▲" + parts[1]; td.appendChild(w); }
           else td.textContent = v;
           r.appendChild(td);
@@ -1328,13 +1543,29 @@
     const disp = u => {
       const meta = um[u] || {};
       if (meta.label) return meta.label;
+      const cp = campaignUnitParts(u, meta);
+      if (cp) return cp.line;
       if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
       return u;
     };
     const hot = D.ingest_hot || {};
-    const hasKeepup = D.checks && D.checks.kind === "block_keepup";
-    const interval = hasKeepup ? D.checks.interval_ns : null;
+    const reps = (D.campaign && D.campaign.reps) || 5;
+    const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
+    // Chart-gutter form for campaign ids: two short lines instead of one long id.
+    const parts = u => ((um[u] || {}).label ? null : campaignUnitParts(u, um[u]));
+    const rowLab = (u, fallbackSub) => {
+      const cp = parts(u);
+      return cp ? { label: cp.name, sub: cp.sub } : { label: disp(u), sub: fallbackSub };
+    };
+    const PH = phaseState(D);
+    // Judged budget: the selected phase's block time on phase-aware runs, else
+    // this run's checks (legacy behavior). Null means no keep-up check.
+    const checksNs = D.checks && D.checks.kind === "block_keepup" && D.checks.interval_ns ? D.checks.interval_ns : null;
+    const interval = PH ? (PH.sel ? PH.sel.block_time_ns : checksNs) : checksNs;
+    const hasKeepup = interval != null;
     const intervalMs = interval ? interval / MS : null;
+    const intervalTxt = interval ? fmtNsAxis(interval) : "";
+    const modelLabel = PH && PH.sel ? `Phase ${PH.sel.phase} block model (${intervalTxt})` : `${intervalMs} ms block model`;
     // Pacing lag: present only on paced hot runs; the close interval is its budget.
     const closeNs = (D.campaign && D.campaign.close_interval_ns) || 0;
     const paceUnits = ORDER.filter(u => hot[u] && hot[u].driver && hot[u].driver.pace_lag);
@@ -1387,8 +1618,7 @@
       : "";
     const paceFigHTML = showPace
       ? figHTML("figpace", "Fig 1.2", "Pacing lag behind the close schedule", "figpace-legend",
-          "Per-ledger lag = max(commit − due, 0) over every committed ledger (median of "
-          + ((D.campaign && D.campaign.reps) || 5) + " runs). On-time ledgers count as zero, "
+          "Per-ledger lag = max(commit − due, 0) over every committed ledger (" + medRuns + "). On-time ledgers count as zero, "
           + "so p50 = 0 means on schedule at least half the time. Dashed line = one close "
           + "interval; lag ÷ close interval = ledgers behind tip.")
         + `<p id="pace-readout" class="sec-intro"></p>`
@@ -1397,21 +1627,27 @@
     reportEl.innerHTML = mastheadHTML(D) + `
     <section id="ingest-hot">
       <div class="sec-head"><span class="sec-num">01</span><h2>Hot ingestion — per-ledger latency</h2></div>
-      <p class="sec-intro">Hot ingestion is the live RocksDB path — one fsync per ledger. This chart shows where each ledger's time goes, end to end plus every phase, measured against one block interval.</p>
+      <p class="sec-intro">Hot ingestion is the live RocksDB path — one fsync per ledger. This chart shows where each ledger's time goes, end to end plus every phase${PH && !interval ? "" : ", measured against one block interval"}.</p>
       ${unitsLine}
+      ${PH ? phaseBlockHTML(PH) : ""}
       ${phaseGuideHTML}
-      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). The dashed line is one block interval — see the phase guide above for what each phase measures.")}
+      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale). ` + (PH && PH.sel ? "Dashed lines mark the selected phase's block time and ingest-slice target" : (PH && !interval ? "See the phase guide above for what each phase measures." : "The dashed line is one block interval")) + (PH && !interval ? "" : " — see the phase guide above for what each phase measures."))}
       <p id="hot-prose" class="sec-intro"></p>
       ${paceFigHTML}
     </section>
 
     <section id="target">
-      <div class="sec-head"><span class="sec-num">02</span><h2>Keep-up check${hasKeepup ? " — the " + intervalMs + " ms block model" : ""}</h2></div>
+      <div class="sec-head"><span class="sec-num">02</span><h2>Keep-up check${hasKeepup ? " — the " + (PH && PH.sel ? modelLabel : intervalMs + " ms block model") : ""}</h2></div>
       ${showKeepup
-        ? `<p class="sec-intro">The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.</p>
+        ? `<p class="sec-intro">${PH
+            ? (PH.sel
+              ? `Phase ${PH.sel.phase} sets a ${intervalTxt} block time, so ${intervalTxt} is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`
+              : `This run was paced at a ${intervalTxt} close interval, so ${intervalTxt} is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`)
+            : `The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`}</p>
            <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
-           <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). Values are medians of 5 runs; "worst ledger" is the median across runs of each run's slowest ledger.</p>`
-        : `<div class="note-callout">This run defines no block-model keep-up check, so there is no per-interval budget to measure sustained ingestion against.</div>`}
+           ${ingestTargetHTML(PH, ORDER, hot, disp)}
+           <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). ${reps === 1 ? `Values are from a single run; "worst ledger" is that run's slowest ledger.` : `Values are medians of ${reps} runs; "worst ledger" is the median across runs of each run's slowest ledger.`}</p>`
+        : `<div class="note-callout">This run defines no block-model keep-up check, so there is no per-interval budget to measure sustained ingestion against.${PH ? " Select a phase in the target table above to view this run against Phase 1/2/3 targets." : ""}</div>`}
     </section>
     ` + methodologyHTML(D, "03",
       `<dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and ingests a single ${unitWord}'s entire ledger range${rangePhrase ? ` — ${rangePhrase} — ` : " "}through the daemon's bounded ingestion loop; one run never spans more than one ${unitWord}. The per-ledger end-to-end ingest time (recorded as <code>ingest_total</code> in the raw CSVs) is the sum of that ledger's phase burst with source wait excluded; run wall includes source wait.</dd>
@@ -1433,7 +1669,7 @@
     (function fig42() {
       const hotOrder = ORDER.filter(u => seriesFor(u).length);
       const rows = hotOrder.map(u => ({
-        label: disp(u), sub: sub(u),
+        ...rowLab(u, sub(u)),
         lanes: seriesFor(u).map(l => ({
           name: l.name, color: l.color,
           pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
@@ -1441,13 +1677,16 @@
         })),
       }));
       const dotOpts = { groupSeparators: true };
-      if (interval) { dotOpts.reflineNs = interval; dotOpts.reflineLabel = intervalMs + " ms — block interval"; }
+      const reflines = [];
+      if (interval) reflines.push({ ns: interval, label: PH && PH.sel ? `${intervalTxt} — Phase ${PH.sel.phase} block time` : intervalMs + " ms — block interval" });
+      if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
+      if (reflines.length) dotOpts.reflines = reflines;
       dotRangeChart("fig42-body", rows, dotOpts);
       const legendLanes = hotOrder.length ? seriesFor(hotOrder[0]) : [];
       legend("fig42-legend", [
         ...legendLanes.map(l => ({ label: l.name, color: l.color })),
         { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
-        ...(interval ? [{ label: intervalMs + " ms block interval", color: CVAR("--hot"), line: true }] : []),
+        ...reflines.map(rl => ({ label: rl.label.replace(" — ", " "), color: CVAR("--hot"), line: true })),
       ]);
       tableView("fig42", [ds.unit_label || "unit", "Series", "p50", "p90", "p99", "max", "p99 min–max across runs"],
         hotOrder.flatMap(u => seriesFor(u).map(l => {
@@ -1465,7 +1704,7 @@
     if (showPace) (function figPace() {
       const rows = paceUnits.map(u => {
         const pl = hot[u].driver.pace_lag;
-        return { label: disp(u), sub: sub(u), p50: pl.p50.m, p90: pl.p90.m, p99: pl.p99.m, max: pl.max.m };
+        return { ...rowLab(u, sub(u)), p50: pl.p50.m, p90: pl.p90.m, p99: pl.p99.m, max: pl.max.m };
       });
       paceChart("figpace-body", rows, { budgetNs: closeNs });
       legend("figpace-legend", [
@@ -1508,7 +1747,7 @@
         cells.forEach((v, ci) => {
           const td = document.createElement("td");
           if (ci === 0) td.textContent = v;
-          else if (ci === 1) { td.textContent = v; const ok = document.createElement("span"); ok.className = "cell-ok"; ok.textContent = " ✓ KEEPS UP"; td.appendChild(ok); }
+          else if (ci === 1) { td.textContent = v; const ok = document.createElement("span"); const keepsUp = sus <= interval; ok.className = keepsUp ? "cell-ok" : "cell-warn"; ok.textContent = keepsUp ? " ✓ KEEPS UP" : " ▲ OVER INTERVAL"; td.appendChild(ok); }
           else if (v.includes("▲")) { const parts = v.split(" ▲"); td.textContent = parts[0]; const w = document.createElement("span"); w.className = "cell-warn"; w.textContent = " ▲" + parts[1]; td.appendChild(w); }
           else td.textContent = v;
           r.appendChild(td);
@@ -1550,6 +1789,15 @@
       reportEl.innerHTML = `<div class="error-box">Failed to render run “${esc(D.run_id || "")}”: ${esc(err.message)}. Falling back to generic view.</div>`;
       try { renderGeneric(D); } catch (e2) { console.error(e2); }
     }
+    // Phase selector (rendered only for runs carrying phase targets): keep the
+    // selection in ?phase=N so links are shareable, then redraw with the new
+    // targets applied.
+    reportEl.querySelectorAll(".phase-btn").forEach(b => b.addEventListener("click", () => {
+      const url = new URL(location.href);
+      url.searchParams.set("phase", b.getAttribute("data-phase"));
+      history.replaceState({}, "", url);
+      draw();
+    }));
     viewBtn.textContent = view === "hot" ? "◱ Full report" : "◲ Hot ingestion";
   }
 

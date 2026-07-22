@@ -54,6 +54,83 @@
     "reps": 1,
     "vocabulary": "new",
     "close_interval_ns": 2000000000,
+    "phase": 1,
+    "phase_targets": [
+      {
+        "phase": 1,
+        "block_time_ns": 2000000000,
+        "e2e_budget_ns": 5000000000,
+        "ingest_p99_target_ns": 900000000,
+        "workloads": [
+          {
+            "name": "SAC transfers",
+            "tps": 3000,
+            "tx_per_ledger": 6000
+          },
+          {
+            "name": "OZ token transfers",
+            "tps": 2000,
+            "tx_per_ledger": 4000
+          },
+          {
+            "name": "Soroswap swaps",
+            "tps": 750,
+            "tx_per_ledger": 1500
+          }
+        ],
+        "orgs": 10,
+        "retention": "3 months"
+      },
+      {
+        "phase": 2,
+        "block_time_ns": 1000000000,
+        "e2e_budget_ns": 2500000000,
+        "workloads": [
+          {
+            "name": "SAC transfers",
+            "tps": 5000,
+            "tx_per_ledger": 5000
+          },
+          {
+            "name": "OZ token transfers",
+            "tps": 4000,
+            "tx_per_ledger": 4000
+          },
+          {
+            "name": "Soroswap swaps",
+            "tps": 1500,
+            "tx_per_ledger": 1500
+          }
+        ],
+        "orgs": 19,
+        "retention": "6 months"
+      },
+      {
+        "phase": 3,
+        "block_time_ns": 600000000,
+        "e2e_budget_ns": 2000000000,
+        "ingest_p99_target_ns": 100000000,
+        "workloads": [
+          {
+            "name": "SAC transfers",
+            "tps": 10000,
+            "tx_per_ledger": 6000
+          },
+          {
+            "name": "OZ token transfers",
+            "tps": 6000,
+            "tx_per_ledger": 3600
+          },
+          {
+            "name": "Soroswap swaps",
+            "tps": 3000,
+            "tx_per_ledger": 1800
+          }
+        ],
+        "orgs": 31,
+        "retention": "2 years"
+      }
+    ],
     "name": "phase1-synthetic-minspec",
     "config_file": "phase1-synthetic-minspec.cfg",
     "config": {
@@ -79,8 +156,8 @@
   "hostname": "user-dev-063a",
   "checks": {
     "kind": "block_keepup",
-    "interval_ns": 600000000,
-    "label": "600 ms block model",
+    "interval_ns": 2000000000,
+    "label": "Phase 1 block model (2 s)",
     "applies_to": "ingest_hot"
   },
   "ingest_cold": {
