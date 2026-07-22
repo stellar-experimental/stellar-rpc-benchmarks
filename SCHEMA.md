@@ -72,6 +72,13 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   duration, e.g. "2s"/"600ms"/"0"), else the hot
                                            //   invocation.json --close-interval flag. Absent when
                                            //   no manifest records it (legacy bundles).
+    "phase": 1,                            // optional; campaign layout only. The phase whose
+                                           //   block time equals close_interval_ns exactly
+                                           //   (2 s → 1, 1 s → 2, 600 ms → 3). Absent when the
+                                           //   pace matches no phase or the run is unpaced.
+    "phase_targets": [ { … }, … ],         // campaign layout only; the full three-phase target
+                                           //   table, copied verbatim at convert time — see
+                                           //   "Phase 1/2/3 performance targets" below.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.cfg",               // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs
@@ -83,6 +90,11 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
       "label": "query p99 ≤ 500 ms", "applies_to": "queries" }
   | { "kind": "block_keepup", "interval_ns": 600000000,
       "label": "600 ms block model", "applies_to": "ingest_hot" },
+      // block_keepup interval_ns: the legacy synthetic layout keeps the constant
+      // 600 ms model. The campaign layout derives it from close_interval_ns —
+      // label "Phase 1 block model (2 s)" on an exact phase match, "1.5 s pace"
+      // otherwise. An unpaced campaign run emits no block_keepup check; with
+      // queries present it falls back to query_p99_threshold, else no checks.
   "sections": ["ingest_cold", "ingest_hot", "queries", "golden"],  // exactly the keys present
   "ingest_cold":  { … }, "ingest_hot": { … },
   "queries": { … },                        // pubnet only
@@ -92,6 +104,37 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
 
 A viewer encountering an unknown section name or unknown stage row must degrade to a
 generic table view — never crash.
+
+## Phase 1/2/3 performance targets (campaign layout)
+
+The performance program defines three load phases for hot ingestion. The numbers are
+public (stellar/stellar-rpc issues #872–#874). The converter matches a campaign run's
+phase from `campaign.close_interval_ns`: `2000000000` → phase 1, `1000000000` → phase 2,
+`600000000` → phase 3. The match must be exact. Any other paced value gives a pace-only
+run with no phase. An unpaced run (0 or absent) gets no phase and no keep-up check.
+
+The converter copies the full three-phase table into `campaign.phase_targets` of every
+campaign-layout run. The duplication is intentional: the viewer reads the targets as
+data and holds no target constants of its own. Each entry has:
+
+```jsonc
+{ "phase": 1,
+  "block_time_ns": 2000000000,        // the phase block time; also the keep-up budget
+  "e2e_budget_ns": 5000000000,        // end-to-end budget (externalized → client);
+                                      //   context only — this benchmark does not measure it
+  "ingest_p99_target_ns": 900000000,  // ingest-slice target (meta available in captive
+                                      //   core → ingested in RPC) — the row this benchmark
+                                      //   measures as per-ledger ingest_total p99. OMITTED
+                                      //   for phase 2: phase 2 defines no ingest-slice target.
+  "workloads": [                      // the three model workloads at this phase
+    { "name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000 }, … ],
+  "orgs": 10,
+  "retention": "3 months" }
+```
+
+Phases apply to hot ingestion only. Cold ingestion (backfill) has no phase and no
+targets. Legacy layouts (pubnet, synthetic) never carry `phase` or `phase_targets` —
+their output is byte-identical to before this field existed.
 
 ## Sections
 

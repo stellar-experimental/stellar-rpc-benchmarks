@@ -151,8 +151,13 @@ for (const run of manifest.runs) {
   window.close();
 }
 
+const runJSON = (id) => JSON.parse(fs.readFileSync(path.join(DOCS, "runs", id + ".json"), "utf8"));
+
 /* ---------------- hot-ingestion view (?view=hot) ---------------- */
-const synthRun = manifest.runs.find((r) => r.kind === "synthetic");
+/* The unit-label assertions (OZ token) need a run whose unit_meta carries
+   labels (from --unit-facts); campaign runs may not have them. */
+const synthRun = manifest.runs.find((r) => r.kind === "synthetic"
+  && Object.values(runJSON(r.id).dataset.unit_meta || {}).some((m) => m && m.label));
 if (synthRun) {
   const group = "synthetic hot-view";
   console.log(`\n=== ${synthRun.id} (?view=hot) ===`);
@@ -192,6 +197,73 @@ if (pubnetRun) {
   // Guards the numeric-id label prefix (T6) and the data-driven units line (T5).
   check(group, "Chunk 3000 label present", txt(report).includes("Chunk 3000"), "missing");
   window.close();
+}
+
+/* ---------------- phase targets (campaign run carrying phase_targets) ---------------- */
+const phaseRun = manifest.runs.find((r) => {
+  const c = runJSON(r.id).campaign || {};
+  return Array.isArray(c.phase_targets) && c.phase_targets.length > 0;
+});
+if (phaseRun) {
+  const D = runJSON(phaseRun.id);
+  const matched = D.campaign.phase;
+
+  {
+    const group = "phase default";
+    console.log(`\n=== ${phaseRun.id} (phase table, default selection) ===`);
+    const { window, errors } = await loadViewer(`?run=${phaseRun.id}`);
+    const doc = window.document;
+    check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+    const tbl = doc.querySelector("#phase-block table.phase-table");
+    check(group, "phase table rendered", !!tbl, "missing");
+    const tblTxt = txt(tbl);
+    check(group, "all three phases in table", /Phase 1/.test(tblTxt) && /Phase 2/.test(tblTxt) && /Phase 3/.test(tblTxt), tblTxt.slice(0, 100));
+    check(group, "phase 2 ingest-slice target is —", /—/.test(tblTxt), tblTxt.slice(0, 100));
+    const selTh = doc.querySelector("#phase-block th.ph-sel");
+    check(group, `matched phase (${matched}) highlighted`, !!selTh && txt(selTh).includes(`Phase ${matched}`), selTh ? txt(selTh) : "missing");
+    check(group, "matched phase badged 'this run'", /this run/.test(txt(doc.getElementById("phase-block"))), "missing");
+    check(group, "no caveat at default (matched) selection", !doc.querySelector(".phase-caveat"), "caveat present");
+    const svgTxt = txt(doc.querySelector("#fig42-body"));
+    check(group, "budget line at Phase 1 block time (2 s)", /2 s — Phase 1 block time/.test(svgTxt), svgTxt.slice(0, 200));
+    check(group, "ingest target line at 900 ms", /900 ms — Phase 1 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
+    const readout = txt(doc.getElementById("ingest-target-readout"));
+    check(group, "pass/miss readout vs Phase 1 target", /vs Phase 1 target 900 ms/.test(readout) && /(PASS|MISS)/.test(readout), readout.slice(0, 140));
+    window.close();
+  }
+
+  {
+    const group = "phase switch";
+    console.log(`\n=== ${phaseRun.id} (?phase=3) ===`);
+    const { window, errors } = await loadViewer(`?run=${phaseRun.id}&phase=3`);
+    const doc = window.document;
+    check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+    const selTh = doc.querySelector("#phase-block th.ph-sel");
+    check(group, "Phase 3 column highlighted", !!selTh && txt(selTh).includes("Phase 3"), selTh ? txt(selTh) : "missing");
+    const caveat = txt(doc.querySelector(".phase-caveat"));
+    check(group, "caveat names Phase 3 and the actual pace", /Viewing against Phase 3 targets/.test(caveat) && /2 s close interval/.test(caveat), caveat.slice(0, 160));
+    const svgTxt = txt(doc.querySelector("#fig42-body"));
+    check(group, "budget line re-based to 600 ms", /600 ms — Phase 3 block time/.test(svgTxt), svgTxt.slice(0, 200));
+    check(group, "ingest target line re-based to 100 ms", /100 ms — Phase 3 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
+    const readout = txt(doc.getElementById("ingest-target-readout"));
+    check(group, "readout vs Phase 3 target 100 ms", /vs Phase 3 target 100 ms/.test(readout), readout.slice(0, 140));
+    window.close();
+  }
+
+  {
+    const group = "phase pace-lag";
+    for (const [name, query] of [["default", `?run=${phaseRun.id}&view=hot`], ["?phase=3", `?run=${phaseRun.id}&view=hot&phase=3`]]) {
+      console.log(`\n=== ${phaseRun.id} (?view=hot pacing, ${name}) ===`);
+      const { window, errors } = await loadViewer(query);
+      const doc = window.document;
+      check(group, `zero JS/console errors (${name})`, errors.length === 0, errors.join(" | ") || "");
+      // The pacing figure's budget is always the run's ACTUAL close interval —
+      // never re-based when another phase is selected.
+      const paceReadout = txt(doc.getElementById("pace-readout"));
+      check(group, `pace budget = actual 2 s close interval (${name})`, /2\.00 s close interval/.test(paceReadout), paceReadout.slice(0, 160));
+      check(group, `phase table present in hot view (${name})`, !!doc.querySelector("#phase-block table.phase-table"), "missing");
+      window.close();
+    }
+  }
 }
 
 console.log(`\nSMOKE SUMMARY: ${pass} passed, ${fail} failed (${manifest.runs.length} runs)`);

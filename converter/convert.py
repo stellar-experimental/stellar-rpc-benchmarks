@@ -354,6 +354,77 @@ def resolve_close_interval_ns(metadata, invocations):
         return None
 
 
+# ------------------------------------------------------------- phase targets
+# Phase 1/2/3 performance targets for HOT ingestion (the numbers are public:
+# stellar/stellar-rpc issues #872-#874). Copied verbatim into every
+# campaign-layout run JSON as campaign.phase_targets so the viewer reads the
+# targets as data and holds no target constants of its own. The ingest-slice
+# target (ingest_p99_target_ns) is the row this benchmark measures — the
+# per-ledger ingest_total p99; phase 2 defines no ingest-slice target, so the
+# key is omitted there. Cold ingestion (backfill) has no phase and no targets.
+PHASE_TARGETS = [
+    {
+        "phase": 1,
+        "block_time_ns": 2_000_000_000,
+        "e2e_budget_ns": 5_000_000_000,
+        "ingest_p99_target_ns": 900_000_000,
+        "workloads": [
+            {"name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000},
+            {"name": "OZ token transfers", "tps": 2000, "tx_per_ledger": 4000},
+            {"name": "Soroswap swaps", "tps": 750, "tx_per_ledger": 1500},
+        ],
+        "orgs": 10,
+        "retention": "3 months",
+    },
+    {
+        "phase": 2,
+        "block_time_ns": 1_000_000_000,
+        "e2e_budget_ns": 2_500_000_000,
+        "workloads": [
+            {"name": "SAC transfers", "tps": 5000, "tx_per_ledger": 5000},
+            {"name": "OZ token transfers", "tps": 4000, "tx_per_ledger": 4000},
+            {"name": "Soroswap swaps", "tps": 1500, "tx_per_ledger": 1500},
+        ],
+        "orgs": 19,
+        "retention": "6 months",
+    },
+    {
+        "phase": 3,
+        "block_time_ns": 600_000_000,
+        "e2e_budget_ns": 2_000_000_000,
+        "ingest_p99_target_ns": 100_000_000,
+        "workloads": [
+            {"name": "SAC transfers", "tps": 10000, "tx_per_ledger": 6000},
+            {"name": "OZ token transfers", "tps": 6000, "tx_per_ledger": 3600},
+            {"name": "Soroswap swaps", "tps": 3000, "tx_per_ledger": 1800},
+        ],
+        "orgs": 31,
+        "retention": "2 years",
+    },
+]
+
+
+def match_phase(close_interval_ns):
+    """The phase whose block time equals the close interval exactly, or None.
+
+    Exact match only: any other paced value is a pace-only run with no phase;
+    unpaced (0 or None) has no phase and no keep-up check.
+    """
+    if not close_interval_ns:
+        return None
+    for p in PHASE_TARGETS:
+        if p["block_time_ns"] == close_interval_ns:
+            return p
+    return None
+
+
+def format_interval(ns):
+    """Short human label for a close interval: "2 s", "1.5 s", "600 ms"."""
+    if ns >= 1_000_000_000 and ns % 100_000_000 == 0:
+        return f"{ns / 1e9:g} s"
+    return f"{ns / 1e6:g} ms"
+
+
 # ----------------------------------------------------------------- unit facts
 def unit_counts(results_dir, layout, unit, reps):
     """Ledger / tx / event counts from the cold driver run-1 n_items."""
@@ -751,6 +822,13 @@ def convert(args):
         campaign["notes"] = args.notes
     if close_interval_ns is not None:
         campaign["close_interval_ns"] = close_interval_ns
+    # Phase targets are campaign-layout only; legacy layouts stay byte-identical.
+    matched_phase = None
+    if layout == "campaign":
+        matched_phase = match_phase(close_interval_ns)
+        if matched_phase is not None:
+            campaign["phase"] = matched_phase["phase"]
+        campaign["phase_targets"] = PHASE_TARGETS
     if metadata:
         mc = metadata.get("campaign", {})
         if mc.get("name"):
@@ -784,7 +862,20 @@ def convert(args):
     if hostname:
         data["hostname"] = hostname
 
-    if args.dataset_kind == "synthetic":
+    if layout == "campaign":
+        # The keep-up check derives from the run's own pace: a matched phase
+        # names it, any other pace is judged as itself, and an unpaced
+        # catch-up run gets no keep-up check at all.
+        if close_interval_ns:
+            label = (f"Phase {matched_phase['phase']} block model "
+                     f"({format_interval(close_interval_ns)})" if matched_phase
+                     else f"{format_interval(close_interval_ns)} pace")
+            data["checks"] = {"kind": "block_keepup", "interval_ns": close_interval_ns,
+                              "label": label, "applies_to": "ingest_hot"}
+        elif queries:
+            data["checks"] = {"kind": "query_p99_threshold", "threshold_ns": 500000000,
+                              "label": "query p99 ≤ 500 ms", "applies_to": "queries"}
+    elif args.dataset_kind == "synthetic":
         data["checks"] = {"kind": "block_keepup", "interval_ns": 600000000,
                           "label": "600 ms block model", "applies_to": "ingest_hot"}
     elif queries:

@@ -136,12 +136,15 @@ def _write_invocation(d, subcommand, close_interval):
 
 
 def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
-                          drop_pace=None):
+                          drop_pace=None, close_interval=None):
     """Create a campaign-layout bundle under `root`. `drop_pace` = {unit: {runs}}
-    omits the pace_lag row from those hot runs (to exercise zero-fill)."""
+    omits the pace_lag row from those hot runs (to exercise zero-fill).
+    `close_interval` overrides the recorded pace (a Go duration string);
+    default is "2s" when paced, "0" when unpaced."""
     os.makedirs(root, exist_ok=True)
     drop_pace = drop_pace or {}
-    close_interval = "2s" if paced else "0"
+    if close_interval is None:
+        close_interval = "2s" if paced else "0"
     units = list(CAMPAIGN_UNITS)
     for u in units:
         for r in range(1, reps + 1):
