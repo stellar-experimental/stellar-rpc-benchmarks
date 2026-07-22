@@ -2,13 +2,6 @@
   "schema_version": 1,
   "runs": [
     {
-      "id": "demo-campaign-fixture",
-      "name": "DEMO — campaign fixture (not a real run)",
-      "date": "2026-07-22",
-      "kind": "synthetic",
-      "path": "runs/demo-campaign-fixture.json"
-    },
-    {
       "id": "synthetic-2026-07-16-apply-fix",
       "name": "Synthetic apply-load — apply-tail fix @ edb8eab4 (user-dev-063a)",
       "date": "2026-07-16",
