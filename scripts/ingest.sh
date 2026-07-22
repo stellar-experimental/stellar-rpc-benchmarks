@@ -253,11 +253,19 @@ CONVERT_WARNINGS=""
 run_convert() {
   local out_dir="$1" so se rc
   so="$WORK/convert.out"; se="$WORK/convert.err"
+  # A gs:// bundle IS the run's provenance — forward it as --source-gcs so the
+  # run JSON carries campaign.source_gcs (the viewer's "Source data" link).
+  # s3:// is left out on purpose: the viewer builds a GCS console URL, so an
+  # s3 URI would render a broken link (wire it up when the S3 move lands).
+  # An explicit --source-gcs after `--` still wins (argparse takes the last).
+  local prov=()
+  [ "$SRC_TYPE" = "remote-gs" ] && prov=(--source-gcs "$BUNDLE")
   echo "== convert =="
   set +e
   python3 converter/convert.py "$BUNDLE_DIR" \
     --dataset-kind "$DATASET_KIND" \
     --out-dir "$out_dir" \
+    ${prov[@]+"${prov[@]}"} \
     ${EXTRA[@]+"${EXTRA[@]}"} >"$so" 2>"$se"
   rc=$?
   set -e

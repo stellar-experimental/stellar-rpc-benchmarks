@@ -53,6 +53,7 @@
   "campaign": {
     "reps": 1,
     "vocabulary": "new",
+    "source_gcs": "gs://rpc-full-history/results/phase1-synthetic-minspec-0f90d331-20260722T012143Z/",
     "close_interval_ns": 2000000000,
     "phase": 1,
     "phase_targets": [
