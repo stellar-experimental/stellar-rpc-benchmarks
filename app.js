@@ -431,6 +431,62 @@
     el.appendChild(svg);
   }
 
+  // Pacing lag vs the close-interval budget. Linear scale (lag includes zeros,
+  // so log would break); a dashed refline marks one close interval.
+  // rows: [{label, sub, p50, p90, p99, max}] (ns)   opts: { budgetNs }
+  function paceChart(bodyId, rows, opts = {}) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const W = Math.max(el.clientWidth, 360);
+    const labW = W < 560 ? 96 : 140;
+    const m = { l: labW, r: 60, t: 12, b: 32 };
+    const rowH = 24, gap = 16;
+    const H = m.t + rows.length * (rowH + gap) - gap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    const budget = opts.budgetNs || 0;
+    const xmax = (Math.max(budget, ...rows.map(r => r.max)) || 1) * 1.05;
+    const x = v => m.l + v / xmax * (W - m.l - m.r);
+    for (const tv of linTicks(xmax / 1e6, 6)) {
+      const px = x(tv * 1e6);
+      S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: tv >= 10 ? tv.toFixed(0) : String(+tv.toFixed(1)) }, svg);
+    }
+    S("text", { x: W - m.r + 8, y: H - m.b + 16, class: "ax-unit", text: "ms" }, svg);
+    if (budget > 0 && budget <= xmax) {
+      const px = x(budget);
+      S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "refline" }, svg);
+      S("text", { x: px, y: m.t - 2, "text-anchor": "middle", class: "reflab", text: "close interval" }, svg);
+    }
+    rows.forEach((row, i) => {
+      const y = m.t + i * (rowH + gap), cy = y + rowH / 2;
+      S("text", { x: m.l - 10, y: cy - 1, "text-anchor": "end", class: "rowlab", text: row.label }, svg);
+      if (row.sub) S("text", { x: m.l - 10, y: cy + 12, "text-anchor": "end", class: "rowsub", text: row.sub }, svg);
+      const over = budget > 0 && row.p99 > budget;
+      const col = over ? CVAR("--warn") : CVAR("--hot");
+      S("line", { x1: x(row.p50), y1: cy, x2: x(row.max), y2: cy, stroke: col, "stroke-width": 2, opacity: 0.28 }, svg);
+      const bx = x(row.p50), bw = Math.max(x(row.p99) - bx, 1);
+      const bar = S("path", { d: roundedRight(bx, cy - 6, bw, 12, 3), fill: col, opacity: 0.82 }, svg);
+      const p90c = S("circle", { cx: x(row.p90), cy: cy, r: 3.4, fill: "var(--surface)", stroke: col, "stroke-width": 2 }, svg);
+      const p50c = S("circle", { cx: x(row.p50), cy: cy, r: 5, fill: col, stroke: "var(--surface)", "stroke-width": 2 }, svg);
+      const maxT = S("line", { x1: x(row.max), y1: cy - 6, x2: x(row.max), y2: cy + 6, stroke: col, "stroke-width": 1.6 }, svg);
+      const tipRows = [
+        { color: col, value: fmtNs(row.p50), label: "p50 lag" },
+        { color: col, value: fmtNs(row.p90), label: "p90 lag" },
+        { color: col, value: fmtNs(row.p99), label: "p99 lag" },
+        { color: col, value: fmtNs(row.max), label: "max lag" },
+      ];
+      if (budget > 0) {
+        const frac = row.p99 / budget;
+        tipRows.push({ value: (frac * 100).toFixed(0) + " %", label: "p99 ÷ close interval" });
+        tipRows.push({ value: "≤ " + Math.max(1, Math.ceil(frac)), label: "ledgers behind tip (p99)" });
+      }
+      for (const hit of [bar, p50c, p90c, maxT]) hoverable(hit, `${row.label} — pacing lag`, tipRows);
+    });
+    S("line", { x1: m.l, y1: m.t, x2: m.l, y2: H - m.b, class: "baseline-l" }, svg);
+    el.appendChild(svg);
+  }
+
   /* ============================ shared shell HTML ============================ */
   function shortCommit(c) { return (c || "").slice(0, 8); }
   function verNum(s, re) { const m = (s || "").match(re); return m ? m[1] : ""; }
@@ -442,6 +498,7 @@
     let L = 0, T = 0, Ev = 0;
     units.forEach(u => { const k = um[u] || {}; L += k.ledgers || 0; T += k.txs || 0; Ev += k.events || 0; });
     const buildBits = [];
+    if (b.version) buildBits.push(b.version);
     if (b.commit) buildBits.push(shortCommit(b.commit) + (b.branch ? ` (${b.branch})` : ""));
     const go = verNum(b.go, /go(\d[\d.]*)/); if (go) buildBits.push("go " + go);
     const rust = verNum(b.rust, /rustc (\d[\d.]*)/); if (rust) buildBits.push("rustc " + rust);
@@ -451,6 +508,16 @@
     const src = camp.source_gcs
       ? `<a href="https://console.cloud.google.com/storage/browser/${esc(camp.source_gcs.replace("gs://", ""))}">${esc(camp.source_gcs)} ↗</a>`
       : "—";
+    // Campaign-manifest provenance cells — appear only when the run carries them
+    // (old runs render the six original cells unchanged).
+    const metaCell = (k, v) => `<div class="meta-cell"><div class="meta-k">${esc(k)}</div><div class="meta-v">${esc(v)}</div></div>`;
+    const closeNs = camp.close_interval_ns;
+    const closeTxt = closeNs == null ? "" : (closeNs > 0 ? fmtNs(closeNs) + " close interval (paced)" : "unpaced");
+    const provCells = [
+      D.hostname ? metaCell("Hostname", D.hostname) : "",
+      camp.name ? metaCell("Campaign", camp.name + (camp.config_file ? " · " + camp.config_file : "")) : "",
+      closeNs != null ? metaCell("Pacing", closeTxt) : "",
+    ].join("");
     return `
     <header class="masthead">
       <div class="mast-eyebrow">
@@ -466,6 +533,7 @@
         <div class="meta-cell"><div class="meta-k">Dataset</div><div class="meta-v">${esc(dsLine)}</div></div>
         <div class="meta-cell"><div class="meta-k">Protocol</div><div class="meta-v">${camp.reps || 5} runs / config · fresh process per run · median reported</div></div>
         <div class="meta-cell"><div class="meta-k">Source data</div><div class="meta-v">${src}</div></div>
+        ${provCells}
       </div>
     </header>`;
   }
@@ -1267,6 +1335,10 @@
     const hasKeepup = D.checks && D.checks.kind === "block_keepup";
     const interval = hasKeepup ? D.checks.interval_ns : null;
     const intervalMs = interval ? interval / MS : null;
+    // Pacing lag: present only on paced hot runs; the close interval is its budget.
+    const closeNs = (D.campaign && D.campaign.close_interval_ns) || 0;
+    const paceUnits = ORDER.filter(u => hot[u] && hot[u].driver && hot[u].driver.pace_lag);
+    const showPace = paceUnits.length > 0;
 
     const sub = u => fmtK((um[u] && um[u].events) || 0) + " events";
     const phaseDefs = [
@@ -1313,6 +1385,14 @@
     const unitsLine = ORDER.length
       ? `<p class="sec-intro" style="margin-top:6px">${esc(ds.unit_label || "Unit")}s — ${ORDER.map(u => `<strong>${esc(disp(u))}</strong>${unitDetail(u)}`).join(", ")}.</p>`
       : "";
+    const paceFigHTML = showPace
+      ? figHTML("figpace", "Fig 1.2", "Pacing lag behind the close schedule", "figpace-legend",
+          "Per-ledger lag = max(commit − due, 0) over every committed ledger (median of "
+          + ((D.campaign && D.campaign.reps) || 5) + " runs). On-time ledgers count as zero, "
+          + "so p50 = 0 means on schedule at least half the time. Dashed line = one close "
+          + "interval; lag ÷ close interval = ledgers behind tip.")
+        + `<p id="pace-readout" class="sec-intro"></p>`
+      : "";
 
     reportEl.innerHTML = mastheadHTML(D) + `
     <section id="ingest-hot">
@@ -1322,6 +1402,7 @@
       ${phaseGuideHTML}
       ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). The dashed line is one block interval — see the phase guide above for what each phase measures.")}
       <p id="hot-prose" class="sec-intro"></p>
+      ${paceFigHTML}
     </section>
 
     <section id="target">
@@ -1377,6 +1458,38 @@
         const p99 = ORDER.map(u => hot[u].driver.ingest_total.p99.m);
         document.getElementById("hot-prose").innerHTML =
           `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across ${ORDER.length} ${(ds.unit_label || "unit").toLowerCase()}${ORDER.length === 1 ? "" : "s"}.`;
+      }
+    })();
+
+    /* ---- fig 1.2 pacing lag vs close interval ---- */
+    if (showPace) (function figPace() {
+      const rows = paceUnits.map(u => {
+        const pl = hot[u].driver.pace_lag;
+        return { label: disp(u), sub: sub(u), p50: pl.p50.m, p90: pl.p90.m, p99: pl.p99.m, max: pl.max.m };
+      });
+      paceChart("figpace-body", rows, { budgetNs: closeNs });
+      legend("figpace-legend", [
+        { label: "pacing lag (● p50 · ○ p90 · ▮ p99 · | max)", color: CVAR("--hot") },
+        ...(closeNs > 0 ? [{ label: fmtNs(closeNs) + " close interval", color: CVAR("--hot"), line: true }] : []),
+      ]);
+      tableView("figpace", [ds.unit_label || "unit", "p50 lag", "p90 lag", "p99 lag", "max lag",
+        "p99 ÷ close", "ledgers behind (p99)"],
+        paceUnits.map(u => {
+          const pl = hot[u].driver.pace_lag, frac = closeNs > 0 ? pl.p99.m / closeNs : 0;
+          return [disp(u), fmtNs(pl.p50.m), fmtNs(pl.p90.m), fmtNs(pl.p99.m), fmtNs(pl.max.m),
+            closeNs > 0 ? (frac * 100).toFixed(0) + " %" : "—",
+            closeNs > 0 ? "≤ " + Math.max(1, Math.ceil(frac)) : "—"];
+        }));
+      const readout = document.getElementById("pace-readout");
+      if (readout) {
+        const worst = paceUnits.reduce((a, u) => hot[u].driver.pace_lag.p99.m > hot[a].driver.pace_lag.p99.m ? u : a, paceUnits[0]);
+        const wp99 = hot[worst].driver.pace_lag.p99.m;
+        if (closeNs > 0) {
+          const behind = Math.max(1, Math.ceil(wp99 / closeNs));
+          readout.innerHTML = `Worst-case p99 pacing lag is <strong>${fmtNs(wp99)}</strong> on <strong>${esc(disp(worst))}</strong> — <strong>${(wp99 / closeNs * 100).toFixed(0)}%</strong> of the ${fmtNs(closeNs)} close interval, i.e. ≤ ${behind} ledger${behind === 1 ? "" : "s"} behind tip.`;
+        } else {
+          readout.textContent = "Paced run, but no close interval is recorded to compare the lag against.";
+        }
       }
     })();
 
