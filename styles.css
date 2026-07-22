@@ -299,6 +299,15 @@ pre.metadata {
 .phase-guide li strong { color: var(--ink); }
 .phase-guide p:last-child { margin-bottom: 0; }
 
+/* phase targets table (campaign runs) */
+.phase-block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin: 22px 0; padding: 18px 20px 14px; }
+.phase-block table.phase-table { width: 100%; min-width: 560px; }
+.phase-block th.ph-sel, .phase-block td.ph-sel { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.phase-block th.ph-sel { color: var(--accent); }
+.ph-badge { display: block; font-size: 9px; letter-spacing: 0.08em; color: var(--accent); }
+.phase-caption { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-width: 60em; }
+.phase-caveat { margin: 14px 0 2px; }
+
 /* generic fallback tables (unknown section/stage) */
 .generic-block { margin: 18px 0; }
 .generic-block h3 { font-size: 15px; margin: 20px 0 6px; }
