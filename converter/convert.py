@@ -42,6 +42,37 @@ def fail(msg):
     sys.exit(1)
 
 
+# ------------------------------------------------------------- Go duration
+_GODUR_RE = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)")
+_GODUR_UNITS = {"ns": 1, "us": 1_000, "µs": 1_000, "ms": 1_000_000,
+                "s": 1_000_000_000, "m": 60_000_000_000, "h": 3_600_000_000_000}
+
+
+def parse_go_duration(s):
+    """Parse a Go duration string to integer nanoseconds.
+
+    Handles ns/us/µs/ms/s/m/h units, decimal magnitudes, an optional sign, and
+    concatenated terms ("1h30m"). Bare "0" is zero. Raises ValueError on an
+    unparseable non-zero string (caller decides whether to warn or fail).
+    """
+    t = (s or "").strip()
+    if t in ("", "0"):
+        return 0
+    sign = 1
+    if t[:1] in "+-":
+        sign = -1 if t[0] == "-" else 1
+        t = t[1:]
+    total, pos = 0.0, 0
+    for m in _GODUR_RE.finditer(t):
+        if m.start() != pos:
+            raise ValueError(f"bad Go duration: {s!r}")
+        total += float(m.group(1)) * _GODUR_UNITS[m.group(2)]
+        pos = m.end()
+    if pos == 0 or pos != len(t):
+        raise ValueError(f"bad Go duration: {s!r}")
+    return sign * int(round(total))
+
+
 # ----------------------------------------------------------------- CSV + stats
 def read_csv(path):
     """Return {stage: {col: int}} for a benchmark CSV (all non-stage cols int)."""
@@ -88,18 +119,36 @@ def subdirs(results_dir):
                   if os.path.isdir(os.path.join(results_dir, n)))
 
 
+# A campaign bundle (from campaign.sh) names its timed dirs
+# <family>-<dataset>-c<chunk>-run<R> and its untimed prep dirs golden-<dataset>-c<chunk>.
+# The -c<chunk>-run<R> suffix distinguishes it from the flat pubnet ingest-*-run<R>.
+_CAMPAIGN_RUN = re.compile(r"^(?:ingest|query)-(?:cold|hot)-.+-c\d+-run\d+$")
+_CAMPAIGN_GOLDEN = re.compile(r"^golden-.+-c\d+$")
+_UNIT_CHUNK = re.compile(r"^(.+)-c(\d+)$")
+
+
 def detect_layout(names):
     if any(n.startswith("synth-") for n in names):
         return "synthetic"
+    if any(_CAMPAIGN_RUN.match(n) for n in names):
+        return "campaign"
     if any(n.startswith("ingest-") or n.startswith("golden-download-") for n in names):
         return "pubnet"
     return None
 
 
 def discover_units_reps(names, layout):
-    """Discover unit ids and rep numbers from the cold ingest dir names."""
-    pat = (re.compile(r"^synth-cold-(.+)-run(\d+)$") if layout == "synthetic"
-           else re.compile(r"^ingest-cold-(.+)-run(\d+)$"))
+    """Discover unit ids and rep numbers from the cold ingest dir names.
+
+    A campaign unit id is the composite "<dataset>-c<chunk>" (e.g. sac-6000-c1);
+    pubnet/synthetic unit ids are the bare token between family and run.
+    """
+    if layout == "synthetic":
+        pat = re.compile(r"^synth-cold-(.+)-run(\d+)$")
+    elif layout == "campaign":
+        pat = re.compile(r"^ingest-cold-(.+-c\d+)-run(\d+)$")
+    else:
+        pat = re.compile(r"^ingest-cold-(.+)-run(\d+)$")
     units, reps = set(), set()
     for n in names:
         m = pat.match(n)
@@ -224,6 +273,87 @@ def load_metadata(results_dir):
     return parse_machine(raw), parse_build(raw)
 
 
+# --------------------------------------------------------- campaign manifests
+def load_campaign_manifest(results_dir):
+    """metadata.json at the bundle root, or None (additive — legacy bundles lack it)."""
+    p = os.path.join(results_dir, "metadata.json")
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        warn(f"could not read metadata.json ({e}); ignoring")
+        return None
+
+
+def load_invocations(results_dir):
+    """[(dirname, invocation.json dict)] for every per-invocation dir that has one."""
+    out = []
+    for p in sorted(glob.glob(os.path.join(results_dir, "*", "invocation.json"))):
+        try:
+            with open(p) as f:
+                out.append((os.path.basename(os.path.dirname(p)), json.load(f)))
+        except (json.JSONDecodeError, OSError) as e:
+            warn(f"could not read {os.path.relpath(p, results_dir)} ({e}); ignoring")
+    return out
+
+
+def hardware_into_machine(machine, hw):
+    """Structured hardware (metadata.json) wins over the free-text machine parse
+    for the fields they share."""
+    if not hw:
+        return
+    if hw.get("instance_type"):
+        machine["instance"] = hw["instance_type"]
+    if hw.get("instance_id"):
+        machine["instance_id"] = hw["instance_id"]
+    if isinstance(hw.get("cpus"), int):
+        machine["vcpus"] = hw["cpus"]
+    if isinstance(hw.get("mem_total_kb"), int):
+        machine["mem"] = f"{round(hw['mem_total_kb'] / (1024 * 1024))}Gi"
+    if hw.get("uname") and "kernel" not in machine:
+        machine["kernel"] = hw["uname"]
+
+
+def resolve_binary(build, metadata, invocations):
+    """Merge invocation.json binary identity into build (authoritative over the
+    machine-metadata `repo:` parse) and warn on any commit mismatch."""
+    binaries = [inv["binary"] for _, inv in invocations if inv.get("binary")]
+    commits = {b["commit_hash"] for b in binaries if b.get("commit_hash")}
+    if metadata and metadata.get("campaign", {}).get("built_commit"):
+        commits.add(metadata["campaign"]["built_commit"])
+    if len(commits) > 1:
+        warn(f"binary commit mismatch across invocations/manifest: {sorted(commits)}")
+    b0 = binaries[0] if binaries else {}
+    commit = b0.get("commit_hash") or (metadata or {}).get("campaign", {}).get("built_commit")
+    if commit:
+        build["commit"] = commit
+    for src, dst in (("branch", "branch"), ("version", "version"),
+                     ("build_timestamp", "build_timestamp")):
+        if b0.get(src):
+            build[dst] = b0[src]
+
+
+def resolve_close_interval_ns(metadata, invocations):
+    """Close interval in ns (0 == unpaced), or None when no manifest records it."""
+    raw = None
+    if metadata:
+        raw = metadata.get("campaign", {}).get("close_interval")
+    if raw is None:
+        for _, inv in invocations:
+            if inv.get("command", "").endswith("hot") and "close-interval" in inv.get("flags", {}):
+                raw = inv["flags"]["close-interval"]
+                break
+    if raw is None:
+        return None
+    try:
+        return parse_go_duration(raw)
+    except ValueError:
+        warn(f"could not parse close_interval {raw!r}; treating as unknown")
+        return None
+
+
 # ----------------------------------------------------------------- unit facts
 def unit_counts(results_dir, layout, unit, reps):
     """Ledger / tx / event counts from the cold driver run-1 n_items."""
@@ -247,6 +377,23 @@ def order_units(units, kind, facts):
     ordered = [u for u in facts if u in units]
     ordered += sorted(u for u in units if u not in ordered)
     return ordered
+
+
+def order_units_campaign(units, metadata):
+    """Campaign display order: datasets in manifest order (then alpha), chunk ascending."""
+    ds_order = {}
+    if metadata:
+        for i, d in enumerate(metadata.get("datasets", [])):
+            if d.get("name"):
+                ds_order[d["name"]] = i
+
+    def key(u):
+        m = _UNIT_CHUNK.match(u)
+        if m:
+            return (ds_order.get(m.group(1), len(ds_order)), m.group(1), int(m.group(2)))
+        return (len(ds_order), u, 0)
+
+    return sorted(units, key=key)
 
 
 # ----------------------------------------------------------------- sections
@@ -277,6 +424,37 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
     return {"driver": driver_out, "files": files_out, "derived": derived}
 
 
+PACE_LAG = "pace_lag"
+
+
+def _pace_lag_agg(drivers, unit):
+    """StageAgg for the optional pace_lag row across hot runs, or None if unpaced.
+
+    Present in every run  -> aggregated like any other stage.
+    Present in no run     -> None (unpaced cell; the row is omitted entirely).
+    Present in some runs  -> the missing runs are treated as all-zero lag (an
+                             on-schedule run) and a warning is emitted, so the
+                             r-array still has one entry per rep.
+    """
+    n_present = sum(PACE_LAG in d for d in drivers)
+    if n_present == 0:
+        return None
+    if n_present == len(drivers):
+        return stage_agg([{PACE_LAG: d[PACE_LAG]} for d in drivers], PACE_LAG, warn_nitems=False)
+    warn(f"ingest-hot {unit}: pace_lag present in {n_present}/{len(drivers)} runs; "
+         f"zero-filling the rest as on-schedule")
+    template = next(d[PACE_LAG] for d in drivers if PACE_LAG in d)
+    rows = []
+    for d in drivers:
+        if PACE_LAG in d:
+            rows.append({PACE_LAG: d[PACE_LAG]})
+        else:
+            zero = {k: 0 for k in template}
+            zero["n"], zero["n_items"] = template["n"], template["n_items"]
+            rows.append({PACE_LAG: zero})
+    return stage_agg(rows, PACE_LAG, warn_nitems=False)
+
+
 def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
     dirs = run_dirs(results_dir, layout, "hot", unit, reps)
     drivers = read_all(dirs, "driver.csv")
@@ -284,7 +462,13 @@ def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
     if not drivers or not hots:
         warn(f"incomplete hot data for unit {unit}")
         return None
-    driver_out = {st: stage_agg(drivers, st) for st in drivers[0]}
+    # pace_lag is aggregated separately so inconsistent presence across runs is
+    # zero-filled rather than yielding a short r-array (or being dropped when
+    # absent from run 1).
+    driver_out = {st: stage_agg(drivers, st) for st in drivers[0] if st != PACE_LAG}
+    pace = _pace_lag_agg(drivers, unit)
+    if pace is not None:
+        driver_out[PACE_LAG] = pace
     phases_out = {st: stage_agg(hots, st) for st in hots[0]}
     wall = "chunk_wall" if vocab == "old" else "run_wall"
     derived = {"ledgers_per_s": stat([counts["ledgers"] / (d[wall]["total_ns"] / NS) for d in drivers])}
@@ -460,10 +644,15 @@ def convert(args):
     units, reps = discover_units_reps(names, layout)
     if not units or not reps:
         fail("no units/reps discovered from directory names")
-    if args.dataset_kind == "pubnet" and layout != "pubnet":
-        warn(f"--dataset-kind pubnet but directory layout looks {layout}")
-    if args.dataset_kind == "synthetic" and layout != "synthetic":
-        warn(f"--dataset-kind synthetic but directory layout looks {layout}")
+    # dataset-kind is the data nature (pubnet vs synthetic); the campaign layout
+    # is orthogonal to it, so only flag a pubnet/synthetic layout mismatch.
+    if layout in ("pubnet", "synthetic") and args.dataset_kind != layout:
+        warn(f"--dataset-kind {args.dataset_kind} but directory layout looks {layout}")
+    if layout == "campaign":
+        prep = [n for n in names if _CAMPAIGN_GOLDEN.match(n)]
+        if prep:
+            warn(f"skipping {len(prep)} golden prep dir(s) (dataset preparation, not "
+                 f"results): {', '.join(prep)}")
 
     vocab = detect_vocabulary(results_dir, layout, sorted(units)[0], reps)
 
@@ -473,8 +662,18 @@ def convert(args):
             facts = json.load(f)
 
     machine, build = load_metadata(results_dir)
+    metadata = load_campaign_manifest(results_dir)
+    invocations = load_invocations(results_dir)
+    hardware = (metadata or {}).get("hardware") or {}
+    hostname = ((metadata or {}).get("hostname")
+                or (invocations[0][1].get("hostname") if invocations else None))
+    hardware_into_machine(machine, hardware)
+    resolve_binary(build, metadata, invocations)
+    close_interval_ns = resolve_close_interval_ns(metadata, invocations)
+
     counts = {u: unit_counts(results_dir, layout, u, reps) for u in units}
-    unit_order = order_units(units, args.dataset_kind, facts)
+    unit_order = (order_units_campaign(units, metadata) if layout == "campaign"
+                  else order_units(units, args.dataset_kind, facts))
 
     # unit_meta
     unit_meta = {}
@@ -502,7 +701,7 @@ def convert(args):
             ingest_hot[u] = h
 
     queries, golden = {}, {}
-    if layout == "pubnet":
+    if layout in ("pubnet", "campaign"):
         has_query = any(n.startswith("query-") for n in names)
         if has_query:
             for tier in ("cold", "hot"):
@@ -513,10 +712,25 @@ def convert(args):
                         tq[u] = q
                 if tq:
                     queries[tier] = tq
+    if layout == "pubnet":
+        # golden-download-<unit> is a timed sourcing leg; the campaign layout's
+        # golden-<dataset>-c<chunk> dirs are untimed prep and were skipped above.
         for u in unit_order:
             g = build_golden(results_dir, u)
             if g is not None:
                 golden[u] = g
+
+    # run identity: explicit CLI args win; otherwise fall back to the manifest.
+    run_id = args.run_id or (metadata.get("run_id") if metadata else None)
+    if not run_id:
+        fail("run id required: pass --run-id or provide metadata.json with a run_id")
+    run_date = args.run_date
+    if not run_date and metadata and metadata.get("started_at"):
+        run_date = metadata["started_at"][:10]
+    if not run_date:
+        fail("run date required: pass --run-date or provide metadata.json started_at")
+    run_name = (args.run_name or (metadata.get("campaign", {}).get("name") if metadata else None)
+                or run_id)
 
     # top level
     if args.description:
@@ -530,11 +744,29 @@ def convert(args):
         description = (f"Synthetic apply-load ingest benchmarks across "
                        f"{len(unit_order)} profile(s): {', '.join(labels)}.")
 
+    campaign = {"reps": len(reps), "vocabulary": vocab}
+    if args.source_gcs:
+        campaign["source_gcs"] = args.source_gcs
+    if args.notes:
+        campaign["notes"] = args.notes
+    if close_interval_ns is not None:
+        campaign["close_interval_ns"] = close_interval_ns
+    if metadata:
+        mc = metadata.get("campaign", {})
+        if mc.get("name"):
+            campaign["name"] = mc["name"]
+        if mc.get("config_file"):
+            campaign["config_file"] = mc["config_file"]
+        cfg = {k: v for k, v in mc.items()
+               if k not in ("name", "config_file", "close_interval")}
+        if cfg:
+            campaign["config"] = cfg
+
     data = {
         "schema_version": 1,
-        "run_id": args.run_id,
-        "run_name": args.run_name,
-        "run_date": args.run_date,
+        "run_id": run_id,
+        "run_name": run_name,
+        "run_date": run_date,
         "machine": machine,
         "build": build,
         "dataset": {
@@ -545,12 +777,12 @@ def convert(args):
             "unit_order": unit_order,
             "unit_meta": unit_meta,
         },
-        "campaign": {"reps": len(reps), "vocabulary": vocab},
+        "campaign": campaign,
     }
-    if args.source_gcs:
-        data["campaign"]["source_gcs"] = args.source_gcs
-    if args.notes:
-        data["campaign"]["notes"] = args.notes
+    if hardware:
+        data["hardware"] = hardware
+    if hostname:
+        data["hostname"] = hostname
 
     if args.dataset_kind == "synthetic":
         data["checks"] = {"kind": "block_keepup", "interval_ns": 600000000,
@@ -575,14 +807,14 @@ def convert(args):
         warn(f"validation: {e}")
 
     os.makedirs(args.out_dir, exist_ok=True)
-    out_path = os.path.join(args.out_dir, f"{args.run_id}.json")
+    out_path = os.path.join(args.out_dir, f"{run_id}.json")
     with open(out_path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
     manifest_path = update_manifest(args.out_dir, {
-        "id": args.run_id, "name": args.run_name, "date": args.run_date,
-        "kind": args.dataset_kind, "path": f"runs/{args.run_id}.json",
+        "id": run_id, "name": run_name, "date": run_date,
+        "kind": args.dataset_kind, "path": f"runs/{run_id}.json",
     })
 
     print(f"wrote {out_path} ({os.path.getsize(out_path) / 1024:.0f} KiB)")
@@ -596,9 +828,10 @@ def convert(args):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Convert benchmark results to schema-v1 run JSON.")
     ap.add_argument("results_dir")
-    ap.add_argument("--run-id", required=True)
-    ap.add_argument("--run-name", required=True)
-    ap.add_argument("--run-date", required=True)
+    # Identity defaults from metadata.json when present; explicit flags still win.
+    ap.add_argument("--run-id")
+    ap.add_argument("--run-name")
+    ap.add_argument("--run-date")
     ap.add_argument("--dataset-kind", required=True, choices=["pubnet", "synthetic"])
     ap.add_argument("--unit-facts")
     ap.add_argument("--source-gcs")

@@ -38,7 +38,17 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
     "instance": "m6id.2xlarge", "instance_id": "i-…", "cpu": "…", "vcpus": 8,
     "mem": "30Gi", "os": "…", "kernel": "…", "fsync_probe": "…", "captured_at": "…"
   },
-  "build": { "commit": "<sha>", "branch": "<name>", "go": "…", "rust": "…" }, // from `repo:` line "sha (branch)"
+  "build": { "commit": "<sha>", "branch": "<name>", "go": "…", "rust": "…",
+             "version": "v20.3.1-412-g…", "build_timestamp": "…" },
+             // commit/branch/go/rust from the machine-metadata `repo:` line; when a
+             // campaign bundle carries invocation.json, its binary.{commit_hash,
+             // branch,version,build_timestamp} override commit/branch and add
+             // version/build_timestamp (the structured binary identity wins).
+  "hardware": {                            // optional; verbatim from metadata.json (campaign bundles)
+    "instance_type": "m6id.2xlarge", "instance_id": "i-…",  // instance_* omitted off EC2
+    "uname": "Linux 6.8.0-1015-aws x86_64", "cpus": 8, "mem_total_kb": 32000000  // mem_total_kb omitted on non-Linux
+  },
+  "hostname": "user-dev-063a",             // optional; metadata.json (fallback: invocation.json)
   "dataset": {
     "kind": "pubnet" | "synthetic",
     "description": "<human sentence>",
@@ -56,7 +66,17 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
     "reps": 5,
     "vocabulary": "old" | "new",           // auto-detected: chunk_wall ⇒ old, backfill_wall ⇒ new
     "source_gcs": "gs://…",                // optional
-    "notes": "…"                           // optional
+    "notes": "…",                          // optional
+    "close_interval_ns": 2000000000,       // optional; ledger close schedule in ns, 0 = unpaced.
+                                           //   From metadata.json campaign.close_interval (a Go
+                                           //   duration, e.g. "2s"/"600ms"/"0"), else the hot
+                                           //   invocation.json --close-interval flag. Absent when
+                                           //   no manifest records it (legacy bundles).
+    "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
+    "config_file": "…​.cfg",               // optional; metadata.json campaign.config_file
+    "config": { … }                        // optional; remaining metadata.json campaign knobs
+                                           //   (ingest/query/runs/query_concurrency/cold_iters/
+                                           //   hot_iters/workers/hot_num_ledgers/ref/built_commit)
   },
   "checks":                                 // this run's pass/fail semantics AS DATA
     { "kind": "query_p99_threshold", "threshold_ns": 500000000,
@@ -95,9 +115,24 @@ renderers apply; anything unrecognized renders generically.
 "ingest_hot": { "<unit>": {
   "driver": { "<stage>": StageAgg },      // old: chunk_wall, ingest_total, read_blocked
                                           // new: ingest_total, run_wall
+                                          // + optional pace_lag (see below), present iff paced
   "phases": { "<stage>": StageAgg },      // hot.csv rows: extract, ledgers, txhash, events, commit, apply
   "derived": { "ledgers_per_s": V }       // ledgers / wall     (wall = chunk_wall old, run_wall new)
 }}
+```
+
+`driver.pace_lag` is the optional per-ledger **lag behind the close schedule** on a
+paced hot run: for each committed ledger, `max(commit_time − due_time, 0)`. Its
+distribution **includes the zero-lag samples** (on-time ledgers), so `n` = `n_items`
+= committed ledgers and `p50 = 0` means the run was on schedule at least half the
+time. Aggregated across run repetitions exactly like every other StageAgg. **Present
+iff the cell is paced** (close-interval > 0); omitted entirely for unpaced cells.
+Compare against `campaign.close_interval_ns`: `lag ÷ close_interval` = ledgers behind
+tip. When a cell's runs are inconsistent (row present in some runs, absent in others),
+the missing runs are filled with an all-zero (on-schedule) distribution and the
+converter warns.
+
+```jsonc
 
 "queries": { "cold"|"hot": { "<unit>": {
   "<qtype>": {                            // qtype ∈ discovered per-type CSVs: ledgers, txpage, txhash, events
@@ -125,3 +160,38 @@ renderers apply; anything unrecognized renders generically.
 ```
 
 The converter inserts/replaces its run's entry keyed by `id` and re-sorts by date desc.
+
+## Inputs — result-bundle layouts & manifests
+
+The converter auto-detects the input bundle layout from its subdirectory names:
+
+- **synthetic** — `synth-{cold,hot}-<profile>-run<R>`.
+- **pubnet** — `ingest-{cold,hot}-<chunk>-run<R>`, `query-{cold,hot}-<chunk>-run<R>`,
+  `golden-download-<chunk>` (a timed sourcing leg surfaced as the `golden` section).
+- **campaign** — produced by `campaign.sh`. Timed dirs sit at the bundle root as
+  `{ingest,query}-{cold,hot}-<dataset>-c<chunk>-run<R>`; the unit id is the composite
+  `<dataset>-c<chunk>` (e.g. `sac-6000-c1`). Untimed prep dirs `golden-<dataset>-c<chunk>`
+  are dataset preparation, **not results** — the converter skips them and warns. The
+  `-c<chunk>-run<R>` suffix is what distinguishes this layout from flat pubnet dirs; it is
+  orthogonal to `dataset.kind` (a campaign may carry pubnet or synthetic data).
+
+Every bundle also carries a free-text `*machine-metadata*.txt` at the root (parsed into
+`machine`). A campaign bundle additionally carries **two JSON manifests** — both optional
+and additive, so manifest-less bundles convert unchanged:
+
+- **`metadata.json`** at the bundle root (schema_version 1) — the campaign runner's record.
+  Source of truth for run identity (`run_id` → default `run_id`; `started_at` → default
+  `run_date`), the `campaign` config (incl. `close_interval` → `campaign.close_interval_ns`),
+  the structured `hardware` object, and `hostname`. `datasets[].kind` is the dataset
+  **transport** (`packs-local|packs-gs|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
+  campaign display order.
+- **`invocation.json`** in each per-invocation `--out` dir (schema_version 1) — written by
+  the four bench subcommands. Source of truth for binary identity (`binary.{commit_hash,
+  branch,version,build_timestamp}`) and the resolved subcommand `flags`. Consistency of the
+  binary commit is cross-checked across invocations (and against `metadata.campaign.built_commit`);
+  a mismatch warns.
+
+Explicitly-passed CLI args (`--run-id`, `--run-date`, …) always win over manifest defaults.
+Where free-text machine metadata and the structured manifests overlap, the **structured data
+wins**: `hardware` supersedes the parsed `machine` instance/vcpus/mem, and `invocation.json`
+binary identity supersedes the `repo:` line.

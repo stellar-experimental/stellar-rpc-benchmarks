@@ -2,7 +2,7 @@
 # `make` (or `make help`) lists targets. `make convert` is the primary local flow.
 
 .DEFAULT_GOAL := help
-.PHONY: help convert test smoke serve
+.PHONY: help convert ingest test smoke serve
 
 # Variables required by `convert`. `convert` fails early if any is empty.
 CONVERT_REQUIRED := RESULTS RUN_ID RUN_NAME KIND RUN_DATE
@@ -16,6 +16,9 @@ help: ## Show this help
 	@echo "convert usage:"
 	@echo "  make convert RESULTS=<dir> RUN_ID=<slug> RUN_NAME=\"...\" \\"
 	@echo "               KIND=pubnet|synthetic RUN_DATE=YYYY-MM-DD [FACTS=<json>] [GCS=<gs://...>]"
+	@echo
+	@echo "ingest usage (campaign bundle -> run PR branch; --local, never pushes):"
+	@echo "  make ingest BUNDLE=<gs://..|s3://..|dir|.tgz> KIND=pubnet|synthetic"
 
 convert: ## Convert a results dir into docs/runs/<id>.json and update the manifest
 	@$(foreach v,$(CONVERT_REQUIRED),$(if $(strip $($(v))),,$(error $(v) is required. \
@@ -28,6 +31,13 @@ convert: ## Convert a results dir into docs/runs/<id>.json and update the manife
 	  $(if $(strip $(FACTS)),--unit-facts "$(FACTS)",) \
 	  $(if $(strip $(GCS)),--source-gcs "$(GCS)",) \
 	  --out-dir docs/runs
+
+ingest: ## Ingest a campaign bundle into a run/<id> PR branch (BUNDLE, KIND; --local, no push)
+	@$(if $(strip $(BUNDLE)),,$(error BUNDLE is required. \
+	Usage: make ingest BUNDLE=<gs://..|s3://..|dir|.tgz> KIND=pubnet|synthetic))
+	@$(if $(strip $(KIND)),,$(error KIND is required. \
+	Usage: make ingest BUNDLE=<gs://..|s3://..|dir|.tgz> KIND=pubnet|synthetic))
+	scripts/ingest.sh "$(BUNDLE)" --dataset-kind "$(KIND)" --local
 
 test: ## Run the converter unit + golden tests
 	python3 -m unittest discover converter/tests
