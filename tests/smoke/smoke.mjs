@@ -86,12 +86,20 @@ const EXPECT = {
   synthetic: { sections: 7, requiredIds: ["target"], minFigures: 7, minSvgs: 7 },
 };
 
-function checkKind(kind, doc, group) {
-  const exp = EXPECT[kind];
-  if (!exp) { check(group, `known kind (${kind})`, false, "no expectations defined"); return; }
+function checkKind(kind, doc, group, reps) {
+  const base = EXPECT[kind];
+  if (!base) { check(group, `known kind (${kind})`, false, "no expectations defined"); return; }
+  const exp = { ...base };
+  // Single-rep runs hide the run-to-run variance section (one section, one
+  // figure, one SVG fewer).
+  if (kind === "synthetic" && reps === 1) { exp.sections -= 1; exp.minFigures -= 1; exp.minSvgs -= 1; }
   const report = doc.getElementById("report");
   const sections = report.querySelectorAll("section").length;
   check(group, `${exp.sections} sections rendered`, sections === exp.sections, sections);
+  if (kind === "synthetic") {
+    check(group, reps === 1 ? "variance section hidden (single run)" : "variance section present",
+      !!doc.getElementById("variance") === (reps > 1), reps + " reps, variance " + (doc.getElementById("variance") ? "present" : "absent"));
+  }
   for (const id of exp.requiredIds) check(group, `section #${id} present`, !!doc.getElementById(id), "missing");
   const figs = report.querySelectorAll("figure.fig").length;
   check(group, `>= ${exp.minFigures} figures`, figs >= exp.minFigures, figs);
@@ -134,6 +142,7 @@ if (!Array.isArray(manifest.runs) || manifest.runs.length === 0) {
   console.error("manifest has no runs");
   process.exit(1);
 }
+const runJSON = (id) => JSON.parse(fs.readFileSync(path.join(DOCS, "runs", id + ".json"), "utf8"));
 
 for (const run of manifest.runs) {
   const group = run.id;
@@ -146,12 +155,10 @@ for (const run of manifest.runs) {
   check(group, "run name rendered as h1", h1.includes(run.name.slice(0, 20)), h1);
   const options = [...doc.querySelectorAll("#run-select option")].map((o) => o.value);
   check(group, "dropdown lists every manifest run", manifest.runs.every((r) => options.includes(r.id)), options.join(","));
-  checkKind(run.kind, doc, group);
+  checkKind(run.kind, doc, group, runJSON(run.id).campaign.reps);
   checkSanity(run.kind, doc, group);
   window.close();
 }
-
-const runJSON = (id) => JSON.parse(fs.readFileSync(path.join(DOCS, "runs", id + ".json"), "utf8"));
 
 /* ---------------- hot-ingestion view (?view=hot) ---------------- */
 /* The unit-label assertions (OZ token) need a run whose unit_meta carries

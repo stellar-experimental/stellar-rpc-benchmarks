@@ -212,7 +212,8 @@
   }
 
   // panels: [{title, unit, color, bars:[{label,val,lo,hi,fmt}]}]
-  function barPanels(bodyId, panels) {
+  // opts: { medLabel } — tooltip label for the bar value (default 5-run median)
+  function barPanels(bodyId, panels, opts = {}) {
     const el = document.getElementById(bodyId);
     if (!el) return;
     el.replaceChildren();
@@ -239,7 +240,7 @@
         const bw = Math.max(x(b.val) - m.l, 1);
         const mark = S("path", { d: roundedRight(m.l, y, bw, rowH, 4), fill: p.color }, svg);
         hoverable(mark, `${p.title} — ${b.label}`, [
-          { color: p.color, value: b.fmt(b.val), label: "median of 5 runs" },
+          { color: p.color, value: b.fmt(b.val), label: opts.medLabel || "median of 5 runs" },
           { value: `${b.fmt(b.lo)} – ${b.fmt(b.hi)}`, label: "min–max spread" },
         ]);
         if (b.lo != null && x(b.hi) - x(b.lo) > 3) {
@@ -443,7 +444,7 @@
       for (const lane of row.lanes) {
         const dot = S("circle", { cx: x(lane.val), cy: cy, r: 6, fill: lane.color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
         hoverable(dot, `${row.label} — ${lane.name}`, [
-          { color: lane.color, value: opts.fmt(lane.val) + " ledgers/s", label: "median of 5 runs" },
+          { color: lane.color, value: opts.fmt(lane.val) + " ledgers/s", label: opts.medLabel || "median of 5 runs" },
           { value: `${opts.fmt(lane.lo)} – ${opts.fmt(lane.hi)}`, label: "min–max" },
         ]);
       }
@@ -555,7 +556,7 @@
         <div class="meta-cell"><div class="meta-k">Build</div><div class="meta-v">${esc(buildBits.join(" · ")) || "—"}</div></div>
         <div class="meta-cell"><div class="meta-k">OS / Instance</div><div class="meta-v">${esc(osLine) || "—"}</div></div>
         <div class="meta-cell"><div class="meta-k">Dataset</div><div class="meta-v">${esc(dsLine)}</div></div>
-        <div class="meta-cell"><div class="meta-k">Protocol</div><div class="meta-v">${camp.reps || 5} runs / config · fresh process per run · median reported</div></div>
+        <div class="meta-cell"><div class="meta-k">Protocol</div><div class="meta-v">${camp.reps || 5} run${(camp.reps || 5) === 1 ? "" : "s"} / config · fresh process per run · ${(camp.reps || 5) === 1 ? "single run reported" : "median reported"}</div></div>
         <div class="meta-cell"><div class="meta-k">Source data</div><div class="meta-v">${src}</div></div>
         ${provCells}
       </div>
@@ -566,7 +567,7 @@
     const b = D.build || {}, camp = D.campaign || {}, mac = D.machine || {};
     return `<div class="footer">
       ${esc(D.run_name || "")} · ${esc(mac.instance || "")}, local NVMe · build ${esc(shortCommit(b.commit))}${b.branch ? " (" + esc(b.branch) + ")" : ""}.<br>
-      Aggregates are medians of ${camp.reps || 5} process-level runs with min–max spread; no value was invented, interpolated, or smoothed.
+      ${(camp.reps || 5) === 1 ? "Values come from a single process-level run" : `Aggregates are medians of ${camp.reps || 5} process-level runs with min–max spread`}; no value was invented, interpolated, or smoothed.
     </div>`;
   }
 
@@ -705,7 +706,7 @@
       <div class="sec-head"><span class="sec-num">${num}</span><h2>Methodology &amp; machine metadata</h2></div>
       <dl>
         <dt>Process isolation &amp; aggregation</dt>
-        <dd>${D.campaign && D.campaign.reps || 5} repetitions per configuration, each a fresh process. Every reported value is the median across runs; spread is min–max. Nothing is interpolated or smoothed — every plotted number traces to a raw CSV field.</dd>
+        <dd>${D.campaign && D.campaign.reps || 5} repetition${(D.campaign && D.campaign.reps || 5) === 1 ? "" : "s"} per configuration, each a fresh process. ${(D.campaign && D.campaign.reps || 5) === 1 ? "Every reported value comes from that single run." : "Every reported value is the median across runs; spread is min–max."} Nothing is interpolated or smoothed — every plotted number traces to a raw CSV field.</dd>
         ${extraDL || ""}
         ${fsyncDD}
       </dl>
@@ -1155,6 +1156,13 @@
     };
     const cold = D.ingest_cold, hot = D.ingest_hot;
     const paced = ((D.campaign && D.campaign.close_interval_ns) || 0) > 0;
+    const reps = (D.campaign && D.campaign.reps) || 5;
+    // Run-to-run variance is meaningless for a single rep — the whole section
+    // disappears and the following sections renumber.
+    const showVariance = reps > 1;
+    const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
+    const secTarget = showVariance ? "06" : "05";
+    const secMethod = showVariance ? "07" : "06";
     const PH = phaseState(D);
     // Judged budget: the selected phase's block time on phase-aware runs, else
     // this run's checks (legacy behavior, 600 ms fallback). Null means no
@@ -1219,22 +1227,22 @@
       ${bannerHTML}
       ${PH ? phaseBlockHTML(PH) : ""}
       <div class="tiles" id="tiles"></div>
-      <p class="sec-intro">Hot ingestion is the daemon's live loop with one fsync per ledger; cold ingestion freezes each profile into packfiles plus the event term index. Every number is a median of ${D.campaign.reps} process-level runs${judgedTail}.</p>
+      <p class="sec-intro">Hot ingestion is the daemon's live loop with one fsync per ledger; cold ingestion freezes each profile into packfiles plus the event term index. ${reps === 1 ? `Every number comes from a single process-level run${judgedTail}.` : `Every number is a median of ${D.campaign.reps} process-level runs${judgedTail}.`}</p>
     </section>
 
     <section id="dataset">
       <div class="sec-head"><span class="sec-num">02</span><h2>Dataset &amp; environment</h2></div>
       <p class="sec-intro">Synthetic Stellar ledgers generated by stellar-core <code>apply-load</code> at three model-transaction profiles.${densitySentence}</p>
       <div class="tv-scroll" style="margin-top:16px"><table class="data" id="profile-table" style="width:100%"></table></div>
-      <p style="margin-top:16px">Machine and durability context are summarised in the masthead; full machine metadata is in §7.</p>
+      <p style="margin-top:16px">Machine and durability context are summarised in the masthead; full machine metadata is in §${+secMethod}.</p>
     </section>
 
     <section id="ingest-cold">
       <div class="sec-head"><span class="sec-num">03</span><h2>Cold ingestion — freezing synthetic history into packfiles</h2></div>
       <p class="sec-intro">Cold ingestion drives the production backfill from the golden pack into a fresh cold tree: a shared per-ledger extract (<code>cold_extract</code>), then per-type pipelines — ledgers, txhash, and events (term indexing → write → one-shot <code>finalize</code> that builds the MPHF event index).</p>
-      ${figHTML("fig31", "Fig 3.1", "Backfill wall time, attributed by pipeline", "fig31-legend", "Median of 5 runs. Bar length = whole-campaign backfill wall. The remainder is coordination outside the instrumented pipelines.")}
-      ${figHTML("fig32", "Fig 3.2", "Event pipeline composition", "fig32-legend", "Total time in each event-pipeline stage (median of 5 runs). The MPHF <code>finalize</code> is priced in distinct terms, not events.")}
-      ${figHTML("fig33", "Fig 3.3", "Normalized cold cost — seconds per million events", "", "Whole-campaign backfill wall ÷ events ingested, median of 5 runs (whiskers = min–max).")}
+      ${figHTML("fig31", "Fig 3.1", "Backfill wall time, attributed by pipeline", "fig31-legend", (reps === 1 ? "Single run." : `Median of ${reps} runs.`) + " Bar length = whole-campaign backfill wall. The remainder is coordination outside the instrumented pipelines.")}
+      ${figHTML("fig32", "Fig 3.2", "Event pipeline composition", "fig32-legend", `Total time in each event-pipeline stage (${medRuns}). The MPHF <code>finalize</code> is priced in distinct terms, not events.`)}
+      ${figHTML("fig33", "Fig 3.3", "Normalized cold cost — seconds per million events", "", `Whole-campaign backfill wall ÷ events ingested, ${medRuns} (whiskers = min–max).`)}
       <p id="cold-prose" class="sec-intro"></p>
     </section>
 
@@ -1242,22 +1250,22 @@
       <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — the live loop${interval ? (PH && PH.sel ? ` against the ${esc(bannerLabel)}` : ` against a ${intervalMs} ms block model`) : ""}</h2></div>
       <p class="sec-intro">Hot ingestion runs the daemon's production loop: per ledger — extract, apply to the RocksDB stores, commit with <strong>one fsync per ledger</strong>, then <code>apply</code> makes the write batch live.</p>
       ${paced
-        ? figHTML("fig41", "Fig 4.1", "Hot-ingest busy time, by phase", "fig41-legend", "Sum of per-ledger phase times over the whole run (median of " + D.campaign.reps + "). This run is paced: wall clock is dominated by waiting on the close schedule, so the bar shows busy time only — see the table view for run wall and pacing wait.")
-        : figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole run (median of 5). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.")}
-      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, its fsync commit, and the apply stall tail", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale)." + (PH && PH.sel ? " Dashed lines mark the selected phase's block time and ingest-slice target." : (interval ? " The dashed line is one block interval." : "")))}
-      ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot vs the block-model floor", "fig43-legend", "Ledgers per second over the full run (median of 5; log scale)." + (interval ? " The dashed line is the rate a block interval demands." : ""))}
+        ? figHTML("fig41", "Fig 4.1", "Hot-ingest busy time, by phase", "fig41-legend", "Sum of per-ledger phase times over the whole run (" + medRuns + "). This run is paced: wall clock is dominated by waiting on the close schedule, so the bar shows busy time only — see the table view for run wall and pacing wait.")
+        : figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", `Sum of per-ledger phase times over the whole run (${reps === 1 ? "single run" : "median of " + reps}). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.`)}
+      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, its fsync commit, and the apply stall tail", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale).` + (PH && PH.sel ? " Dashed lines mark the selected phase's block time and ingest-slice target." : (interval ? " The dashed line is one block interval." : "")))}
+      ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot vs the block-model floor", "fig43-legend", `Ledgers per second over the full run (${reps === 1 ? "single run" : "median of " + reps}; log scale).` + (interval ? " The dashed line is the rate a block interval demands." : ""))}
       <p id="hot-prose" class="sec-intro"></p>
     </section>
-
+    ${showVariance ? `
     <section id="variance">
       <div class="sec-head"><span class="sec-num">05</span><h2>Run-to-run variance</h2></div>
-      <p class="sec-intro">Every configuration ran as five independent processes against identical inputs. The spread is tight enough that every number above can be read at face value — including the tail.</p>
-      ${figHTML("fig51", "Fig 5.1", "Run wall time — all 5 runs, deviation from median", "fig51-legend", "Each dot is one run's whole-campaign wall as % deviation from its configuration's median.")}
+      <p class="sec-intro">Every configuration ran as ${reps === 5 ? "five" : reps} independent processes against identical inputs. The spread is tight enough that every number above can be read at face value — including the tail.</p>
+      ${figHTML("fig51", "Fig 5.1", `Run wall time — all ${reps} runs, deviation from median`, "fig51-legend", "Each dot is one run's whole-campaign wall as % deviation from its configuration's median.")}
       <p id="variance-prose" class="sec-intro"></p>
-    </section>
+    </section>` : ""}
 
     <section id="target">
-      <div class="sec-head"><span class="sec-num">06</span><h2>Keep-up check${interval ? ` — the ${PH && PH.sel ? esc(bannerLabel) : `${intervalMs} ms block model`}` : ""}</h2></div>
+      <div class="sec-head"><span class="sec-num">${secTarget}</span><h2>Keep-up check${interval ? ` — the ${PH && PH.sel ? esc(bannerLabel) : `${intervalMs} ms block model`}` : ""}</h2></div>
       ${interval ? `
       <p class="sec-intro">${PH
         ? (PH.sel
@@ -1266,10 +1274,10 @@
         : `The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`}</p>
       <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
       ${ingestTargetHTML(PH, ORDER, hot, disp)}
-      <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). Values are medians of 5 runs; "worst ledger" is the median across runs of each run's slowest ledger.</p>`
+      <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). ${reps === 1 ? `Values are from a single run; "worst ledger" is that run's slowest ledger.` : `Values are medians of ${reps} runs; "worst ledger" is the median across runs of each run's slowest ledger.`}</p>`
       : `<div class="note-callout">This run was not paced (catch-up run) — no keep-up budget applies. Select a phase in the target table above to view this run against Phase 1/2/3 targets.</div>`}
     </section>
-    ` + methodologyHTML(D, "07",
+    ` + methodologyHTML(D, secMethod,
       `<dt>Cold-run semantics</dt><dd>Each cold run wipes its scratch output tree and backfills the whole configuration via the production backfill — plan, freeze all three data types, build the txhash MPHF. <code>backfill_wall</code> is that whole plan-and-execute wall.</dd>
        <dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and ingests a single ${unitWord}'s entire ledger range${rangePhrase ? ` — ${rangePhrase} — ` : " "}through the daemon's bounded ingestion loop; one run never spans more than one ${unitWord}. The per-ledger end-to-end ingest time (recorded as <code>ingest_total</code> in the raw CSVs) is the sum of that ledger's phase burst with source wait excluded; run wall includes source wait.</dd>
        <dt>Counter semantics</dt><dd>Percentiles are per-ledger and never averaged across runs — the reported percentile is the median run's. Item counts track the natural units processed (ledgers, transactions, events), recorded in the raw CSVs as <code>n_items</code>; sample counts (<code>n</code>) include only non-zero-duration measurements.</dd>`)
@@ -1372,7 +1380,7 @@
         const cp = parts(p);
         return { label: cp ? cp.name : disp(p), val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
       });
-      barPanels("fig33-body", [{ title: "seconds per million events", unit: "s", color: C.s1, bars }]);
+      barPanels("fig33-body", [{ title: "seconds per million events", unit: "s", color: C.s1, bars }], { medLabel: medRuns });
       tableView("fig33", ["profile", "s / M events (median)", "min", "max", "backfill wall", "events/s (wall-incl.)"],
         ORDER.map((p, i) => {
           const b = bars[i], w = cold[p].driver.backfill_wall.total;
@@ -1444,7 +1452,7 @@
         ] };
       });
       const floorLab = floor ? (PH && PH.sel ? `${floor.toFixed(1)} l/s — Phase ${PH.sel.phase} floor` : `${floor.toFixed(1)} l/s — ${intervalMs} ms floor`) : "";
-      rateChart("fig43-body", rows, { fmt: v => trim(v), floor, floorLabel: floorLab });
+      rateChart("fig43-body", rows, { fmt: v => trim(v), floor, floorLabel: floorLab, medLabel: medRuns });
       legend("fig43-legend", [
         { label: "cold (batch freeze)", color: C.s1 }, { label: "hot (live, fsync/ledger)", color: C.hot },
         ...(floor ? [{ label: PH && PH.sel ? `Phase ${PH.sel.phase} block floor (${intervalTxt})` : intervalMs + " ms block floor", color: CVAR("--hot"), line: true }] : []),
@@ -1458,7 +1466,7 @@
     })();
 
     /* ---- fig 5.1 variance dots ---- */
-    (function fig51() {
+    if (showVariance) (function fig51() {
       const shortLab = p => { const cp = parts(p); return cp ? `${cp.name} c${cp.chunk}` : disp(p); };
       const rows = [];
       ORDER.forEach(p => rows.push({ label: shortLab(p), sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
@@ -1489,7 +1497,7 @@
       });
       el.appendChild(svg);
       legend("fig51-legend", [{ label: "cold runs", color: C.s1 }, { label: "hot runs", color: C.hot }]);
-      tableView("fig51", ["config", "run 1", "run 2", "run 3", "run 4", "run 5", "spread"],
+      tableView("fig51", ["config", ...Array.from({ length: reps }, (_, i) => `run ${i + 1}`), "spread"],
         rows.map(r => { const med = median5(r.runs); const spread = ((Math.max(...r.runs) - Math.min(...r.runs)) / med * 100).toFixed(1) + " %"; return [`${r.label} ${r.sub}`, ...r.runs.map(v => fmtNs(v)), spread]; }));
       const worstDev = Math.max(...rows.flatMap(r => { const med = median5(r.runs); return r.runs.map(v => Math.abs((v / med - 1) * 100)); }));
       document.getElementById("variance-prose").innerHTML =
@@ -1541,6 +1549,8 @@
       return u;
     };
     const hot = D.ingest_hot || {};
+    const reps = (D.campaign && D.campaign.reps) || 5;
+    const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
     // Chart-gutter form for campaign ids: two short lines instead of one long id.
     const parts = u => ((um[u] || {}).label ? null : campaignUnitParts(u, um[u]));
     const rowLab = (u, fallbackSub) => {
@@ -1608,8 +1618,7 @@
       : "";
     const paceFigHTML = showPace
       ? figHTML("figpace", "Fig 1.2", "Pacing lag behind the close schedule", "figpace-legend",
-          "Per-ledger lag = max(commit − due, 0) over every committed ledger (median of "
-          + ((D.campaign && D.campaign.reps) || 5) + " runs). On-time ledgers count as zero, "
+          "Per-ledger lag = max(commit − due, 0) over every committed ledger (" + medRuns + "). On-time ledgers count as zero, "
           + "so p50 = 0 means on schedule at least half the time. Dashed line = one close "
           + "interval; lag ÷ close interval = ledgers behind tip.")
         + `<p id="pace-readout" class="sec-intro"></p>`
@@ -1622,7 +1631,7 @@
       ${unitsLine}
       ${PH ? phaseBlockHTML(PH) : ""}
       ${phaseGuideHTML}
-      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale). " + (PH && PH.sel ? "Dashed lines mark the selected phase's block time and ingest-slice target" : (PH && !interval ? "See the phase guide above for what each phase measures." : "The dashed line is one block interval")) + (PH && !interval ? "" : " — see the phase guide above for what each phase measures."))}
+      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale). ` + (PH && PH.sel ? "Dashed lines mark the selected phase's block time and ingest-slice target" : (PH && !interval ? "See the phase guide above for what each phase measures." : "The dashed line is one block interval")) + (PH && !interval ? "" : " — see the phase guide above for what each phase measures."))}
       <p id="hot-prose" class="sec-intro"></p>
       ${paceFigHTML}
     </section>
@@ -1637,7 +1646,7 @@
             : `The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`}</p>
            <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
            ${ingestTargetHTML(PH, ORDER, hot, disp)}
-           <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). Values are medians of 5 runs; "worst ledger" is the median across runs of each run's slowest ledger.</p>`
+           <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). ${reps === 1 ? `Values are from a single run; "worst ledger" is that run's slowest ledger.` : `Values are medians of ${reps} runs; "worst ledger" is the median across runs of each run's slowest ledger.`}</p>`
         : `<div class="note-callout">This run defines no block-model keep-up check, so there is no per-interval budget to measure sustained ingestion against.${PH ? " Select a phase in the target table above to view this run against Phase 1/2/3 targets." : ""}</div>`}
     </section>
     ` + methodologyHTML(D, "03",
