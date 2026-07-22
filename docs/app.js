@@ -85,6 +85,16 @@
     for (let v = 0; v <= hi * 1.0001; v += step) out.push(v);
     return out;
   }
+  // Row-label gutter: keep each chart's default width, widen only when a
+  // label or sub needs it (long campaign unit names), cap short of the plot.
+  function gutterW(base, W, rows) {
+    let need = base;
+    for (const r of rows || []) {
+      if (r.label) need = Math.max(need, String(r.label).length * 7 + 14);
+      if (r.sub) need = Math.max(need, String(r.sub).length * 6.4 + 14);
+    }
+    return Math.min(need, Math.round(W * 0.32));
+  }
   const CVAR = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
   const COLORS = () => ({
     s1: CVAR("--s1"), s2: CVAR("--s2"), s3: CVAR("--s3"), s4: CVAR("--s4"),
@@ -162,7 +172,7 @@
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 128;
+    const labW = gutterW(W < 560 ? 96 : 128, W, rows);
     const m = { l: labW, r: 76, t: 6, b: 30 };
     const rowH = 26, gap = 18;
     const H = m.t + rows.length * (rowH + gap) - gap + m.b;
@@ -209,7 +219,8 @@
     const W = Math.max(el.clientWidth, 360);
     const cols = W < 640 ? 1 : panels.length;
     const pw = (W - (cols - 1) * 28) / cols;
-    const rowH = 22, gap = 12, labW = 70;
+    const rowH = 22, gap = 12;
+    const labW = gutterW(70, pw, panels.flatMap(p => p.bars));
     const rows = panels[0].bars.length;
     const panelH = 26 + rows * (rowH + gap) - gap + 30;
     const H = cols === 1 ? panels.length * (panelH + 16) : panelH;
@@ -250,11 +261,15 @@
     const el = document.getElementById(bodyId);
     if (!el) return;
     el.replaceChildren();
-    const reflines = opts.reflines
-      || (opts.reflineNs ? [{ ns: opts.reflineNs, label: opts.reflineLabel || "" }] : []);
+    const reflines = (opts.reflines
+      || (opts.reflineNs ? [{ ns: opts.reflineNs, label: opts.reflineLabel || "" }] : []))
+      .slice().sort((a, b) => a.ns - b.ns);
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 140;
-    const m = { l: labW, r: 34, t: 10, b: 46 };
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
+    // With several reflines the labels stack in reserved headroom instead of
+    // colliding on one line.
+    const extraTop = reflines.length > 1 ? (reflines.length - 1) * 13 : 0;
+    const m = { l: labW, r: 34, t: 10 + extraTop, b: 46 };
     const laneH = 26;
     let allVals = [];
     rows.forEach(r => r.lanes.forEach(l => allVals.push(l.pts.p50, l.pts.max)));
@@ -270,12 +285,18 @@
       S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "gridline" }, svg);
       S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: fmtNsAxis(tv) }, svg);
     }
-    for (const rl of reflines) {
-      if (!(rl.ns > lo && rl.ns < hi)) continue;
+    reflines.forEach((rl, i) => {
+      if (!(rl.ns > lo && rl.ns < hi)) return;
       const px = x(rl.ns);
       S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "refline" }, svg);
-      S("text", { x: px, y: m.t + 2, "text-anchor": "middle", class: "reflab", text: rl.label || "" }, svg);
-    }
+      // Clamp the label inside the chart (estimated width; SVG text cannot be
+      // measured before render in every environment).
+      const est = String(rl.label || "").length * 6.3;
+      let anchor = "middle", tx = px;
+      if (px + est / 2 > W - 4) { anchor = "end"; tx = W - 4; }
+      else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
+      S("text", { x: tx, y: 12 + i * 13, "text-anchor": anchor, class: "reflab", text: rl.label || "" }, svg);
+    });
     S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: "per-op latency · log scale" }, svg);
     let y = m.t;
     rows.forEach((row, ri) => {
@@ -395,7 +416,7 @@
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 140;
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
     const m = { l: labW, r: 60, t: 8, b: 44 };
     const rowH = 40;
     const H = m.t + rows.length * rowH + m.b;
@@ -442,7 +463,7 @@
     if (!el) return;
     el.replaceChildren();
     const W = Math.max(el.clientWidth, 360);
-    const labW = W < 560 ? 96 : 140;
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
     const m = { l: labW, r: 60, t: 12, b: 32 };
     const rowH = 24, gap = 16;
     const H = m.t + rows.length * (rowH + gap) - gap + m.b;
@@ -556,6 +577,29 @@
       <figcaption>${caption}</figcaption>
       <details class="tv" id="${id}-tv"><summary>Table view</summary><div class="tv-scroll"></div></details>
     </figure>`;
+  }
+
+  /* ============================ campaign unit ids ============================ */
+  // A campaign unit id is "<dataset>-c<chunk>" (see SCHEMA "Inputs"), and
+  // dataset names follow "<model>-<txPerLedger>". The trailing number is
+  // dropped from the display name only when the run's own counts
+  // (txs ÷ ledgers) confirm it is the tx-per-ledger figure — nothing is
+  // renamed on data the run cannot verify. Returns null for non-campaign ids.
+  function campaignUnitParts(u, meta) {
+    const m = /^(.+)-c(\d+)$/.exec(String(u));
+    if (!m) return null;
+    let name = m[1];
+    const chunk = m[2];
+    const k = meta || {};
+    const tpl = k.ledgers > 0 && k.txs > 0 ? Math.round(k.txs / k.ledgers) : null;
+    const nm = /^(.+)-(\d+)$/.exec(name);
+    if (nm && tpl != null && +nm[2] === tpl) name = nm[1];
+    name = name.replace(/_/g, " ");
+    return {
+      name, chunk, tpl,
+      sub: (tpl != null ? fmtInt(tpl) + " TPL · " : "") + "chunk " + chunk,
+      line: `${name} (${tpl != null ? fmtInt(tpl) + " TPL, " : ""}c${chunk})`,
+    };
   }
 
   /* ============================ phase targets ============================ */
@@ -680,6 +724,8 @@
     const disp = u => {
       const meta = um[u] || {};
       if (meta.label) return meta.label;
+      const cp = campaignUnitParts(u, meta);
+      if (cp) return cp.line;
       if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
       return u;
     };
@@ -1090,15 +1136,25 @@
     const ds = D.dataset;
     const ORDER = ds.unit_order;
     const um = ds.unit_meta;
-    // Explicit label wins; a purely numeric id gets the unit_label prefixed
+    // Explicit label wins; campaign ids ("sac-6000-c1") are broken up into
+    // model / TPL / chunk; a purely numeric id gets the unit_label prefixed
     // ("Chunk 3000") so a bare number never stands alone; named ids verbatim.
+    const parts = p => ((um[p] || {}).label ? null : campaignUnitParts(p, um[p]));
     const disp = p => {
       const meta = um[p] || {};
       if (meta.label) return meta.label;
+      const cp = parts(p);
+      if (cp) return cp.line;
       if (ds.unit_label && /^\d+$/.test(p)) return `${ds.unit_label} ${p}`;
       return p;
     };
+    // Chart-gutter form: two short lines instead of one long id.
+    const rowLab = (p, fallbackSub) => {
+      const cp = parts(p);
+      return cp ? { label: cp.name, sub: cp.sub } : { label: disp(p), sub: fallbackSub };
+    };
     const cold = D.ingest_cold, hot = D.ingest_hot;
+    const paced = ((D.campaign && D.campaign.close_interval_ns) || 0) > 0;
     const PH = phaseState(D);
     // Judged budget: the selected phase's block time on phase-aware runs, else
     // this run's checks (legacy behavior, 600 ms fallback). Null means no
@@ -1185,7 +1241,9 @@
     <section id="ingest-hot">
       <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — the live loop${interval ? (PH && PH.sel ? ` against the ${esc(bannerLabel)}` : ` against a ${intervalMs} ms block model`) : ""}</h2></div>
       <p class="sec-intro">Hot ingestion runs the daemon's production loop: per ledger — extract, apply to the RocksDB stores, commit with <strong>one fsync per ledger</strong>, then <code>apply</code> makes the write batch live.</p>
-      ${figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole run (median of 5). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.")}
+      ${paced
+        ? figHTML("fig41", "Fig 4.1", "Hot-ingest busy time, by phase", "fig41-legend", "Sum of per-ledger phase times over the whole run (median of " + D.campaign.reps + "). This run is paced: wall clock is dominated by waiting on the close schedule, so the bar shows busy time only — see the table view for run wall and pacing wait.")
+        : figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole run (median of 5). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.")}
       ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, its fsync commit, and the apply stall tail", "fig42-legend", "Latency percentiles over every ledger of the run (median of 5 runs; log scale)." + (PH && PH.sel ? " Dashed lines mark the selected phase's block time and ingest-slice target." : (interval ? " The dashed line is one block interval." : "")))}
       ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot vs the block-model floor", "fig43-legend", "Ledgers per second over the full run (median of 5; log scale)." + (interval ? " The dashed line is the rate a block interval demands." : ""))}
       <p id="hot-prose" class="sec-intro"></p>
@@ -1279,7 +1337,7 @@
         const segs = segsDef.map(([k, name, col]) => ({ name, color: col, val: d[k] ? d[k].total.m : 0 }));
         const other = d.backfill_wall.total.m - segs.reduce((a, s) => a + s.val, 0);
         segs.push({ name: "driver / unattributed", color: C.de, val: Math.max(other, 0) });
-        return { label: disp(p), sub: sub(p), segs, total: d.backfill_wall.total.m };
+        return { ...rowLab(p, sub(p)), segs, total: d.backfill_wall.total.m };
       });
       stackedH("fig31-body", rows);
       legend("fig31-legend", [...segsDef.map(([, n, col]) => ({ label: n, color: col })), { label: "driver / unattributed", color: C.de }]);
@@ -1298,7 +1356,7 @@
       const rows = ORDER.map(p => {
         const st = cold[p].files.events;
         const segs = evStages.map(name => ({ name: name === "finalize" ? "finalize (MPHF)" : name, color: palette[name] || C.de, val: st[name].total.m }));
-        return { label: disp(p), sub: sub(p), segs, total: segs.reduce((a, s) => a + s.val, 0) };
+        return { ...rowLab(p, sub(p)), segs, total: segs.reduce((a, s) => a + s.val, 0) };
       });
       stackedH("fig32-body", rows);
       legend("fig32-legend", evStages.map(name => ({ label: name === "finalize" ? "finalize (MPHF)" : name, color: palette[name] || C.de })));
@@ -1311,7 +1369,8 @@
       const bars = ORDER.map(p => {
         const evM = um[p].events / 1e6;
         const w = cold[p].driver.backfill_wall.total;
-        return { label: disp(p), val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
+        const cp = parts(p);
+        return { label: cp ? cp.name : disp(p), val: w.m / NS / evM, lo: w.lo / NS / evM, hi: w.hi / NS / evM, fmt: v => trim(v) };
       });
       barPanels("fig33-body", [{ title: "seconds per million events", unit: "s", color: C.s1, bars }]);
       tableView("fig33", ["profile", "s / M events (median)", "min", "max", "backfill wall", "events/s (wall-incl.)"],
@@ -1335,12 +1394,15 @@
           name: name === "commit" ? "commit (fsync)" : name, color: palette[name] || C.de, val: h.phases[name].total.m,
           extra: [{ value: fmtNs(h.phases[name].p50.m), label: "p50 / ledger" }, { value: fmtNs(h.phases[name].p99.m), label: "p99 / ledger" }],
         }));
-        return { label: disp(p), sub: fmtInt(um[p].txs / um[p].ledgers) + " tx/ledger", segs, total: h.driver.run_wall.total.m };
+        // On a paced run the wall is dominated by waiting for the close
+        // schedule, so the bar shows busy time (sum of phases) instead.
+        const busy = segs.reduce((a, s) => a + s.val, 0);
+        return { ...rowLab(p, fmtInt(um[p].txs / um[p].ledgers) + " tx/ledger"), segs, total: paced ? busy : h.driver.run_wall.total.m };
       });
       stackedH("fig41-body", rows);
       legend("fig41-legend", phaseNames.map(n => ({ label: n === "commit" ? "commit (fsync)" : n, color: palette[n] || C.de })));
-      tableView("fig41", ["profile", "run wall", ...phaseNames, "source wait + startup"],
-        ORDER.map(p => { const h = hot[p]; const sum = phaseNames.reduce((a, n) => a + h.phases[n].total.m, 0); return [disp(p), fmtNs(h.driver.run_wall.total.m), ...phaseNames.map(n => fmtNs(h.phases[n].total.m)), fmtNs(h.driver.run_wall.total.m - sum)]; }));
+      tableView("fig41", ["profile", "run wall", ...phaseNames, ...(paced ? ["busy total", "pacing wait + startup"] : ["source wait + startup"])],
+        ORDER.map(p => { const h = hot[p]; const sum = phaseNames.reduce((a, n) => a + h.phases[n].total.m, 0); return [disp(p), fmtNs(h.driver.run_wall.total.m), ...phaseNames.map(n => fmtNs(h.phases[n].total.m)), ...(paced ? [fmtNs(sum)] : []), fmtNs(h.driver.run_wall.total.m - sum)]; }));
     })();
 
     /* ---- fig 4.2 per-ledger latency ---- */
@@ -1350,7 +1412,7 @@
         ["commit (fsync)", C.s6, hot[p].phases.commit],
         ["apply", C.s5, hot[p].phases.apply],
       ].filter(s => s[2]);
-      const rows = ORDER.map(p => ({ label: disp(p), sub: sub(p), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
+      const rows = ORDER.map(p => ({ ...rowLab(p, sub(p)), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
       const reflines = [];
       if (interval) reflines.push({ ns: interval, label: PH && PH.sel ? `${intervalTxt} — Phase ${PH.sel.phase} block time` : intervalMs + " ms — block interval" });
       if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
@@ -1376,7 +1438,7 @@
         const hotR = L / (hot[p].driver.run_wall.total.m / NS);
         const coldLo = L / (cold[p].driver.backfill_wall.total.hi / NS), coldHi = L / (cold[p].driver.backfill_wall.total.lo / NS);
         const hotLo = L / (hot[p].driver.run_wall.total.hi / NS), hotHi = L / (hot[p].driver.run_wall.total.lo / NS);
-        return { label: disp(p), sub: sub(p), lanes: [
+        return { ...rowLab(p, sub(p)), lanes: [
           { name: "cold (batch freeze)", color: C.s1, val: coldR, lo: coldLo, hi: coldHi },
           { name: "hot (live, fsync/ledger)", color: C.hot, val: hotR, lo: hotLo, hi: hotHi },
         ] };
@@ -1397,9 +1459,10 @@
 
     /* ---- fig 5.1 variance dots ---- */
     (function fig51() {
+      const shortLab = p => { const cp = parts(p); return cp ? `${cp.name} c${cp.chunk}` : disp(p); };
       const rows = [];
-      ORDER.forEach(p => rows.push({ label: disp(p), sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
-      ORDER.forEach(p => rows.push({ label: disp(p), sub: "hot", runs: hot[p].driver.run_wall.total.r, color: C.hot }));
+      ORDER.forEach(p => rows.push({ label: shortLab(p), sub: "cold", runs: cold[p].driver.backfill_wall.total.r, color: C.s1 }));
+      ORDER.forEach(p => rows.push({ label: shortLab(p), sub: "hot", runs: hot[p].driver.run_wall.total.r, color: C.hot }));
       const el = document.getElementById("fig51-body");
       el.replaceChildren();
       const W = Math.max(el.clientWidth, 360);
@@ -1472,10 +1535,18 @@
     const disp = u => {
       const meta = um[u] || {};
       if (meta.label) return meta.label;
+      const cp = campaignUnitParts(u, meta);
+      if (cp) return cp.line;
       if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
       return u;
     };
     const hot = D.ingest_hot || {};
+    // Chart-gutter form for campaign ids: two short lines instead of one long id.
+    const parts = u => ((um[u] || {}).label ? null : campaignUnitParts(u, um[u]));
+    const rowLab = (u, fallbackSub) => {
+      const cp = parts(u);
+      return cp ? { label: cp.name, sub: cp.sub } : { label: disp(u), sub: fallbackSub };
+    };
     const PH = phaseState(D);
     // Judged budget: the selected phase's block time on phase-aware runs, else
     // this run's checks (legacy behavior). Null means no keep-up check.
@@ -1589,7 +1660,7 @@
     (function fig42() {
       const hotOrder = ORDER.filter(u => seriesFor(u).length);
       const rows = hotOrder.map(u => ({
-        label: disp(u), sub: sub(u),
+        ...rowLab(u, sub(u)),
         lanes: seriesFor(u).map(l => ({
           name: l.name, color: l.color,
           pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
@@ -1624,7 +1695,7 @@
     if (showPace) (function figPace() {
       const rows = paceUnits.map(u => {
         const pl = hot[u].driver.pace_lag;
-        return { label: disp(u), sub: sub(u), p50: pl.p50.m, p90: pl.p90.m, p99: pl.p99.m, max: pl.max.m };
+        return { ...rowLab(u, sub(u)), p50: pl.p50.m, p90: pl.p90.m, p99: pl.p99.m, max: pl.max.m };
       });
       paceChart("figpace-body", rows, { budgetNs: closeNs });
       legend("figpace-legend", [
