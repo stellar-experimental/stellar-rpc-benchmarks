@@ -2,6 +2,13 @@
   "schema_version": 1,
   "runs": [
     {
+      "id": "phase1-synthetic-minspec-0f90d331-20260722T012143Z",
+      "name": "phase1-synthetic-minspec",
+      "date": "2026-07-22",
+      "kind": "synthetic",
+      "path": "runs/phase1-synthetic-minspec-0f90d331-20260722T012143Z.json"
+    },
+    {
       "id": "synthetic-2026-07-16-apply-fix",
       "name": "Synthetic apply-load — apply-tail fix @ edb8eab4 (user-dev-063a)",
       "date": "2026-07-16",
