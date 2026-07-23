@@ -235,6 +235,13 @@ if (phaseRun) {
     check(group, "ingest target line at 900 ms", /900 ms — Phase 1 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
     const readout = txt(doc.getElementById("ingest-target-readout"));
     check(group, "pass/miss readout vs Phase 1 target", /vs Phase 1 target 900 ms/.test(readout) && /(PASS|MISS)/.test(readout), readout.slice(0, 140));
+    // Tier-1: peak memory + pacing now surface in the DEFAULT report, not just ?view=hot.
+    check(group, "peak-memory figure rendered", !!doc.querySelector("#fig21-body svg"), "missing");
+    const memTv = txt(doc.querySelector("#fig21-tv"));
+    check(group, "peak RSS shows % of box RAM", /% of box RAM/.test(memTv) && /GiB/.test(memTv), memTv.slice(0, 120));
+    check(group, "sac-6000 cold peak ≈ 70% of RAM", /70 %/.test(memTv), memTv.slice(0, 200));
+    check(group, "pacing figure in default report", !!doc.querySelector("#fig44-body svg"), "missing");
+    check(group, "pacing readout names close interval", /close interval/.test(txt(doc.getElementById("pace-readout-full"))), "missing");
     window.close();
   }
 

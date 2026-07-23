@@ -72,6 +72,9 @@ def _cold_driver(u, run, vocab="new"):
     ]
     if vocab == "new":
         specs.append(("cold_extract", (1, 0, 7000, 70, 80, 90, 100)))
+        # peak RSS is a byte gauge (same value in every duration column); the
+        # converter lifts it out of the driver into a sibling V.
+        specs.append(("peak_rss_bytes", (1, 0) + (20_000_000_000,) * 5))
     return [(s,) + _scale(b, run) for s, b in specs]
 
 
@@ -102,6 +105,9 @@ def _hot_driver(u, run, paced, vocab="new"):
         # p99 = 0.8 s is a visible fraction of the 2 s close interval.
         rows.append(("pace_lag",) + _scale(
             (L, L, 1_000_000_000, 0, 300_000_000, 800_000_000, 1_400_000_000), run))
+    if vocab == "new":
+        # peak RSS byte gauge — lifted out of the driver into a sibling V.
+        rows.append(("peak_rss_bytes",) + _scale((1, 0) + (14_000_000_000,) * 5, run))
     return rows
 
 

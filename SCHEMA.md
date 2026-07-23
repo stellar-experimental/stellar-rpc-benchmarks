@@ -144,7 +144,7 @@ renderers apply; anything unrecognized renders generically.
 
 ```jsonc
 "ingest_cold": { "<unit>": {
-  "driver": { "<stage>": StageAgg },      // every row of driver.csv
+  "driver": { "<stage>": StageAgg },      // every driver.csv row EXCEPT peak_rss_bytes
                                           //   old: chunk_wall, chunk_total, ledgers_total, txhash_total, events_total
                                           //   new: backfill_wall, index_rebuild, chunk_total, ledgers_total,
                                           //        txhash_total, events_total, cold_extract
@@ -152,17 +152,35 @@ renderers apply; anything unrecognized renders generically.
   "derived": {                            // per-run then aggregated
     "ledgers_per_s": V,                   // ledgers / wall     (wall = chunk_wall old, backfill_wall new)
     "tp_ledgers": V, "tp_txs": V, "tp_events": V   // unit_meta count / {type}_total per run
-  }
+  },
+  "peak_rss_bytes": V                     // optional; see "Peak RSS" below
 }}
 
 "ingest_hot": { "<unit>": {
   "driver": { "<stage>": StageAgg },      // old: chunk_wall, ingest_total, read_blocked
                                           // new: ingest_total, run_wall
                                           // + optional pace_lag (see below), present iff paced
+                                          // (the peak_rss_bytes row is lifted to the sibling field below)
   "phases": { "<stage>": StageAgg },      // hot.csv rows: extract, ledgers, txhash, events, commit, apply
-  "derived": { "ledgers_per_s": V }       // ledgers / wall     (wall = chunk_wall old, run_wall new)
+  "derived": { "ledgers_per_s": V },      // ledgers / wall     (wall = chunk_wall old, run_wall new)
+  "peak_rss_bytes": V                     // optional; see "Peak RSS" below
 }}
 ```
+
+### Peak RSS
+
+`peak_rss_bytes` is the process **peak resident-set size in BYTES** — a memory
+high-water-mark gauge, not a latency distribution. The `driver.csv` carries it as
+a `peak_rss_bytes` row whose gauge value is replicated across the `*_ns` columns;
+the converter reads that value and stores it as a plain `V` (median/min/max/`r`
+across the reps) that is a **sibling of `driver`**, not one of its `StageAgg`
+rows — the ns column names do not apply to a byte gauge, so it is deliberately not
+shoehorned into `StageAgg`. Present iff the `peak_rss_bytes` row appears in every
+rep's `driver.csv`; omitted entirely otherwise (never zero-filled). Compare it
+against the box RAM (`hardware.mem_total_kb`, or the parsed `machine.mem`) to read
+memory headroom. The viewer surfaces it in the synthetic report's dataset section
+(peak RSS per profile, cold and hot, against the box's RAM ceiling); a run without
+the field renders exactly as before.
 
 `driver.pace_lag` is the optional per-ledger **lag behind the close schedule** on a
 paced hot run: for each committed ledger, `max(commit_time − due_time, 0)`. Its
