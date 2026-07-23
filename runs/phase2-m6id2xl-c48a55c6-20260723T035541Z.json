@@ -104,7 +104,8 @@
           }
         ],
         "orgs": 19,
-        "retention": "6 months"
+        "retention": "6 months",
+        "ingest_p99_target_ns": 400000000
       },
       {
         "phase": 3,
