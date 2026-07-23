@@ -13,6 +13,7 @@
 
   let MANIFEST = null;
   let CURRENT = null;   // { meta, data } of the run on screen
+  let LIVE_TARGETS = null;  // phases[] from targets.json (single source), or null if unfetched
   let redrawTimer = null;
 
   /* ============================ theme ============================ */
@@ -658,9 +659,16 @@
   // phase (campaign.phase); both can be absent.
   function phaseState(D) {
     const camp = D.campaign || {};
-    const targets = Array.isArray(camp.phase_targets)
+    // The baked campaign.phase_targets flags that this run participates in phases;
+    // legacy runs without it get no phase UI (unchanged). The target *values* come
+    // live from targets.json (the single source) so a fix there propagates without
+    // reconverting — falling back to the run's baked copy when the fetch is absent.
+    const baked = Array.isArray(camp.phase_targets)
       ? camp.phase_targets.filter(p => p && p.phase != null && p.block_time_ns > 0) : [];
-    if (!targets.length) return null;
+    if (!baked.length) return null;
+    const live = Array.isArray(LIVE_TARGETS)
+      ? LIVE_TARGETS.filter(p => p && p.phase != null && p.block_time_ns > 0) : [];
+    const targets = live.length ? live : baked;
     const byNum = {};
     targets.forEach(p => { byNum[p.phase] = p; });
     const matched = camp.phase != null && byNum[camp.phase] ? byNum[camp.phase] : null;
@@ -1739,7 +1747,31 @@
     loadRun(entry);
   }
 
+  // Live goal numbers from targets.json (single source shared with the latency
+  // model). Best-effort: on any failure the viewer falls back to each run's baked
+  // campaign.phase_targets, so this never blocks boot. Fills the derived ingest
+  // target for any phase that omits it (same rule as the converter), so callers
+  // see a fully-populated target object identical to the baked one.
+  async function loadLiveTargets() {
+    try {
+      const res = await fetch("targets.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const t = await res.json();
+      const fx = t.fixed_estimates || {};
+      const tx = fx.tx_submit_p99_ns || 0, query = fx.client_read_p99_ns || 0;
+      (t.phases || []).forEach(p => {
+        if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0) {
+          p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - tx - query;
+        }
+      });
+      LIVE_TARGETS = t.phases || null;
+    } catch (err) {
+      console.warn("targets.json not loaded; using baked phase_targets", err);
+    }
+  }
+
   async function boot() {
+    await loadLiveTargets();
     try {
       const res = await fetch("runs/index.json", { cache: "no-cache" });
       if (!res.ok) throw new Error("HTTP " + res.status);
