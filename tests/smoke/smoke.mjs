@@ -117,9 +117,11 @@ function checkKind(kind, doc, group, reps) {
   check(group, "all phases in fig42 table", /extract/.test(f42) && /commit \(fsync\)/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
 }
 
-function checkSanity(kind, doc, group) {
+function checkSanity(kind, doc, group, D) {
   const report = doc.getElementById("report");
-  const banner = txt(report.querySelector(".banner"));
+  // Synthetic wraps its two verdict banners (phase goal + block model) in a
+  // .banners container; pubnet has a single standalone .banner.
+  const banner = txt(report.querySelector(".banners") || report.querySelector(".banner"));
   if (kind === "pubnet") {
     check(group, "banner 24 / 24 PASS", /24 \/ 24/.test(banner) && /PASS/.test(banner), banner.slice(0, 60));
     const f31 = txt(doc.querySelector("#fig31-tv"));
@@ -127,7 +129,21 @@ function checkSanity(kind, doc, group) {
     const ticks = (txt(doc.getElementById("target-table")).match(/✓/g) || []).length;
     check(group, "24 passing target cells", ticks === 24, ticks + " ticks");
   } else if (kind === "synthetic") {
-    check(group, "banner 3 / 3 KEEPS UP", /3 \/ 3/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 60));
+    const phase = D && D.campaign && D.campaign.phase;
+    if (phase != null) {
+      // Phase runs lead with the phase-goal verdict (ingest p99 vs target); the
+      // block-model keep-up is shown as a secondary line, never the headline.
+      check(group, "banner shows both goal + keep-up verdicts",
+        /(MEETS GOAL|MISS)/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 140));
+      if (group.startsWith("phase2-")) {
+        // SAC's ~604 ms ingest p99 misses the 400 ms Phase 2 goal: the headline
+        // must read 2 / 3 with a MISS, not an all-clear 3 / 3.
+        check(group, "phase 2 headline is 2 / 3 MISS (not all-clear)",
+          /2 \/ 3/.test(banner) && /MISS/.test(banner) && !/MEETS GOAL/.test(banner), banner.slice(0, 140));
+      }
+    } else {
+      check(group, "banner 3 / 3 KEEPS UP", /3 \/ 3/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 60));
+    }
     const tgt = txt(doc.getElementById("target-table"));
     const f42 = txt(doc.querySelector("#fig42-tv"));
     // Sanity values are per-run: the 2026-07-16 apply-tail fix pulled sac's
@@ -162,7 +178,7 @@ for (const run of manifest.runs) {
   const options = [...doc.querySelectorAll("#run-select option")].map((o) => o.value);
   check(group, "dropdown lists every manifest run", manifest.runs.every((r) => options.includes(r.id)), options.join(","));
   checkKind(run.kind, doc, group, runJSON(run.id).campaign.reps);
-  checkSanity(run.kind, doc, group);
+  checkSanity(run.kind, doc, group, runJSON(run.id));
   window.close();
 }
 
