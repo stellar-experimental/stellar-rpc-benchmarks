@@ -72,9 +72,18 @@ class PhaseTableTests(unittest.TestCase):
         self.assertEqual(wl[2]["Soroswap swaps"], {"name": "Soroswap swaps", "tps": 1500, "tx_per_ledger": 1500})
         self.assertEqual(wl[3]["Soroswap swaps"], {"name": "Soroswap swaps", "tps": 3000, "tx_per_ledger": 1800})
 
-    def test_phase2_has_no_ingest_target(self):
+    def test_phase2_ingest_target_derived_from_e2e_budget(self):
+        # Phase 2 states no explicit ingest-slice target; it is derived from the
+        # e2e budget: 2.5s = 1s*2 + 60ms + ingest + 40ms  ->  ingest = 400ms.
         by = {p["phase"]: p for p in convert.PHASE_TARGETS}
-        self.assertNotIn("ingest_p99_target_ns", by[2])
+        self.assertEqual(by[2]["ingest_p99_target_ns"], 400_000_000)
+
+    def test_ingest_p99_target_formula(self):
+        self.assertEqual(
+            convert.ingest_p99_target(1_000_000_000, 2_500_000_000), 400_000_000)
+        # Explicit phase-1 target matches the formula.
+        self.assertEqual(
+            convert.ingest_p99_target(2_000_000_000, 5_000_000_000), 900_000_000)
 
 
 class PhaseEmissionTests(unittest.TestCase):

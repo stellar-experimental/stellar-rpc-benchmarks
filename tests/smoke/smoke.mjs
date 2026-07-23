@@ -213,7 +213,7 @@ if (phaseRun) {
     check(group, "phase table rendered", !!tbl, "missing");
     const tblTxt = txt(tbl);
     check(group, "all three phases in table", /Phase 1/.test(tblTxt) && /Phase 2/.test(tblTxt) && /Phase 3/.test(tblTxt), tblTxt.slice(0, 100));
-    check(group, "phase 2 ingest-slice target is —", /—/.test(tblTxt), tblTxt.slice(0, 100));
+    check(group, "phase 2 ingest-slice target derived from e2e budget (400 ms)", /400 ms/.test(tblTxt), tblTxt.slice(0, 100));
     const selTh = doc.querySelector("#phase-block th.ph-sel");
     check(group, `matched phase (${matched}) highlighted`, !!selTh && txt(selTh).includes(`Phase ${matched}`), selTh ? txt(selTh) : "missing");
     check(group, "matched phase badged 'this run'", /this run/.test(txt(doc.getElementById("phase-block"))), "missing");

@@ -360,8 +360,27 @@ def resolve_close_interval_ns(metadata, invocations):
 # campaign-layout run JSON as campaign.phase_targets so the viewer reads the
 # targets as data and holds no target constants of its own. The ingest-slice
 # target (ingest_p99_target_ns) is the row this benchmark measures — the
-# per-ledger ingest_total p99; phase 2 defines no ingest-slice target, so the
-# key is omitted there. Cold ingestion (backfill) has no phase and no targets.
+# per-ledger ingest_total p99. Cold ingestion (backfill) has no phase and no
+# targets.
+#
+# A phase that doesn't state an ingest-slice target has it derived from the
+# end-to-end latency budget:
+#
+#   e2e = block_time*2 + tx_submit_p99 + ingest_p99 + client_read_p99
+#
+# Block time is counted twice because a submitted tx waits for the *next*
+# ledger (not the one being voted on) to be included, so the path spans two
+# ledger closes. The client-side submission and read latencies are held fixed
+# across phases, leaving ingest_p99 as the only unknown to solve for.
+TX_SUBMIT_P99_NS = 60_000_000    # P99 client → RPC submission latency (fixed)
+CLIENT_READ_P99_NS = 40_000_000  # P99 ingested → client-visible latency (fixed)
+
+
+def ingest_p99_target(block_time_ns, e2e_budget_ns):
+    """Ingest-slice p99 budget implied by the end-to-end latency formula."""
+    return e2e_budget_ns - 2 * block_time_ns - TX_SUBMIT_P99_NS - CLIENT_READ_P99_NS
+
+
 PHASE_TARGETS = [
     {
         "phase": 1,
@@ -402,6 +421,14 @@ PHASE_TARGETS = [
         "retention": "2 years",
     },
 ]
+
+# Fill the ingest-slice target for any phase that doesn't state one explicitly
+# (phase 2), deriving it from the end-to-end budget via the formula above.
+for _p in PHASE_TARGETS:
+    _p.setdefault(
+        "ingest_p99_target_ns",
+        ingest_p99_target(_p["block_time_ns"], _p["e2e_budget_ns"]),
+    )
 
 
 def match_phase(close_interval_ns):
