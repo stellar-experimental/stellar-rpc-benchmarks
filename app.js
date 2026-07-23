@@ -1270,13 +1270,27 @@
 
     const sub = p => fmtK(um[p].events) + " events";
 
-    // banner keep-up (data-driven)
+    // banner keep-up (data-driven): can the follower sustain the block model?
     let keeps = 0, tail = false;
     if (interval) ORDER.forEach(p => {
       const sus = hot[p].driver.run_wall.total.m / um[p].ledgers;
       if (sus <= interval) keeps++;
       if (hot[p].driver.ingest_total.p99.m > interval) tail = true;
     });
+
+    // banner phase goal (data-driven): does the per-ledger ingest p99 meet the
+    // selected phase's target? This is the primary verdict — the block-model
+    // keep-up above is a looser, secondary check (a profile can sit inside the
+    // block interval on average yet miss the tighter ingest-slice goal). goalNs
+    // is null for legacy/unpaced runs and for phases with no ingest target.
+    const goalNs = PH && PH.sel ? PH.sel.ingest_p99_target_ns : null;
+    let goalPass = 0, goalWorst = null;
+    if (goalNs) ORDER.forEach(p => {
+      const p99 = hot[p].driver.ingest_total.p99.m;
+      if (p99 <= goalNs) goalPass++;
+      if (!goalWorst || p99 > hot[goalWorst].driver.ingest_total.p99.m) goalWorst = p;
+    });
+    const goalMet = goalNs && goalPass === ORDER.length;
 
     // Concrete ledger-range phrase for the hot-run methodology note (units differ
     // in size, so state the span; omit gracefully when ledger counts are absent).
@@ -1286,13 +1300,30 @@
       : uniqLedgers.length === 1 ? `${fmtInt(uniqLedgers[0])} ledgers`
       : `${fmtInt(uniqLedgers[0])}–${fmtInt(uniqLedgers[uniqLedgers.length - 1])} ledgers depending on the ${unitWord}`;
 
-    const bannerHTML = interval ? `
+    // Two stacked verdicts, same shape. The phase-goal banner (primary: does the
+    // per-ledger ingest p99 meet the phase target?) renders only when a goal is
+    // defined; the block-model banner (secondary: can the follower sustain the
+    // block interval?) renders whenever a keep-up budget exists, else a lone
+    // "no target" banner. Each carries its own border color and note.
+    const goalBanner = goalNs ? `
+      <div class="banner${goalMet ? "" : " warn-tail"}">
+        <div class="banner-figure">${goalPass}<span class="of"> / ${ORDER.length}</span></div>
+        <div class="banner-copy">
+          <div class="lead">${goalMet
+            ? `All profiles meet the Phase ${PH.sel.phase} goal — ingest p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip">✓ MEETS GOAL</span>`
+            : `${goalPass} of ${ORDER.length} profiles meet the Phase ${PH.sel.phase} goal — ingest p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip warn">▲ ${ORDER.length - goalPass} MISS</span>`}</div>
+          <p id="goal-note"></p>
+        </div>
+      </div>` : "";
+    const keepLead = keeps === ORDER.length
+      ? `All profiles sustain the ${esc(bannerLabel)} in steady state. <span class="chip">✓ KEEPS UP</span>`
+      : `${keeps} of ${ORDER.length} profiles sustain the ${esc(bannerLabel)} in steady state. <span class="chip warn">${ORDER.length - keeps} OVER INTERVAL</span>`;
+    const tailChip = tail ? ` <span class="chip warn">TAIL CAVEAT</span>` : "";
+    const keepBanner = interval ? `
       <div class="banner${tail ? " warn-tail" : ""}">
         <div class="banner-figure">${keeps}<span class="of"> / ${ORDER.length}</span></div>
         <div class="banner-copy">
-          <div class="lead">${keeps === ORDER.length
-            ? `All profiles sustain the ${esc(bannerLabel)} in steady state. <span class="chip">✓ KEEPS UP</span>`
-            : `${keeps} of ${ORDER.length} profiles sustain the ${esc(bannerLabel)} in steady state. <span class="chip warn">${ORDER.length - keeps} OVER INTERVAL</span>`}${tail ? ` <span class="chip warn">TAIL CAVEAT</span>` : ""}</div>
+          <div class="lead">${keepLead}${tailChip}</div>
           <p id="banner-note"></p>
         </div>
       </div>` : `
@@ -1302,6 +1333,7 @@
           <p id="banner-note"></p>
         </div>
       </div>`;
+    const bannerHTML = `<div class="banners">${goalBanner}${keepBanner}</div>`;
     const judgedTail = interval
       ? (PH && PH.sel ? ` judged against the ${esc(bannerLabel)}` : ` judged against a ${intervalMs} ms block model`)
       : "";
@@ -1433,8 +1465,21 @@
         });
         mk(Math.round(worst * 100) + " %", "peak RAM", `highest peak resident memory — ${what} — of the ${trim(ramBytes / 2 ** 30)} GiB box`);
       }
-      // banner note
+      // banner notes — the phase-goal note (its own banner) and the block-model
+      // keep-up note (its own banner) are populated independently.
       const worstP = ORDER.reduce((a, p) => hot[p].driver.ingest_total.p99.m > hot[a].driver.ingest_total.p99.m ? p : a, ORDER[0]);
+      const gn = document.getElementById("goal-note");
+      if (gn) {
+        if (goalPass < ORDER.length) {
+          const w = hot[goalWorst].driver.ingest_total;
+          const otherClause = goalPass > 0
+            ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.`
+            : "";
+          gn.innerHTML = `${ORDER.length - goalPass === 1 ? "The miss" : "The worst miss"} is the <strong>${esc(disp(goalWorst))}</strong> profile: ingest p99 <strong>${fmtNs(w.p99.m)}</strong>, over the ${fmtNsAxis(goalNs)} Phase ${PH.sel.phase} goal (worst single ledger ${fmtNs(w.max.m)}) — an overrun in the per-ledger tail (§4).${otherClause}`;
+        } else {
+          gn.innerHTML = `Every profile's ingest p99 clears the ${fmtNsAxis(goalNs)} Phase ${PH.sel.phase} goal — per-profile readout in §4.`;
+        }
+      }
       const bn = document.getElementById("banner-note");
       if (!interval) bn.textContent = "Select a phase in the target table below to view this run against Phase 1/2/3 targets.";
       else if (tail) bn.innerHTML = `The caveat lives in the tail: the <strong>${esc(disp(worstP))}</strong> profile's slowest 1 % of ledgers exceed one block interval (p99 <strong>${fmtNs(hot[worstP].driver.ingest_total.p99.m)}</strong>, worst single ledger ${fmtNs(hot[worstP].driver.ingest_total.max.m)}) — a stall localized to the RocksDB <code>apply</code> phase, not the fsync (§4). The other profiles keep even their worst ledger under one interval.`;

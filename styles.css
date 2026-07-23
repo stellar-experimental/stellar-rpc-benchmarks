@@ -154,6 +154,9 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; 
 .banner-copy { flex: 1 1 320px; min-width: 260px; }
 .banner-copy .lead { font-weight: 650; }
 .banner-copy p { margin: 2px 0 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.5; }
+/* Stacked verdict banners (phase goal + block model) read as one pair. */
+.banners { display: flex; flex-direction: column; gap: 12px; margin: 24px 0 18px; }
+.banners .banner { margin: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; letter-spacing: 0.08em;
