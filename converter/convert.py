@@ -363,15 +363,15 @@ def resolve_close_interval_ns(metadata, invocations):
 # per-ledger ingest_total p99. Cold ingestion (backfill) has no phase and no
 # targets.
 #
-# A phase that doesn't state an ingest-slice target has it derived from the
-# end-to-end latency budget:
+# The converter derives the ingest-slice target for any phase that does not
+# state one. It uses the end-to-end latency budget:
 #
 #   e2e = block_time*2 + tx_submit_p99 + ingest_p99 + client_read_p99
 #
-# Block time is counted twice because a submitted tx waits for the *next*
-# ledger (not the one being voted on) to be included, so the path spans two
-# ledger closes. The client-side submission and read latencies are held fixed
-# across phases, leaving ingest_p99 as the only unknown to solve for.
+# The formula counts block time twice: a submitted tx must wait for the next
+# ledger, not the ledger in the current vote, so the path spans two ledger
+# closes. The tx-submission and read latencies are fixed across phases. This
+# leaves ingest_p99 as the only unknown.
 TX_SUBMIT_P99_NS = 60_000_000    # P99 client → RPC submission latency (fixed)
 CLIENT_READ_P99_NS = 40_000_000  # P99 ingested → client-visible latency (fixed)
 
@@ -422,8 +422,8 @@ PHASE_TARGETS = [
     },
 ]
 
-# Fill the ingest-slice target for any phase that doesn't state one explicitly
-# (phase 2), deriving it from the end-to-end budget via the formula above.
+# Fill the ingest-slice target for any phase that does not state one (phase 2).
+# The value comes from the end-to-end budget via the formula above.
 for _p in PHASE_TARGETS:
     _p.setdefault(
         "ingest_p99_target_ns",
