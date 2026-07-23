@@ -109,6 +109,12 @@ function checkKind(kind, doc, group, reps) {
   check(group, "target/keep-up table populated", targetRows >= 2, targetRows + " rows");
   const meta = txt(doc.getElementById("machine-metadata"));
   check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
+  // Folded in from the retired ?view=hot: the six-phase guide and the
+  // all-phases per-ledger latency chart now live in the default report.
+  const guide = report.querySelector(".phase-guide");
+  check(group, "phase guide present", !!guide && /IngestLedger/.test(txt(guide)), guide ? "no IngestLedger" : "missing");
+  const f42 = txt(doc.querySelector("#fig42-tv"));
+  check(group, "all phases in fig42 table", /extract/.test(f42) && /commit \(fsync\)/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
 }
 
 function checkSanity(kind, doc, group) {
@@ -160,49 +166,31 @@ for (const run of manifest.runs) {
   window.close();
 }
 
-/* ---------------- hot-ingestion view (?view=hot) ---------------- */
-/* The unit-label assertions (OZ token) need a run whose unit_meta carries
-   labels (from --unit-facts); campaign runs may not have them. */
+/* ---------------- unit-label display in the default report ---------------- */
+/* The OZ-token assertion needs a run whose unit_meta carries labels (from
+   --unit-facts); campaign runs may not have them. Guards the unit-facts label
+   path in the synthetic renderer. */
 const synthRun = manifest.runs.find((r) => r.kind === "synthetic"
   && Object.values(runJSON(r.id).dataset.unit_meta || {}).some((m) => m && m.label));
 if (synthRun) {
-  const group = "synthetic hot-view";
-  console.log(`\n=== ${synthRun.id} (?view=hot) ===`);
-  const { window, errors } = await loadViewer(`?run=${synthRun.id}&view=hot`);
+  const group = "synthetic labels";
+  console.log(`\n=== ${synthRun.id} (unit labels) ===`);
+  const { window, errors } = await loadViewer(`?run=${synthRun.id}`);
   const doc = window.document;
-  const report = doc.getElementById("report");
   check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
-  check(group, "masthead present", !!report.querySelector(".masthead"), "missing");
-  check(group, "extended chart rendered", !!doc.querySelector("#fig42-body svg"), "missing");
-  const f42 = txt(doc.querySelector("#fig42-tv"));
-  check(group, "all phases in fig42 table", /commit \(fsync\)/.test(f42) && /extract/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
-  const targetRows = report.querySelectorAll("#target-table tr").length;
-  check(group, "keep-up table populated", targetRows >= 2, targetRows + " rows");
-  check(group, "keep-up table has KEEPS UP", /KEEPS UP/.test(txt(doc.getElementById("target-table"))), "missing");
-  const meta = txt(doc.getElementById("machine-metadata"));
-  check(group, "methodology metadata filled", meta.length > 100, meta.length + " chars");
-  const reportTxt = txt(report);
-  check(group, "Hot-run semantics present", /Hot-run semantics/.test(reportTxt), "missing");
-  check(group, "Cold-run semantics dropped", !/Cold-run semantics/.test(reportTxt), "present");
-  const guide = report.querySelector(".phase-guide");
-  check(group, "phase guide present", !!guide, "missing");
-  check(group, "phase guide mentions IngestLedger", /IngestLedger/.test(txt(guide)), "missing");
-  check(group, "OZ token label shown", txt(report).includes("OZ token"), "missing");
+  check(group, "OZ token label shown", txt(doc.getElementById("report")).includes("OZ token"), "missing");
   window.close();
 }
 
-/* ---------------- hot-ingestion view — pubnet (?view=hot) ---------------- */
+/* Guards the numeric-id label prefix (T6) in the pubnet renderer. */
 const pubnetRun = manifest.runs.find((r) => r.kind === "pubnet");
 if (pubnetRun) {
-  const group = "pubnet hot-view";
-  console.log(`\n=== ${pubnetRun.id} (?view=hot) ===`);
-  const { window, errors } = await loadViewer(`?run=${pubnetRun.id}&view=hot`);
+  const group = "pubnet labels";
+  console.log(`\n=== ${pubnetRun.id} (unit labels) ===`);
+  const { window, errors } = await loadViewer(`?run=${pubnetRun.id}`);
   const doc = window.document;
-  const report = doc.getElementById("report");
   check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
-  check(group, "extended chart rendered", !!doc.querySelector("#fig42-body svg"), "missing");
-  // Guards the numeric-id label prefix (T6) and the data-driven units line (T5).
-  check(group, "Chunk 3000 label present", txt(report).includes("Chunk 3000"), "missing");
+  check(group, "Chunk 3000 label present", txt(doc.getElementById("report")).includes("Chunk 3000"), "missing");
   window.close();
 }
 
@@ -260,23 +248,11 @@ if (phaseRun) {
     check(group, "ingest target line re-based to 100 ms", /100 ms — Phase 3 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
     const readout = txt(doc.getElementById("ingest-target-readout"));
     check(group, "readout vs Phase 3 target 100 ms", /vs Phase 3 target 100 ms/.test(readout), readout.slice(0, 140));
+    // The pacing figure's budget is always the run's ACTUAL close interval —
+    // never re-based when another phase is selected.
+    const paceReadout = txt(doc.getElementById("pace-readout-full"));
+    check(group, "pace budget = actual 2 s close interval (not re-based by phase)", /2\.00 s close interval/.test(paceReadout), paceReadout.slice(0, 160));
     window.close();
-  }
-
-  {
-    const group = "phase pace-lag";
-    for (const [name, query] of [["default", `?run=${phaseRun.id}&view=hot`], ["?phase=3", `?run=${phaseRun.id}&view=hot&phase=3`]]) {
-      console.log(`\n=== ${phaseRun.id} (?view=hot pacing, ${name}) ===`);
-      const { window, errors } = await loadViewer(query);
-      const doc = window.document;
-      check(group, `zero JS/console errors (${name})`, errors.length === 0, errors.join(" | ") || "");
-      // The pacing figure's budget is always the run's ACTUAL close interval —
-      // never re-based when another phase is selected.
-      const paceReadout = txt(doc.getElementById("pace-readout"));
-      check(group, `pace budget = actual 2 s close interval (${name})`, /2\.00 s close interval/.test(paceReadout), paceReadout.slice(0, 160));
-      check(group, `phase table present in hot view (${name})`, !!doc.querySelector("#phase-block table.phase-table"), "missing");
-      window.close();
-    }
   }
 }
 

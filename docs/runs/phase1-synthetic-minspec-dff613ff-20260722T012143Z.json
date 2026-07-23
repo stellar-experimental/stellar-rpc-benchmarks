@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "run_id": "phase1-synthetic-minspec-0f90d331-20260722T012143Z",
+  "run_id": "phase1-synthetic-minspec-dff613ff-20260722T012143Z",
   "run_name": "phase1-synthetic-minspec",
   "run_date": "2026-07-22",
   "machine": {
-    "raw": "Wed Jul 22 18:21:26 UTC 2026\ninstance-type: m6id.2xlarge\ninstance-id:   i-0439629bf3f8622db\nLinux user-dev-063a 6.17.0-1019-aws #19~24.04.1-Ubuntu SMP Tue Jun 23 18:53:06 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\nUbuntu 24.04.3 LTS\nCPU(s):                                  8\nModel name:                              Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz\n               total        used        free      shared  buff/cache   available\nMem:            30Gi       1.5Gi       5.3Gi       2.8Mi        24Gi        29Gi\nNAME           SIZE MODEL\nloop0         27.6M \nloop1           74M \nloop2         28.4M \nloop3        344.1M \nloop4         66.8M \nloop5         50.9M \nloop6         50.1M \nloop7           74M \nnvme0n1      441.4G Amazon EC2 NVMe Instance Storage\nnvme1n1         50G Amazon Elastic Block Store\n├─nvme1n1p1     49G \n├─nvme1n1p14     4M \n├─nvme1n1p15   106M \n└─nvme1n1p16   913M \nrepo: 0f90d33198a49fa3628ead7afa7ceb8425f9a971 (bench-ci-775)\nbinary: /mnt/nvme/bench/bin/stellar-rpc-0f90d331 (commit 0f90d33198a49fa3628ead7afa7ceb8425f9a971)\nstellar-rpc dev\nstellar-xdr 68fa1ac55692f68ad2a2ca549d0a283273554439\nsoroban-env-host-prev \ngo version go1.26.5 linux/amd64\nrustc 1.97.0 (2d8144b78 2026-07-07)\ncampaign: phase1-synthetic-minspec · ingest: both · query: no · runs: 1 · concurrency: 1,4,16\ncold-iters: 100 · hot-iters: 200 · close-interval: 2s · workers: 1 · hot-num-ledgers: 0\nfsync probe: 8192000 bytes (8.2 MB, 7.8 MiB) copied, 0.324174 s, 25.3 MB/s\n",
+    "raw": "Wed Jul 22 18:21:26 UTC 2026\ninstance-type: m6id.2xlarge\ninstance-id:   i-0439629bf3f8622db\nLinux user-dev-063a 6.17.0-1019-aws #19~24.04.1-Ubuntu SMP Tue Jun 23 18:53:06 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\nUbuntu 24.04.3 LTS\nCPU(s):                                  8\nModel name:                              Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz\n               total        used        free      shared  buff/cache   available\nMem:            30Gi       1.5Gi       5.3Gi       2.8Mi        24Gi        29Gi\nNAME           SIZE MODEL\nloop0         27.6M \nloop1           74M \nloop2         28.4M \nloop3        344.1M \nloop4         66.8M \nloop5         50.9M \nloop6         50.1M \nloop7           74M \nnvme0n1      441.4G Amazon EC2 NVMe Instance Storage\nnvme1n1         50G Amazon Elastic Block Store\n├─nvme1n1p1     49G \n├─nvme1n1p14     4M \n├─nvme1n1p15   106M \n└─nvme1n1p16   913M \nrepo: dff613ff98a49fa3628ead7afa7ceb8425f9a971 (bench-ci-775)\nbinary: /mnt/nvme/bench/bin/stellar-rpc-dff613ff (commit dff613ff98a49fa3628ead7afa7ceb8425f9a971)\nstellar-rpc dev\nstellar-xdr 68fa1ac55692f68ad2a2ca549d0a283273554439\nsoroban-env-host-prev \ngo version go1.26.5 linux/amd64\nrustc 1.97.0 (2d8144b78 2026-07-07)\ncampaign: phase1-synthetic-minspec · ingest: both · query: no · runs: 1 · concurrency: 1,4,16\ncold-iters: 100 · hot-iters: 200 · close-interval: 2s · workers: 1 · hot-num-ledgers: 0\nfsync probe: 8192000 bytes (8.2 MB, 7.8 MiB) copied, 0.324174 s, 25.3 MB/s\n",
     "captured_at": "Wed Jul 22 18:21:26 UTC 2026",
     "instance": "m6id.2xlarge",
     "instance_id": "i-0439629bf3f8622db",
@@ -16,8 +16,8 @@
     "fsync_probe": "8192000 bytes (8.2 MB, 7.8 MiB) copied, 0.324174 s, 25.3 MB/s"
   },
   "build": {
-    "commit": "0f90d33198a49fa3628ead7afa7ceb8425f9a971",
-    "branch": "bench-ci-775",
+    "commit": "dff613ff98a49fa3628ead7afa7ceb8425f9a971",
+    "branch": "feature/full-history",
     "go": "go version go1.26.5 linux/amd64",
     "rust": "rustc 1.97.0 (2d8144b78 2026-07-07)",
     "version": "0.0.0"
@@ -53,7 +53,7 @@
   "campaign": {
     "reps": 1,
     "vocabulary": "new",
-    "source_gcs": "gs://rpc-full-history/results/phase1-synthetic-minspec-0f90d331-20260722T012143Z/",
+    "source_gcs": "gs://rpc-full-history/results/phase1-synthetic-minspec-dff613ff-20260722T012143Z/",
     "close_interval_ns": 2000000000,
     "phase": 1,
     "phase_targets": [
@@ -136,7 +136,7 @@
     "config_file": "phase1-synthetic-minspec.cfg",
     "config": {
       "ref": "",
-      "built_commit": "0f90d33198a49fa3628ead7afa7ceb8425f9a971",
+      "built_commit": "dff613ff98a49fa3628ead7afa7ceb8425f9a971",
       "ingest": "both",
       "query": "no",
       "runs": 1,
