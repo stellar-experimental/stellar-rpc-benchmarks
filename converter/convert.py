@@ -356,78 +356,49 @@ def resolve_close_interval_ns(metadata, invocations):
 
 # ------------------------------------------------------------- phase targets
 # Phase 1/2/3 performance targets for HOT ingestion (the numbers are public:
-# stellar/stellar-rpc issues #872-#874). Copied verbatim into every
-# campaign-layout run JSON as campaign.phase_targets so the viewer reads the
-# targets as data and holds no target constants of its own. The ingest-slice
-# target (ingest_p99_target_ns) is the row this benchmark measures — the
-# per-ledger ingest_total p99. Cold ingestion (backfill) has no phase and no
-# targets.
+# stellar/stellar-rpc issues #872-#874). They live in docs/targets.json — the
+# single source shared by this converter, the reports viewer, and the latency
+# model. The converter loads them here and copies them verbatim into every
+# campaign-layout run JSON as campaign.phase_targets, so the viewer can read the
+# targets as data. The ingest-slice target (ingest_p99_target_ns) is the row
+# this benchmark measures — the per-ledger ingest_total p99. Cold ingestion
+# (backfill) has no phase and no targets.
 #
 # The converter derives the ingest-slice target for any phase that does not
 # state one. It uses the end-to-end latency budget:
 #
 #   e2e = block_time*2 + tx_submit_p99 + ingest_p99 + client_read_p99
 #
-# The formula counts block time twice: a submitted tx must wait for the next
-# ledger, not the ledger in the current vote, so the path spans two ledger
-# closes. The tx-submission and read latencies are fixed across phases. This
-# leaves ingest_p99 as the only unknown.
-TX_SUBMIT_P99_NS = 60_000_000    # P99 client → RPC submission latency (fixed)
-CLIENT_READ_P99_NS = 40_000_000  # P99 ingested → client-visible latency (fixed)
+# The formula counts block time once per ledger close on the path (block_count,
+# a per-phase consensus plan: 2 for phases 1-2, 3 for phase 3). The tx-submission
+# and read latencies are fixed across phases. This leaves ingest_p99 as the only
+# unknown.
+TARGETS_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "docs", "targets.json")
+
+with open(TARGETS_PATH, encoding="utf-8") as _f:
+    _TARGETS = json.load(_f)
+
+_FIXED = _TARGETS["fixed_estimates"]
+TX_SUBMIT_P99_NS = _FIXED["tx_submit_p99_ns"]    # P99 client → RPC submission (fixed)
+CLIENT_READ_P99_NS = _FIXED["client_read_p99_ns"]  # P99 ingested → client-visible (fixed)
 
 
-def ingest_p99_target(block_time_ns, e2e_budget_ns):
+def ingest_p99_target(block_time_ns, e2e_budget_ns, block_count=2):
     """Ingest-slice p99 budget implied by the end-to-end latency formula."""
-    return e2e_budget_ns - 2 * block_time_ns - TX_SUBMIT_P99_NS - CLIENT_READ_P99_NS
+    return (e2e_budget_ns - block_count * block_time_ns
+            - TX_SUBMIT_P99_NS - CLIENT_READ_P99_NS)
 
 
-PHASE_TARGETS = [
-    {
-        "phase": 1,
-        "block_time_ns": 2_000_000_000,
-        "e2e_budget_ns": 5_000_000_000,
-        "ingest_p99_target_ns": 900_000_000,
-        "workloads": [
-            {"name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000},
-            {"name": "OZ token transfers", "tps": 2000, "tx_per_ledger": 4000},
-            {"name": "Soroswap swaps", "tps": 750, "tx_per_ledger": 1500},
-        ],
-        "orgs": 10,
-        "retention": "3 months",
-    },
-    {
-        "phase": 2,
-        "block_time_ns": 1_000_000_000,
-        "e2e_budget_ns": 2_500_000_000,
-        "workloads": [
-            {"name": "SAC transfers", "tps": 5000, "tx_per_ledger": 5000},
-            {"name": "OZ token transfers", "tps": 4000, "tx_per_ledger": 4000},
-            {"name": "Soroswap swaps", "tps": 1500, "tx_per_ledger": 1500},
-        ],
-        "orgs": 19,
-        "retention": "6 months",
-    },
-    {
-        "phase": 3,
-        "block_time_ns": 600_000_000,
-        "e2e_budget_ns": 2_000_000_000,
-        "ingest_p99_target_ns": 100_000_000,
-        "workloads": [
-            {"name": "SAC transfers", "tps": 10000, "tx_per_ledger": 6000},
-            {"name": "OZ token transfers", "tps": 6000, "tx_per_ledger": 3600},
-            {"name": "Soroswap swaps", "tps": 3000, "tx_per_ledger": 1800},
-        ],
-        "orgs": 31,
-        "retention": "2 years",
-    },
-]
+PHASE_TARGETS = _TARGETS["phases"]
 
 # Fill the ingest-slice target for any phase that does not state one (phase 2).
 # The value comes from the end-to-end budget via the formula above.
 for _p in PHASE_TARGETS:
     _p.setdefault(
         "ingest_p99_target_ns",
-        ingest_p99_target(_p["block_time_ns"], _p["e2e_budget_ns"]),
+        ingest_p99_target(_p["block_time_ns"], _p["e2e_budget_ns"],
+                          _p.get("block_count", 2)),
     )
 
 

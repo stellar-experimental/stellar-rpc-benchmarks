@@ -108,14 +108,22 @@ generic table view — never crash.
 ## Phase 1/2/3 performance targets (campaign layout)
 
 The performance program defines three load phases for hot ingestion. The numbers are
-public (stellar/stellar-rpc issues #872–#874). The converter matches a campaign run's
-phase from `campaign.close_interval_ns`: `2000000000` → phase 1, `1000000000` → phase 2,
-`600000000` → phase 3. The match must be exact. Any other paced value gives a pace-only
-run with no phase. An unpaced run (0 or absent) gets no phase and no keep-up check.
+public (stellar/stellar-rpc issues #872–#874) and live in **`docs/targets.json`** — the
+single source of truth shared by the converter, the reports viewer (`docs/app.js`), and
+the latency model (`docs/latency-model.html`). Edit a target once, there: the viewer and
+model fetch `targets.json` live, and the converter reads it to fill `PHASE_TARGETS`.
+`targets.json` also holds the two fixed E2E estimates (`fixed_estimates.tx_submit_p99_ns`,
+`fixed_estimates.client_read_p99_ns`).
+
+The converter matches a campaign run's phase from `campaign.close_interval_ns`:
+`2000000000` → phase 1, `1000000000` → phase 2, `600000000` → phase 3. The match must be
+exact. Any other paced value gives a pace-only run with no phase. An unpaced run (0 or
+absent) gets no phase and no keep-up check.
 
 The converter copies the full three-phase table into `campaign.phase_targets` of every
-campaign-layout run. The duplication is intentional: the viewer reads the targets as
-data and holds no target constants of its own. Each entry has:
+campaign-layout run. That baked copy pins each run to the targets in force when it was
+converted and lets the viewer degrade gracefully offline; the live viewer/model prefer
+`targets.json` and use the baked copy only as a fallback. Each entry has:
 
 ```jsonc
 { "phase": 1,

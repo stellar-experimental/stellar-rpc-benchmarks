@@ -42,6 +42,9 @@
   .prov .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
   .prov.measured  { color: var(--s1);  background: color-mix(in srgb, var(--s1) 13%, transparent); }
   .prov.measured .sw  { background: var(--s1); }
+  .prov.target { color: var(--s1); background: color-mix(in srgb, var(--s1) 10%, transparent);
+                 border: 1px dashed color-mix(in srgb, var(--s1) 55%, transparent); }
+  .prov.target .sw { background: repeating-linear-gradient(45deg, var(--s1) 0 3px, transparent 3px 6px); }
   .prov.estimated { color: var(--ink-2); background: color-mix(in srgb, var(--ink) 6%, transparent);
                     border: 1px dashed var(--baseline); }
   .prov.estimated .sw { background: repeating-linear-gradient(45deg, var(--ink-2) 0 2px, transparent 2px 4px);
@@ -66,75 +69,55 @@
   .term-card .tc-entity b { color: var(--ink-2); font-weight: 600; }
   .term-card p { font-size: 13px; color: var(--ink-2); margin: 0; line-height: 1.5; max-width: none; }
 
-  /* --- calculator --- */
-  .calc { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-          padding: 20px 22px; margin: 18px 0; }
-  .calc-modes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
-  .mode-btn {
+  /* --- phase selector (segmented control) --- */
+  .phase-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+  .phase-pick .plab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+                      letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .phase-pill {
     font: 650 13px/1 -apple-system, "Segoe UI", system-ui, sans-serif;
     color: var(--ink-2); background: var(--page); border: 1px solid var(--border);
-    border-radius: 999px; padding: 8px 16px; cursor: pointer;
+    border-radius: 999px; padding: 8px 15px; cursor: pointer;
   }
-  .mode-btn small { display: block; font-weight: 500; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
-  .mode-btn:hover { border-color: var(--accent); color: var(--ink); }
-  .mode-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .mode-btn[aria-pressed="true"] small { color: rgba(255,255,255,0.8); }
-  .mode-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .phase-pill small { display: block; font-weight: 500; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .phase-pill:hover { border-color: var(--accent); color: var(--ink); }
+  .phase-pill[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .phase-pill[aria-pressed="true"] small { color: rgba(255,255,255,0.8); }
+  .phase-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  .presets { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0 2px; }
-  .presets .plab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
-                   letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-  .preset-btn {
-    font: 600 12.5px/1 -apple-system, "Segoe UI", system-ui, sans-serif;
-    color: var(--ink-2); background: var(--page); border: 1px solid var(--border);
-    border-radius: 999px; padding: 6px 13px; cursor: pointer;
-  }
-  .preset-btn small { font-weight: 500; color: var(--muted); font-size: 10.5px; }
-  .preset-btn:hover { border-color: var(--accent); color: var(--ink); }
-  .preset-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* --- goal | current comparison panels --- */
+  .cmp { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 18px 0 6px; }
+  @media (min-width: 900px) { .cmp { grid-template-columns: 1fr 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .panel.current { border-color: color-mix(in srgb, var(--s1) 45%, var(--border)); }
+  .panel-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .panel-kicker { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+                  letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .panel-kicker b { color: var(--ink-2); font-weight: 700; }
+  .panel-sub { color: var(--ink-2); font-size: 12.5px; margin: 2px 0 0; line-height: 1.5; }
 
-  .controls { display: grid; gap: 4px; margin-top: 16px; }
-  .ctrl-row {
-    display: grid; grid-template-columns: 1fr; gap: 6px 14px;
-    padding: 13px 0; border-top: 1px solid var(--grid);
+  /* run selector */
+  .run-pick { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 12px 0 2px; }
+  .run-pick label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+                    letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .run-pick select {
+    font: 600 13px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; max-width: 100%; cursor: pointer;
   }
-  @media (min-width: 680px) {
-    .ctrl-row { grid-template-columns: 15em 1fr 8.5em; align-items: center; }
-  }
-  .ctrl-row .cl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .ctrl-row .cl .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; background: var(--tp); }
-  .ctrl-row .cl .nm { font-weight: 620; font-size: 13.5px; }
-  .ctrl-row .cl .x2t { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--muted); }
-  .ctrl-row input[type=range] { width: 100%; accent-color: var(--tp); cursor: pointer; }
-  .num-wrap { display: inline-flex; align-items: center; gap: 5px; justify-self: end; }
-  .num-wrap input[type=number] {
-    width: 5.4em; font: 600 14px/1 ui-monospace, Menlo, Consolas, monospace;
-    color: var(--ink); background: var(--page); border: 1px solid var(--border);
-    border-radius: 7px; padding: 8px 9px; text-align: right; font-variant-numeric: tabular-nums;
-  }
-  .num-wrap input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .num-wrap .unit { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--muted); }
-  .ctrl-row.is-output { opacity: 0.95; }
-  .ctrl-row.is-output .sublabel { font-size: 11px; color: var(--muted); }
-  .ctrl-row.is-disabled { opacity: 0.42; }
-  .ctrl-row.is-disabled input { pointer-events: none; }
-  .solved-badge {
-    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px;
-    letter-spacing: 0.09em; text-transform: uppercase; color: var(--s1);
-    background: color-mix(in srgb, var(--s1) 13%, transparent); padding: 2px 7px; border-radius: 999px;
-  }
+  .run-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .measured-src { font-size: 12px; color: var(--ink-2); margin: 8px 0 2px; line-height: 1.5; }
+  .measured-src code { font-size: 11px; }
 
-  /* --- result --- */
-  .result { margin-top: 22px; border-top: 2px solid var(--baseline); padding-top: 20px; }
-  .result-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
-  .result-k { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
-              letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-  .result-big { font-size: clamp(34px, 6vw, 48px); font-weight: 760; letter-spacing: -0.02em; line-height: 1; }
-  .result-sub { color: var(--ink-2); font-size: 13.5px; margin: 6px 0 0; }
+  /* E2E headline inside a panel */
+  .e2e { margin-top: 16px; }
+  .e2e-k { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
+           letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .e2e-big { font-size: clamp(28px, 5vw, 40px); font-weight: 760; letter-spacing: -0.02em; line-height: 1.05; }
+  .verdict-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .verdict {
-    display: inline-flex; align-items: center; gap: 7px; margin-left: auto;
-    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; letter-spacing: 0.04em;
-    padding: 6px 13px; border-radius: 999px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; letter-spacing: 0.03em;
+    padding: 5px 11px; border-radius: 999px; font-weight: 600;
   }
   .verdict.pass { color: var(--good-text); background: color-mix(in srgb, var(--good) 11%, transparent);
                   border: 1px solid color-mix(in srgb, var(--good) 45%, transparent); }
@@ -142,9 +125,9 @@
                   border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 
   /* stacked bar */
-  .bar-wrap { margin: 20px 0 6px; }
+  .bar-wrap { margin: 16px 0 6px; }
   .bar {
-    position: relative; display: flex; width: 100%; height: 46px;
+    position: relative; display: flex; width: 100%; height: 42px;
     border-radius: 9px; overflow: hidden; background: var(--page);
     border: 1px solid var(--border);
   }
@@ -152,6 +135,8 @@
          display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .seg.estimated { background-image: repeating-linear-gradient(45deg,
                      rgba(255,255,255,0.30) 0 5px, transparent 5px 10px); }
+  .seg.target { background-image: repeating-linear-gradient(45deg,
+                     rgba(255,255,255,0.42) 0 5px, transparent 5px 10px); }
   .seg .seg-lab { font: 650 10.5px/1 ui-monospace, Menlo, Consolas, monospace; color: #fff;
                   white-space: nowrap; padding: 0 6px; text-shadow: 0 1px 2px rgba(0,0,0,0.35); }
   .seg.empty { background: var(--page); flex: 1 1 auto; }
@@ -163,22 +148,21 @@
   }
 
   /* breakdown table */
-  table.bd { border-collapse: collapse; width: 100%; margin-top: 22px; font-size: 12.5px; }
-  table.bd th { text-align: right; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
+  table.bd { border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 12px; }
+  table.bd th { text-align: right; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px;
     letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 500;
     padding: 4px 10px 7px 0; border-bottom: 1px solid var(--baseline); }
   table.bd th:first-child, table.bd td:first-child { text-align: left; padding-left: 0; }
-  table.bd td { text-align: right; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--grid);
+  table.bd td { text-align: right; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--grid);
     font-family: ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; color: var(--ink); }
   table.bd td.comp { color: var(--ink); font-family: -apple-system, "Segoe UI", system-ui, sans-serif; }
   table.bd td.comp .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
     margin-right: 8px; vertical-align: -1px; background: var(--tp); }
-  table.bd td.ent { text-align: left; color: var(--ink-2); font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 11px; }
-  table.bd .share-bar { display: inline-block; height: 7px; border-radius: 2px; background: var(--tp); vertical-align: 1px;
-    margin-left: 8px; }
-  table.bd tr.total td { border-bottom: none; border-top: 2px solid var(--baseline); font-weight: 700; padding-top: 10px; }
+  table.bd tr.total td { border-bottom: none; border-top: 2px solid var(--baseline); font-weight: 700; padding-top: 9px; }
   table.bd tr.total td.comp { font-weight: 700; }
+
+  .loading, .error-box { font-size: 13px; color: var(--ink-2); padding: 14px 0; }
+  .error-box { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -200,9 +184,9 @@
     <p class="mast-sub">
       A transaction makes a round trip: the client submits it, the network reaches consensus, RPC ingests
       the ledger, and the client reads it back. The trip crosses several systems. This tool splits the
-      end-to-end (E2E) budget into its parts. It shows <strong>where the time goes and which entity owns
-      the bottleneck</strong>. The tool models <strong>hot ingestion only</strong> — ledgers that RPC
-      ingests live as they close. It does not model backfill.
+      end-to-end (E2E) latency into its parts and compares two things: the <strong>fixed goal</strong> the
+      team set for a phase, and the <strong>current state</strong> measured by a benchmark run. It models
+      <strong>hot ingestion only</strong> — ledgers RPC ingests live as they close. It does not model backfill.
     </p>
   </header>
 
@@ -220,7 +204,7 @@
     <div class="formula" id="formula">
       <span class="term-pill network" style="--tp:var(--hot)">E2E</span>
       <span class="eq">=</span>
-      <span class="term-pill network" style="--tp:var(--hot)">block time<span class="x2">× 2</span></span>
+      <span class="term-pill network" style="--tp:var(--hot)">block time<span class="x2">× N</span></span>
       <span class="op">+</span>
       <span class="term-pill estimated" style="--tp:var(--s5)">tx submission</span>
       <span class="op">+</span>
@@ -230,28 +214,31 @@
     </div>
 
     <div class="prov-legend">
-      <span class="prov measured"><span class="sw"></span>Measured <small>— from a benchmark</small></span>
+      <span class="prov network"><span class="sw"></span>Core team <small>— engineered by the Stellar Core team</small></span>
       <span class="prov estimated"><span class="sw"></span>Estimated <small>— a placeholder until measured</small></span>
-      <span class="prov network"><span class="sw"></span>Network target <small>— a network setting</small></span>
+      <span class="prov target"><span class="sw"></span>Goal target <small>— the Platform team's ingestion target</small></span>
+      <span class="prov measured"><span class="sw"></span>Measured <small>— from a benchmark run</small></span>
     </div>
 
     <div class="term-cards">
       <div class="term-card" style="--tp:var(--hot)">
         <div class="tc-head">
-          <span class="tc-name">Block time × 2</span>
-          <span class="prov network"><span class="sw"></span>Network target</span>
+          <span class="tc-name">Block time × N</span>
+          <span class="prov network"><span class="sw"></span>Core team</span>
         </div>
-        <div class="tc-entity">entity · <b>Stellar network (consensus)</b></div>
-        <p>The ledger close interval. The formula counts it <strong>twice</strong>. A submitted transaction
-          must wait for the <em>next</em> ledger, not the ledger in the current vote. So the path spans two
-          ledger closes.</p>
+        <div class="tc-entity">entity · <b>Stellar Core team · consensus + execution</b></div>
+        <p>The ledger close interval, counted once per ledger close on the transaction's path (<strong>N</strong>).
+          The <strong>Stellar Core team</strong> owns this slice. In phases 1–2 a transaction spans <strong>2</strong>
+          closes — it waits for the <em>next</em> ledger, not the one in the current vote. In phase 3, Core's
+          consensus + execution pipelining requires <strong>3</strong> closes for a transaction to complete. The
+          calculator below shows the value for the selected phase.</p>
       </div>
       <div class="term-card" style="--tp:var(--s5)">
         <div class="tc-head">
           <span class="tc-name">P99 tx submission</span>
           <span class="prov estimated"><span class="sw"></span>Estimated</span>
         </div>
-        <div class="tc-entity">entity · <b>Client → RPC v2</b></div>
+        <div class="tc-entity">entity · <b>Platform team · Client → RPC v2</b></div>
         <p>The time for a transaction to travel from the client to Stellar RPC v2. This value is an estimate.
           A measured value from RPC v2 will replace it.</p>
       </div>
@@ -260,7 +247,7 @@
           <span class="tc-name">P99 ingestion</span>
           <span class="prov measured"><span class="sw"></span>Measured</span>
         </div>
-        <div class="tc-entity">entity · <b>Stellar Core → RPC</b></div>
+        <div class="tc-entity">entity · <b>Platform team · Stellar Core → RPC</b></div>
         <p>The time from meta available in captive core (the externalized ledger) to ingested in RPC. The
           benchmarks measure this slice. It is the slice this project makes faster.</p>
       </div>
@@ -269,52 +256,39 @@
           <span class="tc-name">P99 query</span>
           <span class="prov estimated"><span class="sw"></span>Estimated</span>
         </div>
-        <div class="tc-entity">entity · <b>RPC → client</b></div>
+        <div class="tc-entity">entity · <b>Platform team · RPC → client</b></div>
         <p>The time from ingested in RPC to the client having that information, for example a GetTransaction
           call. This value is an estimate. A measured value will replace it after a query benchmark.</p>
       </div>
     </div>
   </section>
 
-  <!-- =============================== calculator =============================== -->
-  <section id="calc-sec">
+  <!-- =============================== goal vs current =============================== -->
+  <section id="cmp-sec">
     <div class="sec-head">
       <span class="sec-num">02</span>
-      <h2>Calculator</h2>
+      <h2>Goal vs. current</h2>
     </div>
     <p class="sec-intro">
-      Drag the sliders or type exact values. <strong>Forward</strong> mode adds the slices into an E2E total
-      and shows the bottleneck. <strong>Reverse</strong> mode fixes an E2E budget and solves for the
-      ingestion latency that meets it.
+      Pick a phase to load its <strong>fixed goal</strong>. Pick a run to measure the <strong>current
+      state</strong>. Both E2E totals are derived from the formula — never controlled directly. The E2E
+      budget the team declared for the phase is drawn as a <strong>ceiling</strong> on each bar.
     </p>
 
-    <div class="calc" id="calc" data-mode="forward">
-      <div class="calc-modes" role="group" aria-label="Calculator mode">
-        <button class="mode-btn" data-mode="forward" aria-pressed="true" type="button">
-          Forward<small>slices → E2E total</small></button>
-        <button class="mode-btn" data-mode="reverse" aria-pressed="false" type="button">
-          Reverse<small>budget → required ingestion</small></button>
-      </div>
-
-      <div class="presets">
-        <span class="plab">Load phase</span>
-        <button class="preset-btn" data-preset="1" type="button">Phase 1 <small>2 s · 5 s</small></button>
-        <button class="preset-btn" data-preset="2" type="button">Phase 2 <small>1 s · 2.5 s</small></button>
-        <button class="preset-btn" data-preset="3" type="button">Phase 3 <small>0.6 s · 2 s</small></button>
-      </div>
-
-      <div class="controls" id="controls"><!-- rows injected by JS --></div>
-
-      <div class="result" id="result"><!-- result injected by JS --></div>
+    <div class="phase-pick" id="phase-pick" role="group" aria-label="Phase (fixed goal)">
+      <span class="plab">Goal phase</span>
+      <!-- phase pills injected by JS -->
     </div>
+
+    <div class="cmp" id="cmp"><!-- goal + current panels injected by JS --></div>
 
     <p class="phase-caption" id="source-note"></p>
   </section>
 
   <div class="footer">
-    The ingestion default is the SAC hot-ingest p99 from the Phase&nbsp;2 run (m6id.2xlarge). The estimated
-    slices (tx submission and query) are placeholders. Measured values will replace them after their
-    benchmarks. See <code>SCHEMA.md</code> and the
+    The goal numbers live in <code>docs/targets.json</code> — the single source shared by this model and the
+    benchmark reports. The ingestion slice is measured; tx submission and query are estimates until their
+    benchmarks land. See <code>SCHEMA.md</code> and the
     <a href="./" class="meta-v" style="color:var(--accent)">benchmark reports</a> for the source data.
   </div>
 </div>
@@ -332,290 +306,289 @@
   }
   themeBtn.addEventListener("click", () => {
     document.documentElement.setAttribute("data-theme", currentTheme() === "dark" ? "light" : "dark");
+    if (STATE.phase != null) render();
   });
-
-  /* ---- constants: measured default + fixed estimates + phase presets ---- */
-  // Measured SAC hot-ingest p99 (driver.ingest_total.p99), Phase 2 run.
-  const MEASURED_INGEST_MS = 604;
-  const EST_TX_MS = 60;      // P99 tx submission (client → RPC v2), estimated
-  const EST_QUERY_MS = 40;   // P99 query (ingested in RPC → client), estimated
-  const PHASES = {
-    1: { block: 2000, budget: 5000 },
-    2: { block: 1000, budget: 2500 },
-    3: { block: 600,  budget: 2000 },
-  };
 
   /* ---- component model (order = formula order) ---- */
   const COMPONENTS = [
-    { key: "block",  label: "Block time",     x2: true,  entity: "Stellar network",   prov: "network",   colorVar: "--hot" },
-    { key: "tx",     label: "Tx submission",  x2: false, entity: "Client → RPC v2",    prov: "estimated", colorVar: "--s5"  },
-    { key: "ingest", label: "Ingestion",      x2: false, entity: "Stellar Core → RPC", prov: "measured",  colorVar: "--s1"  },
-    { key: "query",  label: "Query",          x2: false, entity: "RPC → client",       prov: "estimated", colorVar: "--s3"  },
+    { key: "block",  label: "Block time",    entity: "Stellar Core team · consensus + execution", colorVar: "--hot", prov: "network"   },
+    { key: "tx",     label: "Tx submission", entity: "Platform team · Client → RPC v2",           colorVar: "--s5",  prov: "estimated" },
+    { key: "ingest", label: "Ingestion",     entity: "Platform team · Stellar Core → RPC",        colorVar: "--s1",  prov: "measured"  },
+    { key: "query",  label: "Query",         entity: "Platform team · RPC → client",              colorVar: "--s3",  prov: "estimated" },
   ];
 
-  /* ---- state (all values in ms) ---- */
-  const state = { block: 1000, tx: EST_TX_MS, ingest: MEASURED_INGEST_MS, query: EST_QUERY_MS, budget: 2500 };
-  let mode = "forward";
+  /* ---- module state ---- */
+  let TARGETS = null;      // parsed targets.json
+  let MANIFEST = null;     // parsed runs/index.json
+  const RUN = { id: null, meta: null, data: null, measured: null, error: null, loading: false };
+  const STATE = { phase: null, runId: null };
 
-  const RANGE = {
-    block:  { min: 0, max: 3000, step: 50 },
-    tx:     { min: 0, max: 500,  step: 5  },
-    ingest: { min: 0, max: 2000, step: 10 },
-    query:  { min: 0, max: 500,  step: 5  },
-    budget: { min: 0, max: 6000, step: 50 },
-  };
-
-  /* ---- formatting ---- */
-  function fmt(ms) {
+  /* ---- formatting (all durations are nanoseconds) ---- */
+  function fmt(ns) {
+    if (ns == null || !isFinite(ns)) return "—";
+    const ms = ns / 1e6;
     if (ms >= 1000) { const s = ms / 1000; return (Math.round(s * 100) / 100) + " s"; }
     return (Math.round(ms * 10) / 10) + " ms";
   }
-  const contrib = c => (c.x2 ? 2 : 1) * state[c.key];
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
-  /* ---- build the input rows ---- */
-  const controlsEl = document.getElementById("controls");
-  function rowDef(key, label, colorVar, extra) {
-    return { key, label, colorVar, extra: extra || {} };
+  /* ---- goal accessors ---- */
+  function phaseByNum(n) {
+    return (TARGETS.phases || []).find(p => p.phase === n) || null;
   }
-  const ROWS = [
-    rowDef("block",  "Block time",     "--hot", { x2: true }),
-    rowDef("tx",     "Tx submission",  "--s5",  { prov: "estimated" }),
-    rowDef("ingest", "Ingestion",      "--s1",  { prov: "measured" }),
-    rowDef("query",  "Query",          "--s3",  { prov: "estimated" }),
-    rowDef("budget", "E2E budget",     "--muted", { budget: true }),
-  ];
+  const txNs = () => (TARGETS.fixed_estimates || {}).tx_submit_p99_ns || 0;
+  const queryNs = () => (TARGETS.fixed_estimates || {}).client_read_p99_ns || 0;
 
-  function buildRows() {
-    controlsEl.innerHTML = "";
-    ROWS.forEach(r => {
-      const R = RANGE[r.key];
-      const row = document.createElement("div");
-      row.className = "ctrl-row";
-      row.dataset.key = r.key;
-      row.style.setProperty("--tp", `var(${r.colorVar})`);
-      row.innerHTML = `
-        <div class="cl">
-          <span class="sw"></span>
-          <span class="nm">${r.label}</span>
-          ${r.extra.x2 ? '<span class="x2t">counted × 2</span>' : ""}
-          ${r.extra.prov ? `<span class="prov ${r.extra.prov}"><span class="sw"></span>${r.extra.prov}</span>` : ""}
-          ${r.extra.budget ? '<span class="x2t">target ceiling</span>' : ""}
-        </div>
-        <input type="range" min="${R.min}" max="${R.max}" step="${R.step}"
-               value="${state[r.key]}" aria-label="${r.label} (ms)">
-        <span class="num-wrap">
-          <input type="number" min="${R.min}" max="${R.max * 2}" step="${R.step}"
-                 value="${state[r.key]}" aria-label="${r.label} exact value (ms)">
-          <span class="unit">ms</span>
-        </span>`;
-      const range = row.querySelector('input[type=range]');
-      const num = row.querySelector('input[type=number]');
-      range.addEventListener("input", () => { setVal(r.key, +range.value); num.value = range.value; });
-      num.addEventListener("input", () => {
-        const v = num.value === "" ? 0 : +num.value;
-        setVal(r.key, v);
-        if (v >= R.min && v <= R.max) range.value = v;
-      });
-      controlsEl.appendChild(row);
-    });
+  // How many block times the path spans this phase (per-phase consensus plan).
+  const blockCount = p => p.block_count || 2;
+
+  // Ingest-slice target: stated, else derived from the E2E budget (same rule the
+  // converter uses): budget - block_count*block - tx - query.
+  function ingestTargetNs(p) {
+    if (p.ingest_p99_target_ns != null) return p.ingest_p99_target_ns;
+    return p.e2e_budget_ns - blockCount(p) * p.block_time_ns - txNs() - queryNs();
   }
 
-  function setVal(key, v) { state[key] = Math.max(0, v || 0); render(); }
+  // Worst (max) hot-ingest p99 across the run's profiles.
+  function measuredFromRun(data) {
+    const hot = data.ingest_hot || {};
+    let worst = null, count = 0;
+    for (const unit of Object.keys(hot)) {
+      const node = hot[unit];
+      const p99 = node && node.driver && node.driver.ingest_total && node.driver.ingest_total.p99;
+      if (p99 && typeof p99.m === "number") {
+        count++;
+        if (!worst || p99.m > worst.ns) worst = { ns: p99.m, profile: unit };
+      }
+    }
+    return worst ? { ns: worst.ns, profile: worst.profile, count } : null;
+  }
 
-  /* ---- stacked bar renderer ---- */
-  function segHTML(c, scaleMax) {
-    const v = contrib(c);
+  // Block time is counted n times on the path; every other slice once.
+  const mult = (c, n) => (c.key === "block" ? n : 1);
+  const contrib = (c, vals, n) => mult(c, n) * (vals[c.key] || 0);
+  const multLabel = (c, n) => (c.key === "block" ? ` × ${n}` : "");
+
+  /* ---- stacked bar ---- */
+  function segHTML(c, vals, scaleMax, ingestProv, n) {
+    const v = contrib(c, vals, n);
     const pct = scaleMax > 0 ? (v / scaleMax) * 100 : 0;
-    const show = pct >= 9;
-    return `<div class="seg ${c.prov === "estimated" ? "estimated" : ""}" style="width:${pct}%;background:var(${c.colorVar})"
-                 title="${c.label}${c.x2 ? " × 2" : ""}: ${fmt(v)}">
-              ${show ? `<span class="seg-lab">${fmt(v)}</span>` : ""}
+    const prov = c.key === "ingest" ? ingestProv : c.prov;
+    const hatch = prov === "estimated" ? " estimated" : (prov === "target" ? " target" : "");
+    return `<div class="seg${hatch}" style="width:${pct}%;background:var(${c.colorVar})"
+                 title="${c.label}${multLabel(c, n)}: ${fmt(v)}">
+              ${pct >= 9 ? `<span class="seg-lab">${fmt(v)}</span>` : ""}
             </div>`;
   }
 
-  /* ---- render ---- */
-  const resultEl = document.getElementById("result");
-  const calcEl = document.getElementById("calc");
-
-  function render() {
-    calcEl.dataset.mode = mode;
-    // enable/disable rows per mode
-    controlsEl.querySelectorAll(".ctrl-row").forEach(row => {
-      const key = row.dataset.key;
-      let disabled = false, output = false;
-      if (mode === "forward" && key === "budget") { /* budget is optional compare */ }
-      if (mode === "reverse" && key === "ingest") { disabled = true; output = true; }
-      row.classList.toggle("is-disabled", disabled);
-      row.classList.toggle("is-output", output);
-      row.querySelectorAll("input").forEach(i => { i.disabled = disabled; });
-      // reflect solved ingestion value in reverse mode
-      if (mode === "reverse" && key === "ingest") {
-        const req = requiredIngest();
-        const shown = Math.max(0, req);
-        row.querySelector('input[type=range]').value = Math.min(shown, RANGE.ingest.max);
-        row.querySelector('input[type=number]').value = Math.round(shown);
-        let badge = row.querySelector(".solved-badge");
-        if (!badge) { badge = document.createElement("span"); badge.className = "solved-badge";
-          row.querySelector(".cl").appendChild(badge); }
-        badge.textContent = "solved";
-      } else {
-        const b = row.querySelector(".solved-badge"); if (b) b.remove();
-      }
-    });
-
-    mode === "forward" ? renderForward() : renderReverse();
+  function barHTML(vals, scaleMax, ceilingNs, ingestProv, n) {
+    const ceilPct = scaleMax > 0 ? (ceilingNs / scaleMax) * 100 : 0;
+    return `<div class="bar-wrap"><div class="bar">
+      ${COMPONENTS.map(c => segHTML(c, vals, scaleMax, ingestProv, n)).join("")}
+      <div class="seg empty"></div>
+      ${ceilingNs > 0 && ceilPct <= 100 ? `<div class="budget-mark" style="left:${ceilPct}%" data-lab="budget ${fmt(ceilingNs)}"></div>` : ""}
+    </div></div>`;
   }
 
-  function requiredIngest() {
-    return state.budget - 2 * state.block - state.tx - state.query;
-  }
-
-  function renderForward() {
-    const total = COMPONENTS.reduce((s, c) => s + contrib(c), 0);
-    const scaleMax = Math.max(total, state.budget);
-    const bottleneck = COMPONENTS.reduce((a, c) => contrib(c) > contrib(a) ? c : a, COMPONENTS[0]);
-    const over = total - state.budget;
-    const pass = total <= state.budget;
-    const budgetPct = scaleMax > 0 ? (state.budget / scaleMax) * 100 : 0;
-
-    const verdict = state.budget > 0
-      ? `<span class="verdict ${pass ? "pass" : "miss"}">${pass ? "▪ WITHIN BUDGET" : "▲ OVER BUDGET"} · ${pass ? fmt(state.budget - total) + " under" : fmt(over) + " over"}</span>`
-      : "";
-
-    resultEl.innerHTML = `
-      <div class="result-head">
-        <div>
-          <div class="result-k">End-to-end latency (P99)</div>
-          <div class="result-big" style="color:${pass || state.budget === 0 ? "var(--ink)" : "var(--warn)"}">${fmt(total)}</div>
-          <p class="result-sub">Bottleneck: <strong>${bottleneck.label}${bottleneck.x2 ? " × 2" : ""}</strong>
-             — ${fmt(contrib(bottleneck))} (${Math.round(contrib(bottleneck) / total * 100)}% of the total).
-             Owner: <strong>${bottleneck.entity}</strong>.</p>
-        </div>
-        ${verdict}
-      </div>
-      <div class="bar-wrap">
-        <div class="bar">
-          ${COMPONENTS.map(c => segHTML(c, scaleMax)).join("")}
-          <div class="seg empty"></div>
-          ${state.budget > 0 && budgetPct <= 100 ? `<div class="budget-mark" style="left:${budgetPct}%" data-lab="budget ${fmt(state.budget)}"></div>` : ""}
-        </div>
-      </div>
-      ${breakdownTable(total)}`;
-  }
-
-  function renderReverse() {
-    const fixed = 2 * state.block + state.tx + state.query;
-    const req = state.budget - fixed;
-    const feasible = req > 0;
-    const measuredPass = feasible && MEASURED_INGEST_MS <= req;
-    const scaleMax = state.budget > 0 ? state.budget : fixed;
-
-    // segments: fixed costs + solved ingestion headroom (if feasible)
-    const solvedComp = { key: "ingest", label: "Ingestion (required)", x2: false, prov: "measured", colorVar: "--s1" };
-    const segComps = COMPONENTS.filter(c => c.key !== "ingest");
-    const segs = segComps.map(c => segHTML(c, scaleMax)).join("")
-      + (feasible ? `<div class="seg" style="width:${req / scaleMax * 100}%;background:var(--s1);opacity:0.55"
-                          title="Required ingestion headroom: ${fmt(req)}">
-                       ${req / scaleMax * 100 >= 9 ? `<span class="seg-lab">${fmt(req)}</span>` : ""}
-                     </div>` : "");
-
-    resultEl.innerHTML = `
-      <div class="result-head">
-        <div>
-          <div class="result-k">Required P99 ingestion</div>
-          <div class="result-big" style="color:${feasible ? "var(--ink)" : "var(--warn)"}">${feasible ? "≤ " + fmt(req) : "infeasible"}</div>
-          <p class="result-sub">
-            ${feasible
-              ? `This keeps E2E within <strong>${fmt(state.budget)}</strong> at a ${fmt(state.block)} block time.
-                 The fixed costs use ${fmt(fixed)}: block × 2 ${fmt(2 * state.block)} + tx ${fmt(state.tx)} + query ${fmt(state.query)}.
-                 This leaves <strong>${fmt(req)}</strong> for ingestion.`
-              : `The fixed costs (${fmt(fixed)}) exceed the ${fmt(state.budget)} budget by
-                 <strong>${fmt(-req)}</strong>. No time is left for ingestion. Raise the budget or lower the block time.`}
-          </p>
-        </div>
-        ${feasible ? `<span class="verdict ${measuredPass ? "pass" : "miss"}">
-            ${measuredPass ? "▪ MEASURED FITS" : "▲ MEASURED MISSES"} · measured ${fmt(MEASURED_INGEST_MS)}
-            ${measuredPass ? "≤" : ">"} target ${fmt(req)}</span>` : ""}
-      </div>
-      <div class="bar-wrap">
-        <div class="bar">
-          ${segs}
-          <div class="seg empty"></div>
-          <div class="budget-mark" style="left:100%" data-lab="budget ${fmt(state.budget)}"></div>
-        </div>
-      </div>
-      ${reverseTable(req, feasible)}`;
-  }
-
-  function provCell(prov) { return `<span class="prov ${prov}"><span class="sw"></span>${prov}</span>`; }
-
-  function breakdownTable(total) {
+  /* ---- breakdown table ---- */
+  function breakdownTable(vals, ingestProv, n) {
+    const total = COMPONENTS.reduce((s, c) => s + contrib(c, vals, n), 0);
     const rows = COMPONENTS.map(c => {
-      const v = contrib(c);
-      const share = total > 0 ? v / total * 100 : 0;
+      const v = contrib(c, vals, n);
+      const prov = c.key === "ingest" ? ingestProv : c.prov;
       return `<tr style="--tp:var(${c.colorVar})">
-        <td class="comp"><span class="sw"></span>${c.label}${c.x2 ? " × 2" : ""}</td>
-        <td class="ent">${c.entity}</td>
-        <td>${provCell(c.prov)}</td>
+        <td class="comp"><span class="sw"></span>${c.label}${multLabel(c, n)}</td>
+        <td>${provCell(prov)}</td>
         <td>${fmt(v)}</td>
-        <td>${Math.round(share)}%<span class="share-bar" style="width:${Math.max(2, share * 0.6)}px"></span></td>
       </tr>`;
     }).join("");
     return `<table class="bd">
-      <thead><tr><th>Component</th><th>Entity</th><th>Provenance</th><th>P99</th><th>Share</th></tr></thead>
+      <thead><tr><th>Slice</th><th>Provenance</th><th>P99</th></tr></thead>
       <tbody>${rows}
-        <tr class="total"><td class="comp">End-to-end total</td><td class="ent"></td><td></td><td>${fmt(total)}</td><td>100%</td></tr>
+        <tr class="total"><td class="comp">End-to-end (derived)</td><td></td><td>${fmt(total)}</td></tr>
       </tbody></table>`;
   }
+  // CSS class stays keyed by prov (color); the displayed text is a friendlier label.
+  const PROV_LABEL = { network: "core team", estimated: "estimated", target: "goal target", measured: "measured" };
+  function provCell(prov) { return `<span class="prov ${prov}"><span class="sw"></span>${PROV_LABEL[prov] || prov}</span>`; }
 
-  function reverseTable(req, feasible) {
-    const fixedComps = COMPONENTS.filter(c => c.key !== "ingest");
-    const rows = fixedComps.map(c => `<tr style="--tp:var(${c.colorVar})">
-        <td class="comp"><span class="sw"></span>${c.label}${c.x2 ? " × 2" : ""}</td>
-        <td class="ent">${c.entity}</td>
-        <td>${provCell(c.prov)}</td>
-        <td>${fmt(contrib(c))}</td>
-      </tr>`).join("");
-    return `<table class="bd">
-      <thead><tr><th>Component</th><th>Entity</th><th>Provenance</th><th>P99</th></tr></thead>
-      <tbody>${rows}
-        <tr style="--tp:var(--s1)"><td class="comp"><span class="sw" style="opacity:.55"></span>Ingestion (required)</td>
-          <td class="ent">Stellar Core → RPC</td><td>${provCell("measured")}</td>
-          <td>${feasible ? "≤ " + fmt(req) : "—"}</td></tr>
-        <tr class="total"><td class="comp">E2E budget</td><td class="ent"></td><td></td><td>${fmt(state.budget)}</td></tr>
-      </tbody></table>`;
+  function verdict(pass, text) {
+    return `<span class="verdict ${pass ? "pass" : "miss"}">${pass ? "▪" : "▲"} ${text}</span>`;
   }
 
-  /* ---- mode + preset wiring ---- */
-  document.querySelectorAll(".mode-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      mode = btn.dataset.mode;
-      document.querySelectorAll(".mode-btn").forEach(b =>
-        b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
-      render();
+  /* ---- phase pills ---- */
+  function buildPhasePills() {
+    const el = document.getElementById("phase-pick");
+    (TARGETS.phases || []).forEach(p => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "phase-pill";
+      btn.dataset.phase = p.phase;
+      btn.innerHTML = `Phase ${p.phase}<small>${fmt(p.block_time_ns)} block · ${fmt(p.e2e_budget_ns)} budget</small>`;
+      btn.addEventListener("click", () => { STATE.phase = p.phase; syncUrl(); render(); });
+      el.appendChild(btn);
     });
-  });
-  document.querySelectorAll(".preset-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const p = PHASES[btn.dataset.preset];
-      state.block = p.block; state.budget = p.budget;
-      state.tx = EST_TX_MS; state.query = EST_QUERY_MS; state.ingest = MEASURED_INGEST_MS;
-      // sync inputs
-      controlsEl.querySelectorAll(".ctrl-row").forEach(row => {
-        const k = row.dataset.key;
-        row.querySelector('input[type=range]').value = Math.min(state[k], RANGE[k].max);
-        row.querySelector('input[type=number]').value = state[k];
-      });
-      render();
-    });
-  });
+  }
 
-  document.getElementById("source-note").innerHTML =
-    `Defaults: Phase 2 — 1 s block time, 2.5 s E2E budget. The ingestion default is the measured ` +
-    `SAC hot-ingest p99: <strong>604 ms</strong>. Tx submission (60 ms) and query (40 ms) are estimates.`;
+  /* ---- run selector ---- */
+  function buildRunSelect() {
+    const opts = (MANIFEST.runs || []).map(r =>
+      `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.date)}</option>`).join("");
+    return `<div class="run-pick">
+      <label for="run-sel">Measured by run</label>
+      <select id="run-sel">${opts}</select>
+    </div>`;
+  }
 
-  buildRows();
-  render();
+  async function loadRun(id) {
+    const entry = (MANIFEST.runs || []).find(r => r.id === id) || (MANIFEST.runs || [])[0];
+    if (!entry) return;
+    RUN.id = entry.id; RUN.meta = entry; RUN.error = null; RUN.loading = true; RUN.data = null; RUN.measured = null;
+    render();
+    try {
+      const res = await fetch(entry.path, { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      RUN.data = await res.json();
+      RUN.measured = measuredFromRun(RUN.data);
+    } catch (err) {
+      console.error(err);
+      RUN.error = err.message;
+    }
+    RUN.loading = false;
+    render();
+  }
+
+  /* ---- render ---- */
+  const cmpEl = document.getElementById("cmp");
+
+  function render() {
+    if (!TARGETS || !MANIFEST) return;
+    const p = phaseByNum(STATE.phase) || (TARGETS.phases || [])[0];
+    STATE.phase = p.phase;
+
+    const block = p.block_time_ns, tx = txNs(), query = queryNs();
+    const n = blockCount(p);
+    const targetNs = ingestTargetNs(p);
+    const ceiling = p.e2e_budget_ns || 0;
+
+    const goalVals = { block, tx, ingest: targetNs, query };
+    const goalE2E = COMPONENTS.reduce((s, c) => s + contrib(c, goalVals, n), 0);
+
+    const measured = RUN.measured;
+    const currentVals = measured ? { block, tx, ingest: measured.ns, query } : null;
+    const currentE2E = currentVals ? COMPONENTS.reduce((s, c) => s + contrib(c, currentVals, n), 0) : null;
+
+    const scaleMax = Math.max(goalE2E, currentE2E || 0, ceiling);
+
+    /* --- goal panel --- */
+    const goalWithin = ceiling > 0 ? goalE2E <= ceiling : true;
+    const goalPanel = `
+      <div class="panel goal">
+        <div class="panel-head">
+          <span class="panel-kicker">Fixed goal · <b>Phase ${p.phase}</b></span>
+        </div>
+        <p class="panel-sub">Block time ${fmt(block)} × ${n}, ingestion target ${fmt(targetNs)}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}.
+          The declared E2E budget is ${fmt(ceiling)}.</p>
+        ${barHTML(goalVals, scaleMax, ceiling, "target", n)}
+        <div class="e2e">
+          <div class="e2e-k">Goal E2E (derived)</div>
+          <div class="e2e-big">${fmt(goalE2E)}</div>
+          <div class="verdict-row">
+            ${ceiling > 0 ? verdict(goalWithin, goalE2E === ceiling ? "on budget" : `${goalWithin ? fmt(ceiling - goalE2E) + " under" : fmt(goalE2E - ceiling) + " over"} budget`) : ""}
+          </div>
+        </div>
+        ${breakdownTable(goalVals, "target", n)}
+      </div>`;
+
+    /* --- current panel --- */
+    let currentBody;
+    if (RUN.loading) {
+      currentBody = `<div class="loading">Loading ${esc(RUN.meta ? (RUN.meta.name || RUN.meta.id) : "run")}…</div>`;
+    } else if (RUN.error) {
+      currentBody = `<div class="error-box">Could not load the run (${esc(RUN.error)}). Serve the folder with <code>make serve</code> — <code>file://</code> blocks fetch().</div>`;
+    } else if (!measured) {
+      currentBody = `<p class="measured-src">This run carries no hot-ingest measurement (<code>ingest_hot</code>). Pick another run.</p>`;
+    } else {
+      const meetsTarget = measured.ns <= targetNs;
+      const currentWithin = ceiling > 0 ? currentE2E <= ceiling : true;
+      currentBody = `
+        <p class="measured-src">Ingestion = <strong>${fmt(measured.ns)}</strong>, the worst of ${measured.count} profile${measured.count === 1 ? "" : "s"}
+          (<code>${esc(measured.profile)}</code>) in <strong>${esc(RUN.meta.name)}</strong> · ${esc(RUN.meta.date)}.</p>
+        ${barHTML(currentVals, scaleMax, ceiling, "measured", n)}
+        <div class="e2e">
+          <div class="e2e-k">Current E2E (derived)</div>
+          <div class="e2e-big" style="color:${currentWithin ? "var(--ink)" : "var(--warn)"}">${fmt(currentE2E)}</div>
+          <div class="verdict-row">
+            ${verdict(meetsTarget, `ingestion ${meetsTarget ? "≤" : ">"} ${fmt(targetNs)} target`)}
+            ${ceiling > 0 ? verdict(currentWithin, `E2E ${currentWithin ? "≤" : ">"} ${fmt(ceiling)} budget`) : ""}
+          </div>
+        </div>
+        ${breakdownTable(currentVals, "measured", n)}`;
+    }
+    const currentPanel = `
+      <div class="panel current">
+        <div class="panel-head">
+          <span class="panel-kicker">Current state · <b>measured</b></span>
+        </div>
+        ${buildRunSelect()}
+        ${currentBody}
+      </div>`;
+
+    cmpEl.innerHTML = goalPanel + currentPanel;
+
+    // re-wire the run <select> (innerHTML replaced it)
+    const sel = document.getElementById("run-sel");
+    if (sel) {
+      sel.value = RUN.id || "";
+      sel.addEventListener("change", () => { STATE.runId = sel.value; syncUrl(); loadRun(sel.value); });
+    }
+    // reflect the selected phase on the pills
+    document.querySelectorAll(".phase-pill").forEach(b =>
+      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
+
+    // source note + phase/run mismatch hint
+    const runPhase = RUN.data && RUN.data.campaign ? RUN.data.campaign.phase : null;
+    const mismatch = runPhase != null && runPhase !== STATE.phase
+      ? ` This run was paced for Phase ${runPhase}; you are viewing it against the Phase ${STATE.phase} goal.` : "";
+    document.getElementById("source-note").innerHTML =
+      `Goal numbers from <code>targets.json</code>: Phase ${p.phase} — ${fmt(block)} block time × ${n}, ${fmt(ceiling)} E2E budget, ` +
+      `${fmt(targetNs)} ingestion target. Tx submission (${fmt(tx)}) and query (${fmt(query)}) are fixed estimates.` + mismatch;
+  }
+
+  /* ---- deep-link ?phase=N&run=ID ---- */
+  function syncUrl() {
+    const url = new URL(location.href);
+    if (STATE.phase != null) url.searchParams.set("phase", STATE.phase);
+    if (RUN.id) url.searchParams.set("run", RUN.id);
+    history.replaceState({}, "", url);
+  }
+
+  /* ---- boot ---- */
+  async function boot() {
+    try {
+      const [t, m] = await Promise.all([
+        fetch("targets.json", { cache: "no-cache" }).then(r => { if (!r.ok) throw new Error("targets.json HTTP " + r.status); return r.json(); }),
+        fetch("runs/index.json", { cache: "no-cache" }).then(r => { if (!r.ok) throw new Error("runs/index.json HTTP " + r.status); return r.json(); }),
+      ]);
+      TARGETS = t; MANIFEST = m;
+    } catch (err) {
+      console.error(err);
+      cmpEl.innerHTML = `<div class="error-box">Could not load data (${esc(err.message)}). Serve the folder: <code>make serve</code> — <code>file://</code> will not work.</div>`;
+      return;
+    }
+    buildPhasePills();
+
+    const url = new URL(location.href);
+    const qPhase = parseInt(url.searchParams.get("phase"), 10);
+    STATE.phase = phaseByNum(qPhase) ? qPhase : ((TARGETS.phases[1] || TARGETS.phases[0]).phase); // default Phase 2
+    const qRun = url.searchParams.get("run");
+    const initialRun = (MANIFEST.runs || []).find(r => r.id === qRun) ? qRun : (MANIFEST.runs[0] && MANIFEST.runs[0].id);
+
+    render();                 // paint the goal panel immediately
+    if (initialRun) loadRun(initialRun);
+  }
+
+  boot();
 })();
 </script>
 </body>
