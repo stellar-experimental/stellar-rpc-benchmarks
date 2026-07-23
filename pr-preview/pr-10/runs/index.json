@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "runs": [
+    {
+      "id": "phase2-m6id2xl-c48a55c6-20260723T035541Z",
+      "name": "phase2-m6id2xl",
+      "date": "2026-07-23",
+      "kind": "synthetic",
+      "path": "runs/phase2-m6id2xl-c48a55c6-20260723T035541Z.json"
+    },
+    {
+      "id": "phase1-synthetic-minspec-0f90d331-20260722T012143Z",
+      "name": "phase1-synthetic-minspec",
+      "date": "2026-07-22",
+      "kind": "synthetic",
+      "path": "runs/phase1-synthetic-minspec-0f90d331-20260722T012143Z.json"
+    },
+    {
+      "id": "synthetic-2026-07-16-apply-fix",
+      "name": "Synthetic apply-load — apply-tail fix @ edb8eab4 (user-dev-063a)",
+      "date": "2026-07-16",
+      "kind": "synthetic",
+      "path": "runs/synthetic-2026-07-16-apply-fix.json"
+    },
+    {
+      "id": "synthetic-2026-07-15",
+      "name": "Synthetic apply-load — sac/token/soroswap (user-dev-063a)",
+      "date": "2026-07-15",
+      "kind": "synthetic",
+      "path": "runs/synthetic-2026-07-15.json"
+    },
+    {
+      "id": "pubnet-2026-07-13",
+      "name": "Pubnet — 4 sampled chunks (user-dev-063a)",
+      "date": "2026-07-13",
+      "kind": "pubnet",
+      "path": "runs/pubnet-2026-07-13.json"
+    }
+  ]
+}
