@@ -9,9 +9,7 @@
   const reportEl = document.getElementById("report");
   const selectEl = document.getElementById("run-select");
   const themeBtn = document.getElementById("theme-toggle");
-  const viewBtn = document.getElementById("view-toggle");
   const tip = document.getElementById("tip");
-  function currentView() { return new URL(location.href).searchParams.get("view") === "hot" ? "hot" : "full"; }
 
   let MANIFEST = null;
   let CURRENT = null;   // { meta, data } of the run on screen
@@ -731,6 +729,34 @@
     return `<p class="sec-intro" id="ingest-target-readout">${bits.join(" · ")}</p>`;
   }
 
+  // Six-phase explainer for the hot-ingest section. The phases partition one
+  // IngestLedger call; the copy is shared by both main renderers so pubnet and
+  // synthetic read identically.
+  const PHASE_GUIDE_HTML = `<div class="phase-guide">
+    <p>The six phases partition the wall-clock of one <code>IngestLedger</code> call — their sum is the per-ledger end-to-end time plotted below (recorded as <code>ingest_total</code> in the raw CSVs); the wait for the next ledger from the source sits outside the phases and is excluded from every per-ledger number here. The key mental model: nothing touches RocksDB until <strong>commit</strong> — the middle phases only stage work into one atomic WriteBatch.</p>
+    <ul>
+      <li><strong>extract</strong> — decode the raw ledger once: a single transaction walk builds the tx-hash entries and shapes the events. Pure CPU/XDR work before anything is staged; any decode failure lands here by construction.</li>
+      <li><strong>ledgers</strong> — the ledger store's staging step: zstd-compress the ledger bytes and queue the record into the shared batch — the compression makes this the priciest of the three staging steps.</li>
+      <li><strong>txhash</strong> — same staging step for the tx-hash lookup entries: each transaction's full 32-byte hash → ledger sequence, written into a single <code>txhash</code> column family. The cheapest staging step — no compression, no marshaling.</li>
+      <li><strong>events</strong> — same staging step for the events: each event's payload, its term-index rows, and the ledger's event-count row are queued into the batch (the term keys are derived here).</li>
+      <li><strong>commit (fsync)</strong> — the single synced RocksDB batch write for everything staged: WAL append + <strong>fsync</strong> + memtable insert. The one durability point per ledger — and the phase pprof can't attribute (it's I/O wait, measured as the whole batch call minus the three staging steps).</li>
+      <li><strong>apply</strong> — post-commit, in-memory only: refresh the roaring-bitmap event index and offset mirror that serve queries. Runs only after the batch is durable, so a failed ledger can never be half-applied.</li>
+    </ul>
+    <p>So a ledger's life is: decode it (<code>extract</code>) → stage three stores' writes (<code>ledgers</code>/<code>txhash</code>/<code>events</code>) → make it durable in one fsync'd batch (<code>commit</code>) → update the in-memory query indexes (<code>apply</code>).</p>
+  </div>`;
+
+  // Per-ledger latency lanes: end-to-end plus every ingest phase, in phase
+  // order. Colors are fixed here so the chart reads the same across renderers.
+  function hotPhaseLanes(h, C) {
+    if (!h || !h.phases) return [];
+    const colors = { "end to end": C.s1, extract: C.s2, ledgers: C.s3, txhash: C.de, events: C.s4, "commit (fsync)": C.s6, apply: C.s5 };
+    const defs = [["extract", "extract"], ["ledgers", "ledgers"], ["txhash", "txhash"], ["events", "events"], ["commit", "commit (fsync)"], ["apply", "apply"]];
+    const out = [];
+    if (h.driver && h.driver.ingest_total) out.push({ name: "end to end", color: colors["end to end"], st: h.driver.ingest_total });
+    for (const [key, name] of defs) if (h.phases[key]) out.push({ name, color: colors[name], st: h.phases[key] });
+    return out;
+  }
+
   function methodologyHTML(D, num, extraDL) {
     const raw = (D.machine && D.machine.fsync_probe) || "";
     // The probe is `dd if=/dev/zero bs=4k count=2000 oflag=dsync` = 2,000 synced
@@ -840,8 +866,9 @@
     <section id="ingest-hot">
       <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — live RocksDB with per-ledger fsync</h2></div>
       <p class="sec-intro">Hot ingestion is the streaming path: each ledger is extracted, applied to the RocksDB stores, and committed with <strong>one fsync per ledger</strong> — the durability contract of live ingestion.</p>
+      ${PHASE_GUIDE_HTML}
       ${figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", "Sum of per-ledger phase times over the whole chunk (median of 5 runs). <code>source wait</code> is time blocked on the ledger source.")}
-      ${figHTML("fig42", "Fig 4.2", "Per-ledger ingest latency — end to end, and its fsync commit", "fig42-legend", "Latency percentiles over 10,000 ledgers (median of 5 runs; log scale). <em>End-to-end</em> is the complete ingest of one ledger (recorded as <code>ingest_total</code> in the raw CSVs), source wait excluded.")}
+      ${figHTML("fig42", "Fig 4.2", "Per-ledger ingest latency — end to end, and every phase", "fig42-legend", "Latency percentiles over 10,000 ledgers (median of 5 runs; log scale). <em>End-to-end</em> is the complete ingest of one ledger (recorded as <code>ingest_total</code> in the raw CSVs), source wait excluded. See the phase guide above for what each phase measures.")}
       ${ingestTargetHTML(PH, CH, hot, disp)}
       ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot", "fig43-legend", "Ledgers per second over the full chunk (median of 5 runs; log scale). The fsync-per-ledger contract costs hot ingestion against the batch cold path — the price of live durability.")}
       <p id="hot-prose" class="sec-intro"></p>
@@ -1001,30 +1028,29 @@
 
     /* ---- fig 4.2 per-ledger latency ---- */
     (function fig42() {
-      const series = c => [
-        ["end-to-end ingest", C.hot, hot[c].driver.ingest_total],
-        ["commit (fsync)", C.s6, hot[c].phases.commit],
-      ].filter(s => s[2]);
+      const lanesFor = c => hotPhaseLanes(hot[c], C);
       const rows = CH.map(c => ({
         label: disp(c), sub: chunkSub(c),
-        lanes: series(c).map(([name, color, st]) => ({
-          name, color,
-          pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m },
-          spread: `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`,
+        lanes: lanesFor(c).map(l => ({
+          name: l.name, color: l.color,
+          pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
+          spread: `${fmtNs(l.st.p99.lo)} – ${fmtNs(l.st.p99.hi)}`,
         })),
       }));
-      const dotOpts = {};
+      const dotOpts = { groupSeparators: true };
       if (PH && PH.sel) {
         dotOpts.reflines = [{ ns: PH.sel.block_time_ns, label: `${fmtNsAxis(PH.sel.block_time_ns)} — Phase ${PH.sel.phase} block time` }];
         if (PH.sel.ingest_p99_target_ns) dotOpts.reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
       }
       dotRangeChart("fig42-body", rows, dotOpts);
+      const legendLanes = CH.length ? lanesFor(CH[0]) : [];
       legend("fig42-legend", [
-        { label: "end-to-end ingest", color: C.hot }, { label: "commit (fsync)", color: C.s6 }, { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
+        ...legendLanes.map(l => ({ label: l.name, color: l.color })),
+        { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
         ...(dotOpts.reflines || []).map(rl => ({ label: rl.label.replace(" — ", " "), color: CVAR("--hot"), line: true })),
       ]);
       tableView("fig42", [ds.unit_label, "Series", "p50", "p90", "p99", "max", "p99 min–max across runs"],
-        CH.flatMap(c => series(c).map(([name, , st]) => [disp(c), name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m), `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`])));
+        CH.flatMap(c => lanesFor(c).map(l => [disp(c), l.name, fmtNs(l.st.p50.m), fmtNs(l.st.p90.m), fmtNs(l.st.p99.m), fmtNs(l.st.max.m), `${fmtNs(l.st.p99.lo)} – ${fmtNs(l.st.p99.hi)}`])));
       const p99s = CH.map(c => hot[c].driver.ingest_total.p99.m / 1e6);
       const commitShare = CH.map(c => hot[c].phases.commit ? hot[c].phases.commit.total.m / hot[c].driver.chunk_wall.total.m * 100 : 0);
       document.getElementById("hot-prose").innerHTML =
@@ -1204,9 +1230,9 @@
     };
     const cold = D.ingest_cold, hot = D.ingest_hot;
     const paced = ((D.campaign && D.campaign.close_interval_ns) || 0) > 0;
-    // Pacing lag surfaces in the main report (not just ?view=hot) for paced runs
-    // that carry it. Peak-memory surfaces when the run records peak_rss_bytes and
-    // the box RAM is known. Both gate cleanly off — legacy runs show neither.
+    // Pacing lag surfaces for paced runs that carry it. Peak-memory surfaces
+    // when the run records peak_rss_bytes and the box RAM is known. Both gate
+    // cleanly off — legacy runs show neither.
     const closeNs = (D.campaign && D.campaign.close_interval_ns) || 0;
     const paceUnits = ORDER.filter(u => hot[u] && hot[u].driver && hot[u].driver.pace_lag);
     const showPace = paced && paceUnits.length > 0;
@@ -1306,10 +1332,11 @@
     <section id="ingest-hot">
       <div class="sec-head"><span class="sec-num">04</span><h2>Hot ingestion — the live loop${interval ? (PH && PH.sel ? ` against the ${esc(bannerLabel)}` : ` against a ${intervalMs} ms block model`) : ""}</h2></div>
       <p class="sec-intro">Hot ingestion runs the daemon's production loop: per ledger — extract, apply to the RocksDB stores, commit with <strong>one fsync per ledger</strong>, then <code>apply</code> makes the write batch live.</p>
+      ${PHASE_GUIDE_HTML}
       ${paced
         ? figHTML("fig41", "Fig 4.1", "Hot-ingest busy time, by phase", "fig41-legend", "Sum of per-ledger phase times over the whole run (" + medRuns + "). This run is paced: wall clock is dominated by waiting on the close schedule, so the bar shows busy time only — see the table view for run wall and pacing wait.")
         : figHTML("fig41", "Fig 4.1", "Where hot-ingest wall time goes", "fig41-legend", `Sum of per-ledger phase times over the whole run (${reps === 1 ? "single run" : "median of " + reps}). Commit (fsync) holds a large share, but on the dense profiles <code>apply</code> grows to rival it.`)}
-      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, its fsync commit, and the apply stall tail", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale).` + (PH && PH.sel ? " Dashed lines mark the selected phase's block time and ingest-slice target." : (interval ? " The dashed line is one block interval." : "")))}
+      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency — end to end, and every phase", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale).` + (PH && PH.sel ? " Dashed lines mark the selected phase's block time and ingest-slice target." : (interval ? " The dashed line is one block interval." : "")) + " See the phase guide above for what each phase measures.")}
       ${figHTML("fig43", "Fig 4.3", "End-to-end ingest rate — cold vs hot vs the block-model floor", "fig43-legend", `Ledgers per second over the full run (${reps === 1 ? "single run" : "median of " + reps}; log scale).` + (interval ? " The dashed line is the rate a block interval demands." : ""))}
       <p id="hot-prose" class="sec-intro"></p>
       ${showPace ? figHTML("fig44", "Fig 4.4", "Pacing lag behind the close schedule", "fig44-legend",
@@ -1502,22 +1529,27 @@
 
     /* ---- fig 4.2 per-ledger latency ---- */
     (function fig42() {
-      const series = p => [
-        ["end to end", C.s1, hot[p].driver.ingest_total],
-        ["commit (fsync)", C.s6, hot[p].phases.commit],
-        ["apply", C.s5, hot[p].phases.apply],
-      ].filter(s => s[2]);
-      const rows = ORDER.map(p => ({ ...rowLab(p, sub(p)), lanes: series(p).map(([name, color, st]) => ({ name, color, pts: { p50: st.p50.m, p90: st.p90.m, p99: st.p99.m, max: st.max.m } })) }));
+      const lanesFor = p => hotPhaseLanes(hot[p], C);
+      const rows = ORDER.map(p => ({
+        ...rowLab(p, sub(p)),
+        lanes: lanesFor(p).map(l => ({
+          name: l.name, color: l.color,
+          pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
+          spread: `${fmtNs(l.st.p99.lo)} – ${fmtNs(l.st.p99.hi)}`,
+        })),
+      }));
       const reflines = [];
       if (interval) reflines.push({ ns: interval, label: PH && PH.sel ? `${intervalTxt} — Phase ${PH.sel.phase} block time` : intervalMs + " ms — block interval" });
       if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
-      dotRangeChart("fig42-body", rows, { reflines });
+      dotRangeChart("fig42-body", rows, { reflines, groupSeparators: true });
+      const legendLanes = ORDER.length ? lanesFor(ORDER[0]) : [];
       legend("fig42-legend", [
-        { label: "end to end", color: C.s1 }, { label: "commit (fsync)", color: C.s6 }, { label: "apply", color: C.s5 },
+        ...legendLanes.map(l => ({ label: l.name, color: l.color })),
+        { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
         ...reflines.map(rl => ({ label: rl.label.replace(" — ", " "), color: CVAR("--hot"), line: true })),
       ]);
       tableView("fig42", ["profile", "series", "p50", "p90", "p99", "worst ledger"],
-        ORDER.flatMap(p => series(p).map(([name, , st]) => [disp(p), name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m)])));
+        ORDER.flatMap(p => lanesFor(p).map(l => [disp(p), l.name, fmtNs(l.st.p50.m), fmtNs(l.st.p90.m), fmtNs(l.st.p99.m), fmtNs(l.st.max.m)])));
       const p99 = ORDER.map(p => hot[p].driver.ingest_total.p99.m);
       document.getElementById("hot-prose").innerHTML =
         `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across profiles.` + (interval
@@ -1643,234 +1675,6 @@
     document.getElementById("machine-metadata").textContent = (D.machine && D.machine.raw || "").trim();
   }
 
-  /* ============================ HOT-INGESTION view ============================ */
-  // Selected by ?view=hot regardless of dataset.kind; a stakeholder-facing cut
-  // of just the hot-ingestion latency, keep-up check, and phase guide.
-  function renderHot(D) {
-    const ds = D.dataset;
-    const ORDER = ds.unit_order || Object.keys(ds.unit_meta || {});
-    const um = ds.unit_meta || {};
-    // Explicit label wins; a purely numeric id gets the unit_label prefixed
-    // ("Chunk 3000") so a bare number never stands alone; named ids verbatim.
-    const disp = u => {
-      const meta = um[u] || {};
-      if (meta.label) return meta.label;
-      const cp = campaignUnitParts(u, meta);
-      if (cp) return cp.line;
-      if (ds.unit_label && /^\d+$/.test(u)) return `${ds.unit_label} ${u}`;
-      return u;
-    };
-    const hot = D.ingest_hot || {};
-    const reps = (D.campaign && D.campaign.reps) || 5;
-    const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
-    // Chart-gutter form for campaign ids: two short lines instead of one long id.
-    const parts = u => ((um[u] || {}).label ? null : campaignUnitParts(u, um[u]));
-    const rowLab = (u, fallbackSub) => {
-      const cp = parts(u);
-      return cp ? { label: cp.name, sub: cp.sub } : { label: disp(u), sub: fallbackSub };
-    };
-    const PH = phaseState(D);
-    // Judged budget: the selected phase's block time on phase-aware runs, else
-    // this run's checks (legacy behavior). Null means no keep-up check.
-    const checksNs = D.checks && D.checks.kind === "block_keepup" && D.checks.interval_ns ? D.checks.interval_ns : null;
-    const interval = PH ? (PH.sel ? PH.sel.block_time_ns : checksNs) : checksNs;
-    const hasKeepup = interval != null;
-    const intervalMs = interval ? interval / MS : null;
-    const intervalTxt = interval ? fmtNsAxis(interval) : "";
-    const modelLabel = PH && PH.sel ? `Phase ${PH.sel.phase} block model (${intervalTxt})` : `${intervalMs} ms block model`;
-    // Pacing lag: present only on paced hot runs; the close interval is its budget.
-    const closeNs = (D.campaign && D.campaign.close_interval_ns) || 0;
-    const paceUnits = ORDER.filter(u => hot[u] && hot[u].driver && hot[u].driver.pace_lag);
-    const showPace = paceUnits.length > 0;
-
-    const sub = u => fmtK((um[u] && um[u].events) || 0) + " events";
-    const phaseDefs = [
-      ["extract", "extract"], ["ledgers", "ledgers"], ["txhash", "txhash"],
-      ["events", "events"], ["commit", "commit (fsync)"], ["apply", "apply"],
-    ];
-    // color map is self-contained for this figure (set once C is available)
-    let seriesFor = () => [];
-
-    const keepupUnits = hasKeepup
-      ? ORDER.filter(u => hot[u] && hot[u].driver && hot[u].driver.run_wall && um[u] && um[u].ledgers)
-      : [];
-    const showKeepup = keepupUnits.length > 0;
-    const allE2E = ORDER.length > 0 && ORDER.every(u => hot[u] && hot[u].driver && hot[u].driver.ingest_total);
-
-    const phaseGuideHTML = `<div class="phase-guide">
-      <p>The six phases partition the wall-clock of one <code>IngestLedger</code> call — their sum is the per-ledger end-to-end time plotted below (recorded as <code>ingest_total</code> in the raw CSVs); the wait for the next ledger from the source sits outside the phases and is excluded from every per-ledger number here. The key mental model: nothing touches RocksDB until <strong>commit</strong> — the middle phases only stage work into one atomic WriteBatch.</p>
-      <ul>
-        <li><strong>extract</strong> — decode the raw ledger once: a single transaction walk builds the tx-hash entries and shapes the events. Pure CPU/XDR work before anything is staged; any decode failure lands here by construction.</li>
-        <li><strong>ledgers</strong> — the ledger store's staging step: zstd-compress the ledger bytes and queue the record into the shared batch — the compression makes this the priciest of the three staging steps.</li>
-        <li><strong>txhash</strong> — same staging step for the tx-hash lookup entries: each transaction's full 32-byte hash → ledger sequence, written into a single <code>txhash</code> column family. The cheapest staging step — no compression, no marshaling.</li>
-        <li><strong>events</strong> — same staging step for the events: each event's payload, its term-index rows, and the ledger's event-count row are queued into the batch (the term keys are derived here).</li>
-        <li><strong>commit (fsync)</strong> — the single synced RocksDB batch write for everything staged: WAL append + <strong>fsync</strong> + memtable insert. The one durability point per ledger — and the phase pprof can't attribute (it's I/O wait, measured as the whole batch call minus the three staging steps).</li>
-        <li><strong>apply</strong> — post-commit, in-memory only: refresh the roaring-bitmap event index and offset mirror that serve queries. Runs only after the batch is durable, so a failed ledger can never be half-applied.</li>
-      </ul>
-      <p>So a ledger's life is: decode it (<code>extract</code>) → stage three stores' writes (<code>ledgers</code>/<code>txhash</code>/<code>events</code>) → make it durable in one fsync'd batch (<code>commit</code>) → update the in-memory query indexes (<code>apply</code>).</p>
-    </div>`;
-
-    // One-line unit roster: name + (model, if known) + ledger count. Works for
-    // both synthetic profiles and pubnet chunks; ledger counts here resolve the
-    // "40,000 total across 3 profiles" confusion (each run covers one unit).
-    const unitWord = (ds.unit_label || "unit").toLowerCase();
-    const uniqLedgers = [...new Set(ORDER.map(u => um[u] && um[u].ledgers).filter(n => n > 0))].sort((a, b) => a - b);
-    const rangePhrase = uniqLedgers.length === 0 ? ""
-      : uniqLedgers.length === 1 ? `${fmtInt(uniqLedgers[0])} ledgers`
-      : `${fmtInt(uniqLedgers[0])}–${fmtInt(uniqLedgers[uniqLedgers.length - 1])} ledgers depending on the ${unitWord}`;
-    const unitDetail = u => {
-      const meta = um[u] || {};
-      const bits = [];
-      if (meta.model) bits.push(esc(meta.model));
-      if (meta.ledgers) bits.push(`${fmtInt(meta.ledgers)} ledgers`);
-      return bits.length ? ` (${bits.join(", ")})` : "";
-    };
-    const unitsLine = ORDER.length
-      ? `<p class="sec-intro" style="margin-top:6px">${esc(ds.unit_label || "Unit")}s — ${ORDER.map(u => `<strong>${esc(disp(u))}</strong>${unitDetail(u)}`).join(", ")}.</p>`
-      : "";
-    const paceFigHTML = showPace
-      ? figHTML("figpace", "Fig 1.2", "Pacing lag behind the close schedule", "figpace-legend",
-          "Per-ledger lag = max(commit − due, 0) over every committed ledger (" + medRuns + "). On-time ledgers count as zero, "
-          + "so p50 = 0 means on schedule at least half the time. Dashed line = one close "
-          + "interval; lag ÷ close interval = ledgers behind tip.")
-        + `<p id="pace-readout" class="sec-intro"></p>`
-      : "";
-
-    reportEl.innerHTML = mastheadHTML(D) + `
-    <section id="ingest-hot">
-      <div class="sec-head"><span class="sec-num">01</span><h2>Hot ingestion — per-ledger latency</h2></div>
-      <p class="sec-intro">Hot ingestion is the live RocksDB path — one fsync per ledger. This chart shows where each ledger's time goes, end to end plus every phase${PH && !interval ? "" : ", measured against one block interval"}.</p>
-      ${unitsLine}
-      ${PH ? phaseBlockHTML(PH) : ""}
-      ${phaseGuideHTML}
-      ${figHTML("fig42", "Fig 1.1", "Per-ledger latency — end to end, and every phase", "fig42-legend", `Latency percentiles over every ledger of the run (${medRuns}; log scale). ` + (PH && PH.sel ? "Dashed lines mark the selected phase's block time and ingest-slice target" : (PH && !interval ? "See the phase guide above for what each phase measures." : "The dashed line is one block interval")) + (PH && !interval ? "" : " — see the phase guide above for what each phase measures."))}
-      <p id="hot-prose" class="sec-intro"></p>
-      ${paceFigHTML}
-    </section>
-
-    <section id="target">
-      <div class="sec-head"><span class="sec-num">02</span><h2>Keep-up check${hasKeepup ? " — the " + (PH && PH.sel ? modelLabel : intervalMs + " ms block model") : ""}</h2></div>
-      ${showKeepup
-        ? `<p class="sec-intro">${PH
-            ? (PH.sel
-              ? `Phase ${PH.sel.phase} sets a ${intervalTxt} block time, so ${intervalTxt} is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`
-              : `This run was paced at a ${intervalTxt} close interval, so ${intervalTxt} is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`)
-            : `The datasets model a ${intervalMs} ms close time, so ${intervalMs} ms is the budget: sustained per-ledger cost decides whether the follower keeps up at all; per-ledger percentiles say how often a single ledger overruns one interval.`}</p>
-           <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
-           ${ingestTargetHTML(PH, ORDER, hot, disp)}
-           <p style="color:var(--muted); font-size:12.5px; margin-top:10px">Sustained = run wall ÷ ledgers (source wait included). ${reps === 1 ? `Values are from a single run; "worst ledger" is that run's slowest ledger.` : `Values are medians of ${reps} runs; "worst ledger" is the median across runs of each run's slowest ledger.`}</p>`
-        : `<div class="note-callout">This run defines no block-model keep-up check, so there is no per-interval budget to measure sustained ingestion against.${PH ? " Select a phase in the target table above to view this run against Phase 1/2/3 targets." : ""}</div>`}
-    </section>
-    ` + methodologyHTML(D, "03",
-      `<dt>Hot-run semantics</dt><dd>Each hot run starts from an empty store and ingests a single ${unitWord}'s entire ledger range${rangePhrase ? ` — ${rangePhrase} — ` : " "}through the daemon's bounded ingestion loop; one run never spans more than one ${unitWord}. The per-ledger end-to-end ingest time (recorded as <code>ingest_total</code> in the raw CSVs) is the sum of that ledger's phase burst with source wait excluded; run wall includes source wait.</dd>
-       <dt>Counter semantics</dt><dd>Percentiles are per-ledger and never averaged across runs — the reported percentile is the median run's. Item counts track the natural units processed (ledgers, transactions, events), recorded in the raw CSVs as <code>n_items</code>; sample counts (<code>n</code>) include only non-zero-duration measurements.</dd>`)
-      + footerHTML(D);
-
-    const C = COLORS();
-    const laneColors = { "end to end": C.s1, extract: C.s2, ledgers: C.s3, txhash: C.de, events: C.s4, "commit (fsync)": C.s6, apply: C.s5 };
-    seriesFor = u => {
-      const h = hot[u];
-      if (!h || !h.phases) return [];
-      const out = [];
-      if (h.driver && h.driver.ingest_total) out.push({ name: "end to end", color: laneColors["end to end"], st: h.driver.ingest_total });
-      for (const [key, name] of phaseDefs) if (h.phases[key]) out.push({ name, color: laneColors[name], st: h.phases[key] });
-      return out;
-    };
-
-    /* ---- fig 4.2 extended per-ledger latency ---- */
-    (function fig42() {
-      const hotOrder = ORDER.filter(u => seriesFor(u).length);
-      const rows = hotOrder.map(u => ({
-        ...rowLab(u, sub(u)),
-        lanes: seriesFor(u).map(l => ({
-          name: l.name, color: l.color,
-          pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
-          spread: `${fmtNs(l.st.p99.lo)} – ${fmtNs(l.st.p99.hi)}`,
-        })),
-      }));
-      const dotOpts = { groupSeparators: true };
-      const reflines = [];
-      if (interval) reflines.push({ ns: interval, label: PH && PH.sel ? `${intervalTxt} — Phase ${PH.sel.phase} block time` : intervalMs + " ms — block interval" });
-      if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
-      if (reflines.length) dotOpts.reflines = reflines;
-      dotRangeChart("fig42-body", rows, dotOpts);
-      const legendLanes = hotOrder.length ? seriesFor(hotOrder[0]) : [];
-      legend("fig42-legend", [
-        ...legendLanes.map(l => ({ label: l.name, color: l.color })),
-        { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
-        ...reflines.map(rl => ({ label: rl.label.replace(" — ", " "), color: CVAR("--hot"), line: true })),
-      ]);
-      tableView("fig42", [ds.unit_label || "unit", "Series", "p50", "p90", "p99", "max", "p99 min–max across runs"],
-        hotOrder.flatMap(u => seriesFor(u).map(l => {
-          const st = l.st;
-          return [disp(u), l.name, fmtNs(st.p50.m), fmtNs(st.p90.m), fmtNs(st.p99.m), fmtNs(st.max.m), `${fmtNs(st.p99.lo)} – ${fmtNs(st.p99.hi)}`];
-        })));
-      if (allE2E) {
-        const p99 = ORDER.map(u => hot[u].driver.ingest_total.p99.m);
-        document.getElementById("hot-prose").innerHTML =
-          `Per-ledger end-to-end p99 ranges <strong>${fmtNs(Math.min(...p99))}–${fmtNs(Math.max(...p99))}</strong> across ${ORDER.length} ${(ds.unit_label || "unit").toLowerCase()}${ORDER.length === 1 ? "" : "s"}.`;
-      }
-    })();
-
-    /* ---- fig 1.2 pacing lag vs close interval ---- */
-    if (showPace) (function figPace() {
-      const rows = paceUnits.map(u => {
-        const pl = hot[u].driver.pace_lag;
-        return { ...rowLab(u, sub(u)), p50: pl.p50.m, p90: pl.p90.m, p99: pl.p99.m, max: pl.max.m };
-      });
-      paceChart("figpace-body", rows, { budgetNs: closeNs });
-      legend("figpace-legend", [
-        { label: "pacing lag (● p50 · ○ p90 · ▮ p99 · | max)", color: CVAR("--hot") },
-        ...(closeNs > 0 ? [{ label: fmtNs(closeNs) + " close interval", color: CVAR("--hot"), line: true }] : []),
-      ]);
-      tableView("figpace", [ds.unit_label || "unit", "p50 lag", "p90 lag", "p99 lag", "max lag",
-        "p99 ÷ close", "ledgers behind (p99)"],
-        paceUnits.map(u => {
-          const pl = hot[u].driver.pace_lag, frac = closeNs > 0 ? pl.p99.m / closeNs : 0;
-          return [disp(u), fmtNs(pl.p50.m), fmtNs(pl.p90.m), fmtNs(pl.p99.m), fmtNs(pl.max.m),
-            closeNs > 0 ? (frac * 100).toFixed(0) + " %" : "—",
-            closeNs > 0 ? "≤ " + Math.max(1, Math.ceil(frac)) : "—"];
-        }));
-      const readout = document.getElementById("pace-readout");
-      if (readout) {
-        const worst = paceUnits.reduce((a, u) => hot[u].driver.pace_lag.p99.m > hot[a].driver.pace_lag.p99.m ? u : a, paceUnits[0]);
-        const wp99 = hot[worst].driver.pace_lag.p99.m;
-        if (closeNs > 0) {
-          const behind = Math.max(1, Math.ceil(wp99 / closeNs));
-          readout.innerHTML = `Worst-case p99 pacing lag is <strong>${fmtNs(wp99)}</strong> on <strong>${esc(disp(worst))}</strong> — <strong>${(wp99 / closeNs * 100).toFixed(0)}%</strong> of the ${fmtNs(closeNs)} close interval, i.e. ≤ ${behind} ledger${behind === 1 ? "" : "s"} behind tip.`;
-        } else {
-          readout.textContent = "Paced run, but no close interval is recorded to compare the lag against.";
-        }
-      }
-    })();
-
-    /* ---- keep-up table ---- */
-    if (showKeepup) (function targetTable() {
-      const t = document.getElementById("target-table");
-      const tr = document.createElement("tr");
-      [ds.unit_label || "profile", "sustained / ledger", "headroom", "p50", "p90", "p99", "worst ledger"].forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
-      t.appendChild(tr);
-      keepupUnits.forEach(u => {
-        const sus = hot[u].driver.run_wall.total.m / um[u].ledgers;
-        const it = hot[u].driver.ingest_total;
-        const cell = ns => { const ms = ns / MS; const flag = ns > interval ? ` ▲ ${(ns / interval).toFixed(1)}× interval` : ""; return Math.round(ms) + " ms" + flag; };
-        const r = document.createElement("tr");
-        const cells = [disp(u), `${Math.round(sus / MS)} ms`, `${(interval / sus).toFixed(1)}×`, cell(it.p50.m), cell(it.p90.m), cell(it.p99.m), cell(it.max.m)];
-        cells.forEach((v, ci) => {
-          const td = document.createElement("td");
-          if (ci === 0) td.textContent = v;
-          else if (ci === 1) { td.textContent = v; const ok = document.createElement("span"); const keepsUp = sus <= interval; ok.className = keepsUp ? "cell-ok" : "cell-warn"; ok.textContent = keepsUp ? " ✓ KEEPS UP" : " ▲ OVER INTERVAL"; td.appendChild(ok); }
-          else if (v.includes("▲")) { const parts = v.split(" ▲"); td.textContent = parts[0]; const w = document.createElement("span"); w.className = "cell-warn"; w.textContent = " ▲" + parts[1]; td.appendChild(w); }
-          else td.textContent = v;
-          r.appendChild(td);
-        });
-        t.appendChild(r);
-      });
-    })();
-
-    document.getElementById("machine-metadata").textContent = (D.machine && D.machine.raw || "").trim();
-  }
-
   /* ============================ generic fallback ============================ */
   function renderGeneric(D) {
     let html = mastheadHTML(D) + `<section><div class="sec-head"><span class="sec-num">01</span><h2>Raw sections (generic view)</h2></div>
@@ -1893,8 +1697,7 @@
     if (!CURRENT || !CURRENT.data) return;
     const D = CURRENT.data;
     const kind = D.dataset && D.dataset.kind;
-    const view = currentView();
-    const fn = view === "hot" ? renderHot : (RENDERERS[kind] || renderGeneric);
+    const fn = RENDERERS[kind] || renderGeneric;
     try { fn(D); }
     catch (err) {
       console.error("render failed for kind=" + kind, err);
@@ -1910,7 +1713,6 @@
       history.replaceState({}, "", url);
       draw();
     }));
-    viewBtn.textContent = view === "hot" ? "◱ Full report" : "◲ Hot ingestion";
   }
 
   async function loadRun(entry) {
@@ -1954,13 +1756,6 @@
       selectEl.appendChild(o);
     });
     selectEl.addEventListener("change", () => selectRun(selectEl.value, true));
-    viewBtn.addEventListener("click", () => {
-      const url = new URL(location.href);
-      if (url.searchParams.get("view") === "hot") url.searchParams.delete("view");
-      else url.searchParams.set("view", "hot");
-      history.pushState({}, "", url);
-      if (CURRENT) draw();
-    });
     window.addEventListener("popstate", () => {
       const id = new URL(location.href).searchParams.get("run");
       if (id) selectRun(id, false);
