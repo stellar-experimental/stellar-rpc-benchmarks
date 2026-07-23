@@ -91,6 +91,18 @@ class CampaignPacedTests(unittest.TestCase):
     def test_close_interval_ns(self):
         self.assertEqual(self.data["campaign"]["close_interval_ns"], 2_000_000_000)
 
+    def test_peak_rss_lifted_to_sibling(self):
+        # The gauge is pulled out of the fake-StageAgg driver row into a plain V
+        # (bytes) sibling of driver, on both cold and hot cells.
+        cold = self.data["ingest_cold"]["sac-6000-c1"]
+        self.assertNotIn("peak_rss_bytes", cold["driver"])
+        self.assertEqual(cold["peak_rss_bytes"],
+                         {"m": 20_000_000_000, "lo": 20_000_000_000,
+                          "hi": 40_000_000_000, "r": [20_000_000_000, 40_000_000_000]})
+        hot = self.data["ingest_hot"]["sac-6000-c1"]
+        self.assertNotIn("peak_rss_bytes", hot["driver"])
+        self.assertEqual(hot["peak_rss_bytes"]["m"], 14_000_000_000)
+
     def test_identity_defaults_from_manifest(self):
         self.assertEqual(self.data["run_id"],
                          "phase1-synthetic-minspec-b32bc9be-20260722T010000Z")
@@ -201,6 +213,12 @@ class LegacyBundleTests(unittest.TestCase):
         self.assertEqual(self.data["campaign"]["vocabulary"], "old")
         self.assertIn("golden", self.data)                       # golden-download-3000
         self.assertIn("3000", self.data["golden"])
+
+    def test_no_peak_rss_when_absent(self):
+        # Old-vocabulary bundles carry no peak_rss_bytes row — the field is
+        # omitted entirely, never fabricated.
+        self.assertNotIn("peak_rss_bytes", self.data["ingest_cold"]["3000"])
+        self.assertNotIn("peak_rss_bytes", self.data["ingest_cold"]["3000"]["driver"])
 
     def test_build_from_machine_metadata(self):
         self.assertEqual(self.data["build"]["commit"], "a" * 40)  # repo: line

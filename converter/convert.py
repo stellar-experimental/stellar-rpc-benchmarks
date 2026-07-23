@@ -474,7 +474,7 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
     if not drivers:
         warn(f"no cold driver.csv for unit {unit}")
         return None
-    driver_out = {st: stage_agg(drivers, st) for st in drivers[0]}
+    driver_out = {st: stage_agg(drivers, st) for st in drivers[0] if st != PEAK_RSS}
 
     files_out = {}
     for csv_path in sorted(glob.glob(os.path.join(dirs[0], "*.csv"))):
@@ -492,10 +492,29 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
         "tp_txs": stat([counts["txs"] / (d["txhash_total"]["total_ns"] / NS) for d in drivers]),
         "tp_events": stat([counts["events"] / (d["events_total"]["total_ns"] / NS) for d in drivers]),
     }
-    return {"driver": driver_out, "files": files_out, "derived": derived}
+    out = {"driver": driver_out, "files": files_out, "derived": derived}
+    peak = _peak_rss_bytes(drivers)
+    if peak is not None:
+        out["peak_rss_bytes"] = peak
+    return out
 
 
 PACE_LAG = "pace_lag"
+PEAK_RSS = "peak_rss_bytes"
+
+
+def _peak_rss_bytes(drivers):
+    """Peak resident-set-size gauge (bytes), aggregated across runs, or None.
+
+    The driver.csv `peak_rss_bytes` row is a single gauge the harness replicates
+    across the duration columns — read `total_ns` as the byte value. Stored as a
+    plain V (bytes), a sibling of `driver`, not a StageAgg: it is a memory
+    high-water mark, not a latency distribution, and the ns column names do not
+    apply to it. Present in every run or omitted entirely (never zero-filled).
+    """
+    if not all(PEAK_RSS in d for d in drivers):
+        return None
+    return stat([d[PEAK_RSS]["total_ns"] for d in drivers])
 
 
 def _pace_lag_agg(drivers, unit):
@@ -536,14 +555,18 @@ def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
     # pace_lag is aggregated separately so inconsistent presence across runs is
     # zero-filled rather than yielding a short r-array (or being dropped when
     # absent from run 1).
-    driver_out = {st: stage_agg(drivers, st) for st in drivers[0] if st != PACE_LAG}
+    driver_out = {st: stage_agg(drivers, st) for st in drivers[0] if st not in (PACE_LAG, PEAK_RSS)}
     pace = _pace_lag_agg(drivers, unit)
     if pace is not None:
         driver_out[PACE_LAG] = pace
     phases_out = {st: stage_agg(hots, st) for st in hots[0]}
     wall = "chunk_wall" if vocab == "old" else "run_wall"
     derived = {"ledgers_per_s": stat([counts["ledgers"] / (d[wall]["total_ns"] / NS) for d in drivers])}
-    return {"driver": driver_out, "phases": phases_out, "derived": derived}
+    out = {"driver": driver_out, "phases": phases_out, "derived": derived}
+    peak = _peak_rss_bytes(drivers)
+    if peak is not None:
+        out["peak_rss_bytes"] = peak
+    return out
 
 
 _CW = re.compile(r"_c(\d+)$")
