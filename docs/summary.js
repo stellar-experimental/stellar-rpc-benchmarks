@@ -28,6 +28,7 @@
   let MANIFEST = null;
   let CURRENT = null;       // { meta, data } of the run on screen
   let LIVE_TARGETS = null;  // phases[] from targets.json, or null if unfetched
+  let LIVE_FIXED = null;    // fixed_estimates from targets.json (tx submission, query)
   let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
   let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
   let redrawTimer = null;
@@ -355,6 +356,86 @@
     el.appendChild(svg);
   }
 
+  /* ============================ budget chart ============================ */
+  // The end-to-end context figure: the four E2E slices stacked against the
+  // phase's declared E2E budget — the goal composition on one bar, the same
+  // trip with this run's measured ingestion on the other. Hatched segments
+  // are targets or estimates; solid ones are measured.
+  // bars: [{label, sub, segs:[{color, ns, hatch, lab, ink}], e2e, tip}]
+  // opts: { budgetNs, budgetLabel }
+  function budgetChart(bodyId, bars, opts) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const W = Math.max(el.clientWidth, 360);
+    // Narrow screens: the row labels alone (subs move to the tooltip/table)
+    // and fewer axis ticks, so nothing clips or collides.
+    const narrow = W < 560;
+    const labW = gutterW(narrow ? 96 : 140, W, narrow ? bars.map(b => ({ label: b.label })) : bars);
+    const m = { l: labW, r: 96, t: 26, b: 26 };
+    const barH = 30, gap = 24;
+    const inner = W - m.l - m.r;
+    const H = m.t + bars.length * (barH + gap) - gap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    // Diagonal surface-colored stripes overlaid on estimate/target segments.
+    const defs = S("defs", {}, svg);
+    const pat = S("pattern", { id: "hatch-est", width: 7, height: 7, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+    S("line", { x1: 0, y1: 0, x2: 0, y2: 7, stroke: "var(--surface)", "stroke-width": 3, opacity: 0.5 }, pat);
+    const totals = bars.map(b => b.segs.reduce((a, s) => a + s.ns, 0));
+    const xmax = Math.max(opts.budgetNs || 0, ...totals) * 1.02;
+    const x = v => m.l + v / xmax * inner;
+    for (const tv of linTicks(xmax, narrow ? 3 : 6)) {
+      S("line", { x1: x(tv), y1: m.t, x2: x(tv), y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: x(tv), y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: tv === 0 ? "0" : fmtNsAxis(tv) }, svg);
+    }
+    if (opts.budgetNs) {
+      const px = x(opts.budgetNs);
+      S("line", { x1: px, y1: m.t - 5, x2: px, y2: H - m.b, class: "refline-budget" }, svg);
+      const est = String(opts.budgetLabel || "").length * 6.3;
+      let anchor = "middle", tx = px;
+      if (px + est / 2 > W - 4) { anchor = "end"; tx = W - 4; }
+      else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
+      S("text", { x: tx, y: 12, "text-anchor": anchor, class: "reflab-budget", text: opts.budgetLabel || "" }, svg);
+    }
+    bars.forEach((bar, i) => {
+      const y = m.t + i * (barH + gap), cy = y + barH / 2;
+      S("text", { x: m.l - 10, y: cy - 1, "text-anchor": "end", class: "rowlab", text: bar.label }, svg);
+      if (bar.sub && !narrow) S("text", { x: m.l - 10, y: cy + 13, "text-anchor": "end", class: "rowsub", text: bar.sub }, svg);
+      let acc = 0;
+      bar.segs.forEach((sg, si) => {
+        const x0 = x(acc), wpx = Math.max(sg.ns / xmax * inner, 2);
+        const last = si === bar.segs.length - 1;
+        const shape = last ? { d: roundedRight(x0, y, wpx, barH, 5) } : { x: x0, y: y, width: wpx, height: barH };
+        const draw = fill => S(last ? "path" : "rect", Object.assign({ fill }, shape), svg);
+        draw(sg.color);
+        if (sg.hatch) draw("url(#hatch-est)");
+        if (si > 0) S("line", { x1: x0, y1: y, x2: x0, y2: y + barH, stroke: "var(--surface)", "stroke-width": 1 }, svg);
+        if (sg.lab) {
+          if (sg.lab.length * 6.3 + 6 < wpx)
+            S("text", { x: x0 + wpx / 2, y: cy + 3.5, "text-anchor": "middle", class: sg.ink ? "bud-lab" : "share-lab", text: sg.lab }, svg);
+          // The ingestion value is the figure's key number — when its segment
+          // is too narrow, float the label above the bar instead of dropping it.
+          else if (sg.callout)
+            S("text", { x: x0 + wpx / 2, y: y - 4, "text-anchor": "middle", class: "rowsub", style: `fill:${sg.color}`, text: sg.lab }, svg);
+        }
+        acc += sg.ns;
+      });
+      // Derived E2E + budget verdict, in a fixed right-margin column so the
+      // labels never cross the budget line.
+      const d = opts.budgetNs - totals[i];
+      S("text", { x: m.l + inner + 8, y: cy - 2, class: "vallab", text: `E2E ${fmtNs(totals[i])}` }, svg);
+      S("text", {
+        x: m.l + inner + 8, y: cy + 12, class: "rowsub",
+        style: `fill:${d < 0 ? "var(--warn)" : "var(--good-text)"}`,
+        text: d === 0 ? "on budget" : d > 0 ? `${fmtNs(d)} under` : `${fmtNs(-d)} over`,
+      }, svg);
+      const hit = S("rect", { x: m.l, y: y - 4, width: inner, height: barH + 8, fill: "transparent" }, svg);
+      hoverable(hit, bar.label + " — end-to-end composition", bar.tip);
+    });
+    S("line", { x1: m.l, y1: m.t, x2: m.l, y2: H - m.b, class: "baseline-l" }, svg);
+    el.appendChild(svg);
+  }
+
   /* ============================ pacing diagram ============================ */
   // Schematic, not data: how the benchmark feeds ledgers. Due ticks at
   // anchor + i × interval; the loop sleeps until each due time; one slow
@@ -433,6 +514,7 @@
       const res = await fetch("targets.json", { cache: "no-cache" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const t = await res.json();
+      LIVE_FIXED = t.fixed_estimates || null;
       LIVE_TARGETS = deriveTargets(t.phases || [], t.fixed_estimates);
     } catch (err) {
       console.warn("targets.json not loaded; falling back to baked phase_targets", err);
@@ -660,6 +742,23 @@
       ? `<p class="sec-intro" id="raw-results">Raw results: ${gcsLink(camp.source_gcs)}</p>`
       : "";
 
+    /* ---- fig 1.1 inputs: the E2E budget composition ---- */
+    // Renders only when every slice is known: a phase goal with a declared
+    // E2E budget, plus the tx-submission/query estimates from targets.json.
+    const FIXED = LIVE_FIXED || {};
+    const txNs = FIXED.tx_submit_p99_ns || 0, queryNs = FIXED.client_read_p99_ns || 0;
+    const budgetNs = sel ? sel.e2e_budget_ns || 0 : 0;
+    const nBlocks = sel ? sel.block_count || 2 : 2;
+    const canBudget = !!(goalNs && blockNs && budgetNs && txNs && queryNs && goalWorst);
+    // Why the consensus slice spans N blocks: in Phases 1–2 a transaction
+    // waits for the next ledger close; Phase 3's consensus + execution
+    // pipelining adds one more.
+    const whyBlocks = canBudget ? (nBlocks >= 3
+      ? `Phase ${sel.phase} pipelines consensus and execution, so a transaction completes after ${nBlocks} ledger closes`
+      : `a transaction submitted now lands in the <em>next</em> ledger close, not the one in flight`) : "";
+    const budgetFig = canBudget ? figHTML("fig11", "Fig 1.1", "Where ingestion sits in the end-to-end budget", "fig11-legend",
+      `The four slices of the end-to-end (E2E) round trip, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices are targets or estimates (tx submission and query stay estimates until their benchmarks land); the solid slice is measured. Ingestion is the one slice these benchmarks move.`) : "";
+
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
     const pacePara = closeNs > 0
@@ -672,6 +771,7 @@
       <div class="sec-head"><span class="sec-num">01</span><h2>At a glance</h2></div>
       ${sel ? `<p class="sec-intro">Phase ${sel.phase} models a ${fmtNsAxis(blockNs)} block time.${goalNs ? ` The goal: per-ledger ingestion latency p99 within ${fmtNsAxis(goalNs)} on every workload profile.` : ""}</p>` : ""}
       ${banner}
+      ${budgetFig}
       ${PH ? phaseTableHTML(PH) : ""}
     </section>
 
@@ -724,6 +824,49 @@
     ` + footerHTML(D, runId);
 
     const C = COLORS();
+
+    /* ---- fig 1.1 E2E budget bar ---- */
+    // Same slice order and derivation as the latency model
+    // (latency-model.html): E2E = block_count × block + tx + ingest + query.
+    if (canBudget) {
+      const wp99 = ING[goalWorst].driver.ingest_total.p99.m;
+      const blockTotal = nBlocks * blockNs;
+      const e2eOf = ing => blockTotal + txNs + ing + queryNs;
+      const segs = (ingNs, hatch) => [
+        { color: C.de, ns: blockTotal, lab: `Stellar Core consensus — ${fmtNsAxis(blockTotal)}`, ink: true },
+        { color: C.de, ns: txNs, hatch: true },
+        { color: C.s1, ns: ingNs, hatch: hatch, lab: fmtNs(ingNs), callout: true },
+        { color: C.de, ns: queryNs, hatch: true },
+      ];
+      const tip = (ingNs, ingLabel) => [
+        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
+        { color: C.de, value: fmtNs(txNs), label: "tx submission (estimate)" },
+        { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
+        { color: C.de, value: fmtNs(queryNs), label: "query (estimate)" },
+        { value: fmtNs(e2eOf(ingNs)), label: "end-to-end (derived)" },
+      ];
+      budgetChart("fig11-body", [
+        { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
+          segs: segs(goalNs, true), tip: tip(goalNs, "ingestion (target)") },
+        { label: "This run", sub: `${disp(goalWorst)} p99`,
+          segs: segs(wp99, false), tip: tip(wp99, "ingestion (measured p99)") },
+      ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
+      legend("fig11-legend", [
+        { label: "Stellar Core consensus", color: C.de },
+        { label: "tx submission + query (estimates)", color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
+        { label: "ingestion", color: C.s1 },
+        { label: "E2E budget", color: CVAR("--warn"), line: true },
+      ]);
+      const dTxt = e2e => { const d = budgetNs - e2e; return d === 0 ? "on budget" : d > 0 ? fmtNs(d) + " under" : fmtNs(-d) + " over"; };
+      tableView("fig11", ["Slice", `Phase ${sel.phase} goal`, "This run", "Provenance"], [
+        [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
+        ["tx submission", fmtNsAxis(txNs), fmtNsAxis(txNs), "estimate"],
+        ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
+        ["query", fmtNsAxis(queryNs), fmtNsAxis(queryNs), "estimate"],
+        ["end-to-end (derived)", fmtNs(e2eOf(goalNs)), fmtNs(e2eOf(wp99)), "derived"],
+        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eOf(goalNs)), dTxt(e2eOf(wp99)), "derived"],
+      ]);
+    }
 
     /* ---- fig 2.1 pacing diagram ---- */
     paceDiagram("fig21-body");

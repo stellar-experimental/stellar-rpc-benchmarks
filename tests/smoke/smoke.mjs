@@ -313,6 +313,18 @@ for (const run of manifest.runs) {
     check(group, "phase table lists all three phases", /Phase 1/.test(phTbl) && /Phase 2/.test(phTbl) && /Phase 3/.test(phTbl), phTbl.slice(0, 100));
   }
   check(group, "no Orgs or Retention rows", !/Orgs|Retention/.test(phTbl), phTbl.slice(0, 100));
+  // Fig 1.1: the E2E budget bar — the goal composition vs the same trip with
+  // this run's measured ingestion, against the phase's declared E2E budget.
+  if (phNo != null) {
+    const f11 = doc.querySelector("#fig11-body svg");
+    check(group, "budget figure rendered", !!f11, "missing");
+    check(group, "budget ceiling line drawn", !!(f11 && f11.querySelector("line.refline-budget")), "missing");
+    const f11t = txt(doc.querySelector("#fig11-tv"));
+    check(group, "budget table: all four slices + derived end-to-end",
+      /Stellar Core consensus/.test(f11t) && /tx submission/.test(f11t) && /ingestion/.test(f11t) && /query/.test(f11t) && /end-to-end \(derived\)/.test(f11t),
+      f11t.slice(0, 160));
+    check(group, "budget verdict rendered (under/over/on budget)", /(under|over|on budget)/.test(f11t), f11t.slice(0, 160));
+  }
   // Dataset table: every cell renders real data — no empty or "—" cells.
   const dsCells = [...doc.querySelectorAll("#dataset-table td")].map(td => txt(td));
   const badCell = c => !c || c === "—" || /NaN|Infinity/.test(c);
