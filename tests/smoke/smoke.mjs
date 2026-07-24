@@ -274,6 +274,61 @@ if (phaseRun) {
   }
 }
 
+/* ---------------- stakeholder summary (summary.html) ---------------- */
+/* The public-facing summary renders the same run JSONs, cut to the ingestion
+   story: goal banner + phase-goal table (targets.json is the source; Phase 2's
+   ingestion target is derived), methodology (dataset table + pacing schematic),
+   the headline p99 chart with two separate reference lines, the six-phase
+   per-ledger figure, and machine metadata as the bottom-most section. */
+for (const run of manifest.runs) {
+  const group = `summary:${run.id}`;
+  console.log(`\n=== summary.html ?run=${run.id} (${run.kind}) ===`);
+  const { window, errors } = await loadViewer(`?run=${run.id}`, { page: "summary.html", script: "summary.js" });
+  const doc = window.document;
+  const report = doc.getElementById("report");
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "masthead present", !!report.querySelector(".masthead"), "missing");
+  check(group, "deep link kept in URL", window.location.search === `?run=${run.id}`, window.location.search);
+  const full = doc.getElementById("full-report");
+  check(group, "full-report link targets internal viewer", !!full && full.getAttribute("href") === `index.html?run=${run.id}`, full ? full.getAttribute("href") : "missing");
+  // Audience vocabulary: the page never uses the internal tier/org words.
+  const text = txt(report);
+  const banned = text.match(/\b(h[o]t|pod|platform|team)\b/i);
+  check(group, "no internal vocabulary in rendered page", !banned, banned ? banned[0] : "");
+  // Section order: machine metadata is the bottom-most section.
+  const secs = [...report.querySelectorAll("section")].map(s => s.id);
+  check(group, "section order glance→method→goal→phases→machine", secs.join(",") === "glance,method,goal,phases,machine", secs.join(","));
+  const bannerTxt = txt(report.querySelector(".banner"));
+  check(group, "goal banner has a verdict", /(MEETS GOAL|MISS)/.test(bannerTxt), bannerTxt.slice(0, 120));
+  const phTbl = txt(doc.querySelector("#phase-block table"));
+  check(group, "phase table lists all three phases", /Phase 1/.test(phTbl) && /Phase 2/.test(phTbl) && /Phase 3/.test(phTbl), phTbl.slice(0, 100));
+  check(group, "Phase 2 ingestion target derived (400 ms)", /400 ms/.test(phTbl), phTbl.slice(0, 200));
+  // Dataset table: every cell renders real data — no empty or "—" cells.
+  const dsCells = [...doc.querySelectorAll("#dataset-table td")].map(td => txt(td));
+  const badCell = c => !c || c === "—" || /NaN|Infinity/.test(c);
+  check(group, "dataset table has no empty or — cells", dsCells.length > 0 && !dsCells.some(badCell), dsCells.filter(badCell).length + " bad of " + dsCells.length);
+  check(group, "dataset table names the workloads", /SAC transfers/.test(txt(doc.getElementById("dataset-table"))), "missing");
+  check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
+  // Headline figure: bars plus two visually separate reference lines.
+  const f31 = doc.querySelector("#fig31-body svg");
+  check(group, "headline figure rendered", !!f31, "missing");
+  check(group, "ingestion-target refline (dashed) drawn", !!(f31 && f31.querySelector("line.refline")), "missing");
+  check(group, "block-time refline (solid) drawn", !!(f31 && f31.querySelector("line.refline-block")), "missing");
+  // Six-phase figure: end-to-end lane plus every phase.
+  const f41 = txt(doc.querySelector("#fig41-tv"));
+  check(group, "all phases in fig 4.1 table", /end to end/.test(f41) && /extract/.test(f41) && /commit \(fsync\)/.test(f41) && /apply/.test(f41), f41.slice(0, 160));
+  const meta = txt(doc.getElementById("machine-metadata"));
+  check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
+  // Per-run sanity values.
+  if (run.id.startsWith("phase2-")) {
+    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 400 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
+    check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
+  } else if (run.id.startsWith("phase1-")) {
+    check(group, "phase 1 banner: 3 / 3 MEETS GOAL", /3 \/ 3/.test(bannerTxt) && /MEETS GOAL/.test(bannerTxt), bannerTxt.slice(0, 140));
+  }
+  window.close();
+}
+
 console.log(`\nSMOKE SUMMARY: ${pass} passed, ${fail} failed (${manifest.runs.length} runs)`);
 if (fail) {
   console.log("Failures:");

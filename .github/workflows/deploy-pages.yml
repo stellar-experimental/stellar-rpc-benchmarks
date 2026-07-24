@@ -33,8 +33,13 @@ jobs:
         run: |
           app_hash=$(sha256sum docs/app.js | cut -c1-8)
           css_hash=$(sha256sum docs/styles.css | cut -c1-8)
+          sum_js_hash=$(sha256sum docs/summary.js | cut -c1-8)
+          sum_css_hash=$(sha256sum docs/summary.css | cut -c1-8)
           sed -i "s|href=\"styles.css\"|href=\"styles.css?v=${css_hash}\"|" docs/index.html
           sed -i "s|src=\"app.js\"|src=\"app.js?v=${app_hash}\"|" docs/index.html
+          sed -i "s|href=\"styles.css\"|href=\"styles.css?v=${css_hash}\"|" docs/summary.html
+          sed -i "s|href=\"summary.css\"|href=\"summary.css?v=${sum_css_hash}\"|" docs/summary.html
+          sed -i "s|src=\"summary.js\"|src=\"summary.js?v=${sum_js_hash}\"|" docs/summary.html
 
       - name: Deploy docs/ to gh-pages
         uses: JamesIves/github-pages-deploy-action@v4
