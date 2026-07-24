@@ -154,6 +154,9 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; 
 .banner-copy { flex: 1 1 320px; min-width: 260px; }
 .banner-copy .lead { font-weight: 650; }
 .banner-copy p { margin: 2px 0 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.5; }
+/* Stacked verdict banners (phase goal + block model) read as one pair. */
+.banners { display: flex; flex-direction: column; gap: 12px; margin: 24px 0 18px; }
+.banners .banner { margin: 0; }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; letter-spacing: 0.08em;
@@ -298,6 +301,15 @@ pre.metadata {
 .phase-guide li { color: var(--ink-2); font-size: 13.5px; line-height: 1.55; margin: 4px 0; max-width: 58em; }
 .phase-guide li strong { color: var(--ink); }
 .phase-guide p:last-child { margin-bottom: 0; }
+
+/* phase targets table (campaign runs) */
+.phase-block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin: 22px 0; padding: 18px 20px 14px; }
+.phase-block table.phase-table { width: 100%; min-width: 560px; }
+.phase-block th.ph-sel, .phase-block td.ph-sel { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.phase-block th.ph-sel { color: var(--accent); }
+.ph-badge { display: block; font-size: 9px; letter-spacing: 0.08em; color: var(--accent); }
+.phase-caption { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; max-width: 60em; }
+.phase-caveat { margin: 14px 0 2px; }
 
 /* generic fallback tables (unknown section/stage) */
 .generic-block { margin: 18px 0; }
