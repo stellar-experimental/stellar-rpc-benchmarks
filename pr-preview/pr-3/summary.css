@@ -35,6 +35,9 @@
 
 /* ---------- pacing diagram ---------- */
 .pace-due { stroke: var(--baseline); stroke-dasharray: 3 3; }
+.pace-anchor { stroke: var(--ink-2); stroke-width: 1.5; }
+.pace-pre { stroke: var(--baseline); stroke-dasharray: 2 4; opacity: 0.7; }
 .pace-note { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: var(--muted); }
 .pace-note.warn { fill: var(--warn); }
+.pace-note.anchor { fill: var(--ink-2); }
 .pace-barlab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #fff; }
