@@ -2,6 +2,13 @@
   "schema_version": 1,
   "runs": [
     {
+      "id": "phase2-c6id8xl-c48a55c6-20260724T000724Z",
+      "name": "phase2-c6id8xl",
+      "date": "2026-07-24",
+      "kind": "synthetic",
+      "path": "runs/phase2-c6id8xl-c48a55c6-20260724T000724Z.json"
+    },
+    {
       "id": "phase2-m6id2xl-c48a55c6-20260723T035541Z",
       "name": "phase2-m6id2xl",
       "date": "2026-07-23",
