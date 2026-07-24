@@ -25,6 +25,17 @@
   fill: var(--muted); letter-spacing: 0.04em;
 }
 
+/* ---------- fig 1.1 E2E budget bar ----------
+   The budget is a hard ceiling, not a goal to aim at, so it gets a solid
+   warn-colored line — distinct from the dashed ingestion-target refline. */
+.refline-budget { stroke: var(--warn); stroke-width: 1.5; }
+.reflab-budget {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+  fill: var(--warn); letter-spacing: 0.04em;
+}
+/* in-bar label on the light gray block-time segment (white would wash out) */
+.bud-lab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: var(--ink); }
+
 /* pass/miss readout under the headline figure — never wrap mid-item */
 .summary #goal-readout .goal-item { white-space: nowrap; }
 
