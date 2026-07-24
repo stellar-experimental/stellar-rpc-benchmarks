@@ -32,13 +32,15 @@ function fetchShim(input) {
   });
 }
 
-async function loadViewer(query) {
+async function loadViewer(query, opts = {}) {
+  const page = opts.page || "index.html";
+  const script = opts.script || "app.js";
   const errors = [];
   const vc = new VirtualConsole();
   vc.on("jsdomError", (e) => errors.push("jsdomError: " + (e.detail?.message || e.message || e)));
   vc.on("error", (...a) => errors.push("console.error: " + a.join(" ")));
 
-  const html = fs.readFileSync(path.join(DOCS, "index.html"), "utf8");
+  const html = fs.readFileSync(path.join(DOCS, page), "utf8");
   const dom = new JSDOM(html, {
     url: `${ORIGIN}/${query}`,
     runScripts: "dangerously",
@@ -54,9 +56,9 @@ async function loadViewer(query) {
     value: () => ({ width: 100, height: 30, top: 0, left: 0, right: 100, bottom: 30 }), configurable: true,
   });
 
-  // index.html references app.js via <script src>, which jsdom does not fetch
+  // The page references its script via <script src>, which jsdom does not fetch
   // without `resources: "usable"` (an HTTP loader we deliberately avoid) — inject it.
-  const app = fs.readFileSync(path.join(DOCS, "app.js"), "utf8");
+  const app = fs.readFileSync(path.join(DOCS, script), "utf8");
   const s = window.document.createElement("script");
   s.textContent = app;
   window.document.body.appendChild(s);
@@ -270,6 +272,85 @@ if (phaseRun) {
     check(group, "pace budget = actual 2 s close interval (not re-based by phase)", /2\.00 s close interval/.test(paceReadout), paceReadout.slice(0, 160));
     window.close();
   }
+}
+
+/* ---------------- stakeholder summary (summary.html) ---------------- */
+/* The public-facing summary renders the same run JSONs, cut to the ingestion
+   story: goal banner + phase-goal table (targets.json is the source; Phase 2's
+   ingestion target is derived), methodology (dataset table + pacing schematic),
+   the headline p99 chart with two separate reference lines, the six-phase
+   per-ledger figure, and machine metadata as the bottom-most section. */
+for (const run of manifest.runs) {
+  const group = `summary:${run.id}`;
+  console.log(`\n=== summary.html ?run=${run.id} (${run.kind}) ===`);
+  const { window, errors } = await loadViewer(`?run=${run.id}`, { page: "summary.html", script: "summary.js" });
+  const doc = window.document;
+  const report = doc.getElementById("report");
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "masthead present", !!report.querySelector(".masthead"), "missing");
+  check(group, "deep link kept in URL", window.location.search === `?run=${run.id}`, window.location.search);
+  const full = doc.getElementById("full-report");
+  check(group, "full-report link targets internal viewer", !!full && full.getAttribute("href") === `index.html?run=${run.id}`, full ? full.getAttribute("href") : "missing");
+  // Audience vocabulary: the page never uses the internal tier/org words.
+  const text = txt(report);
+  const banned = text.match(/\b(h[o]t|pod|platform|team)\b/i);
+  check(group, "no internal vocabulary in rendered page", !banned, banned ? banned[0] : "");
+  // Section order: machine metadata is the bottom-most section.
+  const secs = [...report.querySelectorAll("section")].map(s => s.id);
+  check(group, "section order glance→method→goal→phases→machine", secs.join(",") === "glance,method,goal,phases,machine", secs.join(","));
+  const bannerTxt = txt(report.querySelector(".banner"));
+  check(group, "goal banner has a verdict", /(MEETS GOAL|MISS)/.test(bannerTxt), bannerTxt.slice(0, 120));
+  // Goals table: cut to the phase the run was paced for; the two benchmark
+  // non-inputs (Orgs, Retention) are not shown.
+  const phNo = (runJSON(run.id).campaign || {}).phase;
+  const phTbl = txt(doc.querySelector("#phase-block table"));
+  if (phNo != null) {
+    const others = [1, 2, 3].filter(p => p !== phNo);
+    check(group, `phase table shows only Phase ${phNo}, badged 'this run'`,
+      new RegExp(`Phase ${phNo}`).test(phTbl) && /this run/.test(phTbl) && others.every(p => !new RegExp(`Phase ${p}\\b`).test(phTbl)),
+      phTbl.slice(0, 100));
+  } else {
+    check(group, "phase table lists all three phases", /Phase 1/.test(phTbl) && /Phase 2/.test(phTbl) && /Phase 3/.test(phTbl), phTbl.slice(0, 100));
+  }
+  check(group, "no Orgs or Retention rows", !/Orgs|Retention/.test(phTbl), phTbl.slice(0, 100));
+  // Dataset table: every cell renders real data — no empty or "—" cells.
+  const dsCells = [...doc.querySelectorAll("#dataset-table td")].map(td => txt(td));
+  const badCell = c => !c || c === "—" || /NaN|Infinity/.test(c);
+  check(group, "dataset table has no empty or — cells", dsCells.length > 0 && !dsCells.some(badCell), dsCells.filter(badCell).length + " bad of " + dsCells.length);
+  check(group, "dataset table names the workloads", /SAC transfers/.test(txt(doc.getElementById("dataset-table"))), "missing");
+  // Test-data provenance: sizes + source come from dataset-sizes.json; the
+  // run's own source_gcs is the raw-results dir, linked from §05.
+  const dsTblTxt = txt(doc.getElementById("dataset-table"));
+  check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
+  check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
+  check(group, "raw-results link in §05", /results\//.test(txt(doc.getElementById("raw-results"))), "missing");
+  check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
+  // Headline figure: bars plus two visually separate reference lines.
+  const f31 = doc.querySelector("#fig31-body svg");
+  check(group, "headline figure rendered", !!f31, "missing");
+  check(group, "ingestion-target refline (dashed) drawn", !!(f31 && f31.querySelector("line.refline")), "missing");
+  check(group, "block-time refline (solid) drawn", !!(f31 && f31.querySelector("line.refline-block")), "missing");
+  // Fig 4.1: share-of-ingestion-time composition (additive per-phase totals).
+  const f41 = txt(doc.querySelector("#fig41-tv"));
+  check(group, "share table has all six phases with % shares", /extract/.test(f41) && /commit \(fsync\)/.test(f41) && /apply/.test(f41) && /%/.test(f41), f41.slice(0, 160));
+  check(group, "share figure rendered", !!doc.querySelector("#fig41-body svg"), "missing");
+  // Fig 4.2: per-phase percentile detail behind a phase picker (linear axis).
+  const pickBtns = [...doc.querySelectorAll("#fig42-picker button")];
+  check(group, "phase picker: 7 options, 'end to end' selected", pickBtns.length === 7 && txt(doc.querySelector("#fig42-picker button.sel")) === "end to end", pickBtns.map(b => txt(b)).join(","));
+  check(group, "detail figure rendered on a linear scale", /linear scale/.test(txt(doc.querySelector("#fig42-body"))), "missing");
+  const f42 = txt(doc.querySelector("#fig42-tv"));
+  check(group, "all phases in fig 4.2 table", /end to end/.test(f42) && /extract/.test(f42) && /commit \(fsync\)/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
+  const meta = txt(doc.getElementById("machine-metadata"));
+  check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
+  // Per-run sanity values.
+  if (run.id.startsWith("phase2-")) {
+    check(group, "Phase 2 ingestion target derived (400 ms)", /400 ms/.test(phTbl), phTbl.slice(0, 200));
+    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 400 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
+    check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
+  } else if (run.id.startsWith("phase1-")) {
+    check(group, "phase 1 banner: 3 / 3 MEETS GOAL", /3 \/ 3/.test(bannerTxt) && /MEETS GOAL/.test(bannerTxt), bannerTxt.slice(0, 140));
+  }
+  window.close();
 }
 
 console.log(`\nSMOKE SUMMARY: ${pass} passed, ${fail} failed (${manifest.runs.length} runs)`);

@@ -222,14 +222,15 @@ converter warns.
 
 ```jsonc
 { "schema_version": 1,
-  "runs": [                                // newest date first
-    { "id": "synthetic-2026-07-15", "name": "…", "date": "2026-07-15",
-      "kind": "synthetic", "path": "runs/synthetic-2026-07-15.json" },
+  "runs": [                                // oldest date first
     { "id": "pubnet-2026-07-13", "name": "…", "date": "2026-07-13",
-      "kind": "pubnet", "path": "runs/pubnet-2026-07-13.json" } ] }
+      "kind": "pubnet", "path": "runs/pubnet-2026-07-13.json" },
+    { "id": "synthetic-2026-07-15", "name": "…", "date": "2026-07-15",
+      "kind": "synthetic", "path": "runs/synthetic-2026-07-15.json" } ] }
 ```
 
-The converter inserts/replaces its run's entry keyed by `id` and re-sorts by date desc.
+The converter inserts/replaces its run's entry keyed by `id` and re-sorts by date
+ascending, so both viewers list and open the earliest run first.
 
 ## Inputs — result-bundle layouts & manifests
 

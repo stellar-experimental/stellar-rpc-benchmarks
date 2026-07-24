@@ -154,7 +154,7 @@ stellar-rpc-benchmarks/
     ├── app.js               # renderers (per dataset.kind) + charts
     ├── styles.css           # design system (light + dark)
     └── runs/
-        ├── index.json       # manifest of runs (newest date first)
+        ├── index.json       # manifest of runs (oldest date first)
         └── <run-id>.json    # one file per run (schema v1)
 ```
 
