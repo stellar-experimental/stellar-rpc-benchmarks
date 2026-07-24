@@ -300,27 +300,51 @@ for (const run of manifest.runs) {
   check(group, "section order glance→method→goal→phases→machine", secs.join(",") === "glance,method,goal,phases,machine", secs.join(","));
   const bannerTxt = txt(report.querySelector(".banner"));
   check(group, "goal banner has a verdict", /(MEETS GOAL|MISS)/.test(bannerTxt), bannerTxt.slice(0, 120));
+  // Goals table: cut to the phase the run was paced for; the two benchmark
+  // non-inputs (Orgs, Retention) are not shown.
+  const phNo = (runJSON(run.id).campaign || {}).phase;
   const phTbl = txt(doc.querySelector("#phase-block table"));
-  check(group, "phase table lists all three phases", /Phase 1/.test(phTbl) && /Phase 2/.test(phTbl) && /Phase 3/.test(phTbl), phTbl.slice(0, 100));
-  check(group, "Phase 2 ingestion target derived (400 ms)", /400 ms/.test(phTbl), phTbl.slice(0, 200));
+  if (phNo != null) {
+    const others = [1, 2, 3].filter(p => p !== phNo);
+    check(group, `phase table shows only Phase ${phNo}, badged 'this run'`,
+      new RegExp(`Phase ${phNo}`).test(phTbl) && /this run/.test(phTbl) && others.every(p => !new RegExp(`Phase ${p}\\b`).test(phTbl)),
+      phTbl.slice(0, 100));
+  } else {
+    check(group, "phase table lists all three phases", /Phase 1/.test(phTbl) && /Phase 2/.test(phTbl) && /Phase 3/.test(phTbl), phTbl.slice(0, 100));
+  }
+  check(group, "no Orgs or Retention rows", !/Orgs|Retention/.test(phTbl), phTbl.slice(0, 100));
   // Dataset table: every cell renders real data — no empty or "—" cells.
   const dsCells = [...doc.querySelectorAll("#dataset-table td")].map(td => txt(td));
   const badCell = c => !c || c === "—" || /NaN|Infinity/.test(c);
   check(group, "dataset table has no empty or — cells", dsCells.length > 0 && !dsCells.some(badCell), dsCells.filter(badCell).length + " bad of " + dsCells.length);
   check(group, "dataset table names the workloads", /SAC transfers/.test(txt(doc.getElementById("dataset-table"))), "missing");
+  // Test-data provenance: sizes + source come from dataset-sizes.json; the
+  // run's own source_gcs is the raw-results dir, linked from §05.
+  const dsTblTxt = txt(doc.getElementById("dataset-table"));
+  check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
+  check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
+  check(group, "raw-results link in §05", /results\//.test(txt(doc.getElementById("raw-results"))), "missing");
   check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
   // Headline figure: bars plus two visually separate reference lines.
   const f31 = doc.querySelector("#fig31-body svg");
   check(group, "headline figure rendered", !!f31, "missing");
   check(group, "ingestion-target refline (dashed) drawn", !!(f31 && f31.querySelector("line.refline")), "missing");
   check(group, "block-time refline (solid) drawn", !!(f31 && f31.querySelector("line.refline-block")), "missing");
-  // Six-phase figure: end-to-end lane plus every phase.
+  // Fig 4.1: share-of-ingestion-time composition (additive per-phase totals).
   const f41 = txt(doc.querySelector("#fig41-tv"));
-  check(group, "all phases in fig 4.1 table", /end to end/.test(f41) && /extract/.test(f41) && /commit \(fsync\)/.test(f41) && /apply/.test(f41), f41.slice(0, 160));
+  check(group, "share table has all six phases with % shares", /extract/.test(f41) && /commit \(fsync\)/.test(f41) && /apply/.test(f41) && /%/.test(f41), f41.slice(0, 160));
+  check(group, "share figure rendered", !!doc.querySelector("#fig41-body svg"), "missing");
+  // Fig 4.2: per-phase percentile detail behind a phase picker (linear axis).
+  const pickBtns = [...doc.querySelectorAll("#fig42-picker button")];
+  check(group, "phase picker: 7 options, 'end to end' selected", pickBtns.length === 7 && txt(doc.querySelector("#fig42-picker button.sel")) === "end to end", pickBtns.map(b => txt(b)).join(","));
+  check(group, "detail figure rendered on a linear scale", /linear scale/.test(txt(doc.querySelector("#fig42-body"))), "missing");
+  const f42 = txt(doc.querySelector("#fig42-tv"));
+  check(group, "all phases in fig 4.2 table", /end to end/.test(f42) && /extract/.test(f42) && /commit \(fsync\)/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
   const meta = txt(doc.getElementById("machine-metadata"));
   check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
   // Per-run sanity values.
   if (run.id.startsWith("phase2-")) {
+    check(group, "Phase 2 ingestion target derived (400 ms)", /400 ms/.test(phTbl), phTbl.slice(0, 200));
     check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 400 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
     check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
   } else if (run.id.startsWith("phase1-")) {

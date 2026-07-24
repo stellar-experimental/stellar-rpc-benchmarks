@@ -28,6 +28,8 @@
   let MANIFEST = null;
   let CURRENT = null;       // { meta, data } of the run on screen
   let LIVE_TARGETS = null;  // phases[] from targets.json, or null if unfetched
+  let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
+  let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
   let redrawTimer = null;
 
   /* ============================ theme ============================ */
@@ -58,10 +60,9 @@
     return Math.round(ns) + " ns";
   }
   const fmtInt = x => Math.round(x).toLocaleString("en-US");
-  const fmtK = x => x >= 1e6 ? trim(x / 1e6) + " M" : x >= 1e3 ? trim(x / 1e3) + " K" : trim(x);
+  const fmtMiB = bytes => trim(bytes / 1048576) + " MiB";
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const shortCommit = c => (c || "").slice(0, 8);
-  const verNum = (s, re) => { const m = (s || "").match(re); return m ? m[1] : ""; };
 
   /* ============================ svg helpers ============================ */
   const NSVG = "http://www.w3.org/2000/svg";
@@ -176,11 +177,12 @@
   /* ============================ dot-range chart ============================ */
   // Same primitive as the internal viewer's fig 4.2 chart.
   // rows: [{label, sub, lanes:[{name,color,pts:{p50,p90,p99,max}(ns)}]}]
-  // opts: { reflines: [{ns, label, block}], groupSeparators }
+  // opts: { reflines: [{ns, label, block}], groupSeparators, linear }
   function dotRangeChart(bodyId, rows, opts = {}) {
     const el = document.getElementById(bodyId);
     if (!el) return;
     el.replaceChildren();
+    const lin = !!opts.linear;
     const reflines = (opts.reflines || []).slice().sort((a, b) => a.ns - b.ns);
     const W = Math.max(el.clientWidth, 360);
     const labW = gutterW(W < 560 ? 96 : 140, W, rows);
@@ -190,16 +192,19 @@
     let allVals = [];
     rows.forEach(r => r.lanes.forEach(l => allVals.push(l.pts.p50, l.pts.max)));
     reflines.forEach(rl => allVals.push(rl.ns));
-    const lo = Math.min(...allVals) / 1.35, hi = Math.max(...allVals) * 1.25;
-    const x = v => m.l + (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (W - m.l - m.r);
+    const lo = lin ? 0 : Math.min(...allVals) / 1.35;
+    const hi = Math.max(...allVals) * (lin ? 1.12 : 1.25);
+    const x = lin
+      ? v => m.l + v / hi * (W - m.l - m.r)
+      : v => m.l + (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (W - m.l - m.r);
     const nLanes = rows.reduce((a, r) => a + r.lanes.length, 0);
     const rowGap = 16;
     const H = m.t + nLanes * laneH + rows.length * rowGap + m.b;
     const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
-    for (const tv of logTicks(lo, hi)) {
+    for (const tv of (lin ? linTicks(hi, 6) : logTicks(lo, hi))) {
       const px = x(tv);
       S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "gridline" }, svg);
-      S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: fmtNsAxis(tv) }, svg);
+      S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: tv === 0 ? "0" : fmtNsAxis(tv) }, svg);
     }
     reflines.forEach((rl, i) => {
       if (!(rl.ns > lo && rl.ns < hi)) return;
@@ -211,7 +216,7 @@
       else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
       S("text", { x: tx, y: 12 + i * 13, "text-anchor": anchor, class: rl.block ? "reflab-block" : "reflab", text: rl.label || "" }, svg);
     });
-    S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: "per-ledger latency · log scale" }, svg);
+    S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: `per-ledger latency · ${lin ? "linear" : "log"} scale` }, svg);
     let y = m.t;
     rows.forEach((row, ri) => {
       row.lanes.forEach((lane, li) => {
@@ -241,6 +246,51 @@
       }
       y += rowGap;
     });
+    el.appendChild(svg);
+  }
+
+  /* ============================ share chart ============================ */
+  // Composition of the run's total ingestion time: one stacked bar per
+  // profile, on a linear 0–100 % axis. Built from per-phase total_ns —
+  // totals are additive across phases; percentiles are not.
+  // rows: [{label, sub, parts:[{name, color, ns}]}]
+  function shareChart(bodyId, rows) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const W = Math.max(el.clientWidth, 360);
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
+    const m = { l: labW, r: 34, t: 8, b: 34 };
+    const barH = 26, gap = 18;
+    const inner = W - m.l - m.r;
+    const H = m.t + rows.length * (barH + gap) - gap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      S("line", { x1: m.l + f * inner, y1: m.t, x2: m.l + f * inner, y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: m.l + f * inner, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: Math.round(f * 100) + " %" }, svg);
+    }
+    S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: "share of the run's total ingestion time" }, svg);
+    let y = m.t;
+    for (const row of rows) {
+      const total = row.parts.reduce((a, p) => a + p.ns, 0);
+      S("text", { x: m.l - 10, y: y + barH / 2 + 1, "text-anchor": "end", class: "rowlab", text: row.label }, svg);
+      if (row.sub) S("text", { x: m.l - 10, y: y + barH / 2 + 14, "text-anchor": "end", class: "rowsub", text: row.sub }, svg);
+      let acc = 0;
+      row.parts.forEach((p, i) => {
+        const x0 = m.l + acc / total * inner, wpx = p.ns / total * inner;
+        const seg = i === row.parts.length - 1
+          ? S("path", { d: roundedRight(x0, y, wpx, barH, 6), fill: p.color, stroke: "var(--surface)", "stroke-width": 1 }, svg)
+          : S("rect", { x: x0, y: y, width: wpx, height: barH, fill: p.color, stroke: "var(--surface)", "stroke-width": 1 }, svg);
+        const pct = p.ns / total * 100;
+        if (wpx > 42) S("text", { x: x0 + wpx / 2, y: y + barH / 2 + 3.5, "text-anchor": "middle", class: "share-lab", text: pct.toFixed(0) + " %" }, svg);
+        hoverable(seg, `${row.label} — ${p.name}`, [
+          { color: p.color, value: pct.toFixed(1) + " %", label: "share of ingestion time" },
+          { color: p.color, value: fmtNs(p.ns), label: "total over the run" },
+        ]);
+        acc += p.ns;
+      });
+      y += barH + gap;
+    }
     el.appendChild(svg);
   }
 
@@ -388,6 +438,20 @@
       console.warn("targets.json not loaded; falling back to baked phase_targets", err);
     }
   }
+  async function loadDatasetSizes() {
+    try {
+      const res = await fetch("dataset-sizes.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      DATASET_SIZES = await res.json();
+    } catch (err) {
+      console.warn("dataset-sizes.json not loaded; dataset sizes omitted", err);
+    }
+  }
+  // Match a run unit ("sac-5000-c1") to its dataset-sizes profile ("sac-5000").
+  function sizesFor(unit) {
+    const p = DATASET_SIZES && DATASET_SIZES.profiles;
+    return (p && p[String(unit).replace(/-c\d+$/, "")]) || null;
+  }
   // {targets, sel} — sel is the phase this run was paced for (campaign.phase).
   function phaseState(D) {
     const camp = D.campaign || {};
@@ -413,31 +477,22 @@
 
   /* ============================ shared HTML ============================ */
   function mastheadHTML(D) {
-    const ds = D.dataset, mac = D.machine || {}, b = D.build || {}, camp = D.campaign || {};
+    const ds = D.dataset;
     const um = ds.unit_meta || {};
     const units = ds.unit_order || Object.keys(um);
-    let L = 0, T = 0, Ev = 0;
-    units.forEach(u => { const k = um[u] || {}; L += k.ledgers || 0; T += k.txs || 0; Ev += k.events || 0; });
-    const buildBits = [];
-    if (b.version) buildBits.push(b.version);
-    if (b.commit) buildBits.push(shortCommit(b.commit) + (b.branch ? ` (${b.branch})` : ""));
-    const go = verNum(b.go, /go(\d[\d.]*)/); if (go) buildBits.push("go " + go);
-    const rust = verNum(b.rust, /rustc (\d[\d.]*)/); if (rust) buildBits.push("rustc " + rust);
-    const machineLine = [mac.instance, mac.vcpus ? mac.vcpus + " vCPU" : "", mac.mem, "local NVMe instance store"].filter(Boolean).join(" · ");
-    const osLine = [mac.os, mac.instance_id].filter(Boolean).join(" · ");
-    const dsLine = `${units.length} ${(ds.unit_label || "unit").toLowerCase()}${units.length === 1 ? "" : "s"} · ${fmtInt(L)} ledgers · ${fmtK(Ev)} events · ${fmtK(T)} txs`;
-    const src = camp.source_gcs
-      ? `<a href="https://console.cloud.google.com/storage/browser/${esc(camp.source_gcs.replace("gs://", ""))}">${esc(camp.source_gcs)} ↗</a>`
-      : "—";
-    const metaCell = (k, v) => `<div class="meta-cell"><div class="meta-k">${esc(k)}</div><div class="meta-v">${esc(v)}</div></div>`;
-    const closeNs = camp.close_interval_ns;
-    const closeTxt = closeNs == null ? "" : (closeNs > 0 ? fmtNs(closeNs) + " close interval (paced)" : "unpaced");
-    const reps = camp.reps || 5;
-    const provCells = [
-      D.hostname ? metaCell("Hostname", D.hostname) : "",
-      camp.name ? metaCell("Campaign", camp.name + (camp.config_file ? " · " + camp.config_file : "")) : "",
-      closeNs != null ? metaCell("Pacing", closeTxt) : "",
-    ].join("");
+    // Subtitle: what was measured and how, in targets.json workload names
+    // ("SAC transfers") — the run JSON's baked description spells out raw
+    // profile slugs instead, so it is only the fallback.
+    const PH = phaseState(D);
+    const sel = PH && PH.sel;
+    const wlNames = sel ? units.map(u => { const w = workloadFor(u, sel); return w && w.name; }) : [];
+    const paced = sel && (D.campaign || {}).close_interval_ns === sel.block_time_ns;
+    const mac = D.machine || {};
+    const macBits = [mac.vcpus ? mac.vcpus + " vCPU" : "", mac.mem ? mac.mem + " RAM" : "", "local NVMe"].filter(Boolean).join(" · ");
+    const macTxt = mac.instance ? ` Run on a single ${mac.instance} (${macBits}).` : "";
+    const subTxt = wlNames.length && wlNames.every(Boolean)
+      ? `RPC per-ledger ingestion latency under Phase ${sel.phase} target load — production ingestion code, fed synthetic ledgers of ${wlNames.length > 1 ? wlNames.slice(0, -1).join(", ") + " and " + wlNames[wlNames.length - 1] : wlNames[0]}${paced ? ` at the ${fmtNsAxis(sel.block_time_ns)} block time` : ""}.${macTxt}`
+      : (ds.description || "");
     return `
     <header class="masthead">
       <div class="mast-eyebrow">
@@ -445,16 +500,7 @@
         <span>Benchmark Summary · ${esc(D.run_date || "")}</span>
       </div>
       <h1>${esc(D.run_name || D.run_id || "Benchmark run")}</h1>
-      <p class="mast-sub">${esc(ds.description || "")}</p>
-      <div class="meta-grid">
-        <div class="meta-cell"><div class="meta-k">Machine</div><div class="meta-v">${esc(machineLine)}</div></div>
-        <div class="meta-cell"><div class="meta-k">Build</div><div class="meta-v">${esc(buildBits.join(" · ")) || "—"}</div></div>
-        <div class="meta-cell"><div class="meta-k">OS / Instance</div><div class="meta-v">${esc(osLine) || "—"}</div></div>
-        <div class="meta-cell"><div class="meta-k">Dataset</div><div class="meta-v">${esc(dsLine)}</div></div>
-        <div class="meta-cell"><div class="meta-k">Protocol</div><div class="meta-v">${reps} run${reps === 1 ? "" : "s"} / config · fresh process per run · ${reps === 1 ? "single run reported" : "median reported"}</div></div>
-        <div class="meta-cell"><div class="meta-k">Source data</div><div class="meta-v">${src}</div></div>
-        ${provCells}
-      </div>
+      <p class="mast-sub">${esc(subTxt)}</p>
     </header>`;
   }
 
@@ -471,37 +517,38 @@
   function figHTML(id, no, title, legendId, caption, opts = {}) {
     return `<figure class="fig" id="${id}">
       <div class="fig-head"><div><span class="fig-no">${no}</span><span class="fig-title">${title}</span></div>${legendId ? `<div class="legend" id="${legendId}"></div>` : ""}</div>
+      ${opts.picker ? `<div class="phase-picker" id="${id}-picker"></div>` : ""}
       <div class="fig-body" id="${id}-body"></div>
       <figcaption>${caption}</figcaption>
       ${opts.noTable ? "" : `<details class="tv" id="${id}-tv"><summary>Table view</summary><div class="tv-scroll"></div></details>`}
     </figure>`;
   }
 
-  // The Phase 1/2/3 goals table — the internal viewer's phase block without
-  // the phase-switch buttons: the summary always reads a run against the
-  // phase it was paced for.
+  // The goals table — the summary reads a run against the phase it was paced
+  // for, so only that phase's column is shown (all phases when none matches).
   function phaseTableHTML(PH) {
-    const selNo = PH.sel ? PH.sel.phase : null;
-    const cls = p => (selNo === p.phase ? ' class="ph-sel"' : "");
-    const head = PH.targets.map(p =>
+    const sel = PH.sel;
+    const cols = sel ? [sel] : PH.targets;
+    const selNo = sel ? sel.phase : null;
+    // The selected-column tint only means something next to other columns.
+    const cls = p => (!sel && selNo === p.phase ? ' class="ph-sel"' : "");
+    const head = cols.map(p =>
       `<th${cls(p)}>Phase ${p.phase}${selNo === p.phase ? '<span class="ph-badge">this run</span>' : ""}</th>`).join("");
     const row = (label, f) =>
-      `<tr><td>${label}</td>${PH.targets.map(p => `<td${cls(p)}>${f(p)}</td>`).join("")}</tr>`;
+      `<tr><td>${label}</td>${cols.map(p => `<td${cls(p)}>${f(p)}</td>`).join("")}</tr>`;
     let rows = "";
     rows += row("Block time", p => fmtNsAxis(p.block_time_ns));
     rows += row("End-to-end budget (externalized → client)", p => p.e2e_budget_ns ? fmtNsAxis(p.e2e_budget_ns) : "—");
     rows += row("Ingestion latency, p99 (meta available → ingested in RPC)",
       p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) : "—");
-    for (const name of (PH.targets[0].workloads || []).map(w => w.name)) {
+    for (const name of (cols[0].workloads || []).map(w => w.name)) {
       rows += row(esc(name), p => {
         const w = (p.workloads || []).find(x => x.name === name);
         return w ? `${fmtInt(w.tps)} TPS (${fmtInt(w.tx_per_ledger)} tx/ledger)` : "—";
       });
     }
-    rows += row("Orgs", p => p.orgs != null ? fmtInt(p.orgs) : "—");
-    rows += row("Retention", p => p.retention ? esc(p.retention) : "—");
     return `<div class="phase-block" id="phase-block">
-      <div class="fig-head"><div><span class="fig-no">Goals</span><span class="fig-title">The three phases and their goals</span></div></div>
+      <div class="fig-head"><div><span class="fig-no">Goals</span><span class="fig-title">${sel ? `The Phase ${sel.phase} goals` : "The three phases and their goals"}</span></div></div>
       <div class="tv-scroll"><table class="data phase-table"><tr><th>Goal</th>${head}</tr>${rows}</table></div>
     </div>`;
   }
@@ -564,8 +611,8 @@
     const banner = goalNs && units.length ? (() => {
       const w = goalWorst ? ING[goalWorst].driver.ingest_total : null;
       const note = goalMet
-        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. §03 compares the profiles; §04 shows where the time goes.`
-        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see §04.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
+        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. <a href="#goal">§03 · Latency vs the goal</a> compares the profiles; <a href="#phases">§04 · Per-ledger latency breakdown</a> shows where the time goes.`
+        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§04 · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
       return `<div class="banner${goalMet ? "" : " warn-tail"}">
         <div class="banner-figure">${goalPass}<span class="of"> / ${units.length}</span></div>
         <div class="banner-copy">
@@ -584,16 +631,34 @@
     // than render NaN cells.
     const dsUnits = units.filter(u => { const k = um[u] || {}; return k.ledgers > 0 && k.txs > 0; });
     const allMapped = dsUnits.length > 0 && dsUnits.every(u => wlOf(u));
-    const dsHead = ["Profile", ...(allMapped ? ["Target load"] : []), "tx/ledger", "events/tx", "Ledgers", "Transactions", "Events"];
+    // Avg raw (uncompressed) ledger size, from dataset-sizes.json facts.
+    const avgLedgerOf = u => {
+      const s = sizesFor(u);
+      return s && s.raw_meta_gib > 0 && s.raw_meta_ledgers > 0 ? s.raw_meta_gib * 1073741824 / s.raw_meta_ledgers : null;
+    };
+    const allSized = dsUnits.length > 0 && dsUnits.every(u => avgLedgerOf(u) != null);
+    const dsHead = ["Profile", ...(allMapped ? ["Target load"] : []), "tx/ledger", "events/tx", ...(allSized ? ["Avg ledger size"] : []), "Ledgers", "Transactions", "Events"];
     const dsRows = dsUnits.map(u => {
       const k = um[u] || {}, w = wlOf(u);
       const cells = [esc(disp(u))];
       if (allMapped) cells.push(`${fmtInt(w.tps)} TPS · ${fmtInt(w.tx_per_ledger)} tx/ledger`);
-      cells.push(fmtInt(k.txs / k.ledgers), (k.events / k.txs).toFixed(2), fmtInt(k.ledgers), fmtInt(k.txs), fmtInt(k.events));
+      cells.push(fmtInt(k.txs / k.ledgers), (k.events / k.txs).toFixed(2));
+      if (allSized) cells.push(fmtMiB(avgLedgerOf(u)));
+      cells.push(fmtInt(k.ledgers), fmtInt(k.txs), fmtInt(k.events));
       return `<tr>${cells.map((c, i) => `<td${i ? "" : ' class="ds-name"'}>${c}</td>`).join("")}</tr>`;
     }).join("");
     const datasetTable = `<div class="tv-scroll" style="margin-top:16px"><table class="data" id="dataset-table" style="width:100%">
       <tr>${dsHead.map(h => `<th>${h}</th>`).join("")}</tr>${dsRows}</table></div>`;
+    // Test data = the generated synthetic-ledger datasets (dataset-sizes.json);
+    // the run's own source_gcs is the RAW RESULTS dir, linked from §05 instead.
+    const gcsLink = gs => `<a href="https://console.cloud.google.com/storage/browser/${esc(String(gs).replace("gs://", ""))}">${esc(gs)} ↗</a>`;
+    const testDataGcs = DATASET_SIZES && DATASET_SIZES.source_gcs;
+    const sourceData = testDataGcs
+      ? `<p class="sec-intro" id="source-data">Source test data: ${gcsLink(testDataGcs)}</p>`
+      : "";
+    const rawResults = camp.source_gcs
+      ? `<p class="sec-intro" id="raw-results">Raw results: ${gcsLink(camp.source_gcs)}</p>`
+      : "";
 
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
@@ -615,6 +680,7 @@
       <h3 class="method-sub">Test data</h3>
       <p class="sec-intro">Synthetic ledgers, generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's TPL target rate. Three profiles cover the target workloads.</p>
       ${datasetTable}
+      ${sourceData}
       <h3 class="method-sub">Ingestion and pacing</h3>
       <p class="sec-intro">${pacePara}</p>
       ${figHTML("fig21", "Fig 2.1", "How ledgers are fed — the close-interval schedule", "",
@@ -630,7 +696,7 @@
 
     <section id="phases">
       <div class="sec-head"><span class="sec-num">04</span><h2>Per-ledger RPC ingestion latency — end to end, and every phase</h2></div>
-      <p class="sec-intro">Where a ledger's time goes during ingestion. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Their per-ledger sum is the <strong>end to end</strong> lane below, recorded as <code>ingest_total</code>.</p>
+      <p class="sec-intro">Where a ledger's time goes during ingestion. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Fig 4.1 splits the run's total ingestion time across those phases; Fig 4.2 compares the profiles one phase at a time — <strong>end to end</strong> is the per-ledger sum of all six.</p>
       <div class="phase-guide">
         <p><strong>RocksDB</strong> is the live store — an embedded key-value database on the node's local disk. Ingestion breaks each ledger down and files it there: the compressed ledger bytes, the transaction-hash entries, the events. Nothing reaches RocksDB until <strong>commit</strong> — the three middle phases stage writes into one batch.</p>
         <ul>
@@ -643,13 +709,16 @@
         </ul>
         <p>Most of the p99 tail sits in <strong>commit</strong> and <strong>apply</strong>; on the heaviest profile, apply dominates.</p>
       </div>
-      ${figHTML("fig41", "Fig 4.1", "Per-ledger latency — end to end, and every phase", "fig41-legend",
-        `Latency percentiles over every ledger of the run (${medRuns}; log scale). The end-to-end lane is the per-ledger sum of the six phases; waiting for the next ledger is excluded.`)}
+      ${figHTML("fig41", "Fig 4.1", "Where ingestion time goes — each phase's share of the run", "fig41-legend",
+        `Each bar splits the run's <strong>total ingestion time</strong> — summed over every ledger (${medRuns}) — across the six phases. Shares are built from per-phase totals, which add up exactly; percentiles do not.`)}
+      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency, one phase at a time", "fig42-legend",
+        `Latency percentiles over every ledger of the run (${medRuns}; linear scale, fitted to the selected phase). <strong>end to end</strong> is the per-ledger sum of the six phases; waiting for the next ledger is excluded.`, { picker: true })}
     </section>
 
     <section id="machine" class="method">
       <div class="sec-head"><span class="sec-num">05</span><h2>Machine metadata</h2></div>
       <p class="sec-intro">Raw provenance for the box behind these numbers.</p>
+      ${rawResults}
       <pre class="metadata" id="machine-metadata"></pre>
     </section>
     ` + footerHTML(D, runId);
@@ -694,26 +763,68 @@
       }
     }
 
-    /* ---- fig 4.1 per-ledger phase latency ---- */
+    /* ---- fig 4.1 share of ingestion time · fig 4.2 per-phase detail ---- */
     if (units.length) {
       const lanesFor = u => ingestPhaseLanes(ING[u], C);
-      const rows = units.map(u => ({
+      // Fig 4.1 — additive composition from per-phase total_ns over the run.
+      const shareRows = units.map(u => ({
         label: disp(u), sub: subOf(u),
-        lanes: lanesFor(u).map(l => ({
-          name: l.name, color: l.color,
-          pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m },
-        })),
-      }));
-      const reflines = [];
-      if (goalNs) reflines.push({ ns: goalNs, label: `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` });
-      if (blockNs) reflines.push({ ns: blockNs, label: `${fmtNsAxis(blockNs)} — block time`, block: true });
-      dotRangeChart("fig41-body", rows, { reflines, groupSeparators: true });
-      const legendLanes = units.length ? lanesFor(units[0]) : [];
-      legend("fig41-legend", [
-        ...legendLanes.map(l => ({ label: l.name, color: l.color })),
-        { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
-      ]);
-      tableView("fig41", ["Profile", "Series", "p50", "p90", "p99", "Worst ledger"],
+        parts: lanesFor(u).filter(l => l.name !== "end to end" && l.st.total && l.st.total.m > 0)
+          .map(l => ({ name: l.name, color: l.color, ns: l.st.total.m })),
+      })).filter(r => r.parts.length);
+      const fig41 = document.getElementById("fig41");
+      if (shareRows.length) {
+        shareChart("fig41-body", shareRows);
+        legend("fig41-legend", shareRows[0].parts.map(p => ({ label: p.name, color: p.color })));
+        tableView("fig41", ["Profile", "Phase", "Time over the run", "Share"],
+          shareRows.flatMap(r => {
+            const total = r.parts.reduce((a, p) => a + p.ns, 0);
+            return r.parts.map(p => [r.label, p.name, fmtNs(p.ns), (p.ns / total * 100).toFixed(1) + " %"]);
+          }));
+      } else if (fig41) fig41.style.display = "none";
+
+      // Fig 4.2 — percentile detail, one phase at a time on a linear axis
+      // fitted to that phase's own range.
+      const laneNames = lanesFor(units[0]).map(l => l.name);
+      if (!laneNames.includes(PHASE_PICK)) PHASE_PICK = laneNames[0];
+      const drawDetail = () => {
+        const rows = units.map(u => {
+          const l = lanesFor(u).find(k => k.name === PHASE_PICK);
+          return l ? {
+            label: disp(u), sub: subOf(u),
+            lanes: [{ name: l.name, color: l.color, pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m } }],
+          } : null;
+        }).filter(Boolean);
+        const reflines = [];
+        if (PHASE_PICK === "end to end") {
+          if (goalNs) reflines.push({ ns: goalNs, label: `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` });
+          if (blockNs) reflines.push({ ns: blockNs, label: `${fmtNsAxis(blockNs)} — block time`, block: true });
+        }
+        dotRangeChart("fig42-body", rows, { linear: true, reflines });
+        const cur = rows.length ? rows[0].lanes[0] : null;
+        legend("fig42-legend", [
+          ...(cur ? [{ label: cur.name, color: cur.color }] : []),
+          { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
+        ]);
+      };
+      const picker = document.getElementById("fig42-picker");
+      if (picker) {
+        picker.replaceChildren();
+        for (const name of laneNames) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = name;
+          if (name === PHASE_PICK) b.classList.add("sel");
+          b.addEventListener("click", () => {
+            PHASE_PICK = name;
+            picker.querySelectorAll("button").forEach(o => o.classList.toggle("sel", o.textContent === name));
+            drawDetail();
+          });
+          picker.appendChild(b);
+        }
+      }
+      drawDetail();
+      tableView("fig42", ["Profile", "Series", "p50", "p90", "p99", "Worst ledger"],
         units.flatMap(u => lanesFor(u).map(l => [disp(u), l.name, fmtNs(l.st.p50.m), fmtNs(l.st.p90.m), fmtNs(l.st.p99.m), fmtNs(l.st.max.m)])));
     }
 
@@ -765,7 +876,7 @@
   }
 
   async function boot() {
-    await loadLiveTargets();
+    await Promise.all([loadLiveTargets(), loadDatasetSizes()]);
     try {
       const res = await fetch("runs/index.json", { cache: "no-cache" });
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -783,8 +894,10 @@
     });
     selectEl.addEventListener("change", () => selectRun(selectEl.value, true));
     window.addEventListener("popstate", () => {
+      // Hash-only navigation (the §-links) also fires popstate — don't
+      // re-render (and reset the scroll) unless the run actually changed.
       const id = new URL(location.href).searchParams.get("run");
-      if (id) selectRun(id, false);
+      if (id && !(CURRENT && CURRENT.meta && CURRENT.meta.id === id)) selectRun(id, false);
     });
     const initial = new URL(location.href).searchParams.get("run");
     selectRun(initial || (MANIFEST.runs[0] && MANIFEST.runs[0].id), false);
