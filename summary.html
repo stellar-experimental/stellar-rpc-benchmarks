@@ -3,29 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stellar RPC Full-History — Benchmark Reports</title>
+<title>Stellar RPC v2 · Full-History — Benchmark Summary</title>
 <link rel="stylesheet" href="styles.css?v=4a5718d6">
+<link rel="stylesheet" href="summary.css?v=d55ac19b">
 </head>
 <body>
 
-<div class="toolbar">
-  <span class="brand">Stellar RPC v2 · Full-History Storage Engine</span>
+<div class="toolbar summary-toolbar">
+  <span class="brand">Stellar RPC v2 · Full-History Storage</span>
   <span class="spacer"></span>
   <label for="run-select">Run</label>
   <select id="run-select" class="run-select" aria-label="Select benchmark run"></select>
-  <a id="summary-link" href="summary.html" class="theme-toggle" aria-label="Open the stakeholder summary">Summary →</a>
-  <a href="latency-model.html" class="theme-toggle" aria-label="Open the end-to-end latency model">Latency model →</a>
+  <a id="full-report" class="full-link" href="index.html">Full report ↗</a>
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">◐ Theme</button>
 </div>
 
 <div class="wrap">
-  <main id="report">
-    <div class="loading">Loading benchmark runs…</div>
+  <main id="report" class="summary">
+    <div class="loading">Loading benchmark summary…</div>
   </main>
 </div>
 
 <div class="tip" id="tip" role="status" aria-live="off"></div>
 
-<script src="app.js?v=014e6199"></script>
+<script src="summary.js?v=f23a9c79"></script>
 </body>
 </html>
