@@ -316,19 +316,27 @@
     const C = COLORS();
     const W = 740, H = 158;
     const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
-    const x0 = 26, iv = 118, axisY = 118, barY = 74, barH = 18;
+    const x0 = 132, iv = 102, axisY = 118, barY = 74, barH = 18;
     const due = i => x0 + i * iv;
-    // time axis + due ticks
-    S("line", { x1: x0 - 12, y1: axisY, x2: W - 10, y2: axisY, class: "baseline-l" }, svg);
+    // Before the anchor: startup — the source has not produced its first
+    // ledger yet. Off the schedule, so drawn as a faded, untimed stub.
+    S("line", { x1: 14, y1: axisY, x2: x0, y2: axisY, class: "pace-pre" }, svg);
+    S("text", { x: (14 + x0) / 2, y: barY + 8, "text-anchor": "middle", class: "pace-note", text: "startup" }, svg);
+    S("text", { x: (14 + x0) / 2, y: barY + 21, "text-anchor": "middle", class: "pace-note", text: "(untimed)" }, svg);
+    // time axis + due ticks. The first due line IS the anchor (due 0 =
+    // anchor + 0 × interval): drawn solid and named, the rest dashed.
+    S("line", { x1: x0, y1: axisY, x2: W - 10, y2: axisY, class: "baseline-l" }, svg);
     for (let i = 0; i <= 5; i++) {
-      S("line", { x1: due(i), y1: 40, x2: due(i), y2: axisY, class: "pace-due" }, svg);
+      S("line", { x1: due(i), y1: i === 0 ? 24 : 40, x2: due(i), y2: axisY, class: i === 0 ? "pace-anchor" : "pace-due" }, svg);
       S("text", { x: due(i), y: axisY + 16, "text-anchor": "middle", class: "ax", text: "due " + i }, svg);
     }
+    S("text", { x: due(0) + 5, y: 30, "text-anchor": "start", class: "pace-note anchor", text: "anchor" }, svg);
+    S("text", { x: due(0) + 5, y: 43, "text-anchor": "start", class: "pace-note anchor", text: "clock starts" }, svg);
     S("text", { x: W - 10, y: axisY + 16, "text-anchor": "end", class: "ax-unit", text: "time →" }, svg);
-    // "close interval" bracket between due 0 and due 1
-    S("line", { x1: due(0), y1: 30, x2: due(1), y2: 30, stroke: "var(--muted)", "stroke-width": 1.2 }, svg);
-    for (const px of [due(0), due(1)]) S("line", { x1: px, y1: 26, x2: px, y2: 34, stroke: "var(--muted)", "stroke-width": 1.2 }, svg);
-    S("text", { x: (due(0) + due(1)) / 2, y: 22, "text-anchor": "middle", class: "pace-note", text: "close interval" }, svg);
+    // "close interval" bracket between due 1 and due 2 (clear of the anchor label)
+    S("line", { x1: due(1), y1: 30, x2: due(2), y2: 30, stroke: "var(--muted)", "stroke-width": 1.2 }, svg);
+    for (const px of [due(1), due(2)]) S("line", { x1: px, y1: 26, x2: px, y2: 34, stroke: "var(--muted)", "stroke-width": 1.2 }, svg);
+    S("text", { x: (due(1) + due(2)) / 2, y: 22, "text-anchor": "middle", class: "pace-note", text: "close interval" }, svg);
     // ledger bars: [start, width, color] — ledger 3 overruns its slot, ledger 4
     // starts the moment 3 commits (no sleep), ledger 5 is back on schedule.
     const bars = [
@@ -366,7 +374,6 @@
     (phases || []).forEach(p => {
       if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0 && (tx || query)) {
         p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - tx - query;
-        p.derived = { tx, query };
       }
     });
     return phases;
@@ -484,7 +491,7 @@
     rows += row("Block time", p => fmtNsAxis(p.block_time_ns));
     rows += row("End-to-end budget (externalized → client)", p => p.e2e_budget_ns ? fmtNsAxis(p.e2e_budget_ns) : "—");
     rows += row("Ingestion latency, p99 (meta available → ingested in RPC)",
-      p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) + (p.derived ? "*" : "") : "—");
+      p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) : "—");
     for (const name of (PH.targets[0].workloads || []).map(w => w.name)) {
       rows += row(esc(name), p => {
         const w = (p.workloads || []).find(x => x.name === name);
@@ -493,16 +500,9 @@
     }
     rows += row("Orgs", p => p.orgs != null ? fmtInt(p.orgs) : "—");
     rows += row("Retention", p => p.retention ? esc(p.retention) : "—");
-    const derived = PH.targets.filter(p => p.derived);
-    const derivedNote = derived.length
-      ? `<p class="phase-caption">* Phase ${derived.map(p => p.phase).join(", ")} publishes no ingestion target. The table shows the value the end-to-end budget leaves: ${derived.map(p =>
-        `${fmtNsAxis(p.e2e_budget_ns)} − ${p.block_count || 2} × ${fmtNsAxis(p.block_time_ns)} − ${fmtNsAxis(p.derived.tx)} (tx submission) − ${fmtNsAxis(p.derived.query)} (client read) = ${fmtNsAxis(p.ingest_p99_target_ns)}`).join("; ")}.</p>`
-      : "";
     return `<div class="phase-block" id="phase-block">
       <div class="fig-head"><div><span class="fig-no">Goals</span><span class="fig-title">The three phases and their goals</span></div></div>
       <div class="tv-scroll"><table class="data phase-table"><tr><th>Goal</th>${head}</tr>${rows}</table></div>
-      <p class="phase-caption">Ingestion is one slice of the end-to-end path: E2E = block time × blocks + tx submission + <strong>ingestion</strong> + client read. This report measures the ingestion slice, recorded per ledger as <code>ingest_total</code>.</p>
-      ${derivedNote}
     </div>`;
   }
 
@@ -598,7 +598,7 @@
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
     const pacePara = closeNs > 0
-      ? `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. The benchmark controls two things: where ledgers come from, and when. It feeds the generated ledgers at a fixed close interval — <strong>${fmtNsAxis(closeNs)}</strong> for this run${paceIsBlockTime ? `, the Phase ${sel.phase} block time` : ""}. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. The loop sleeps until each due time, then ingests. When a ledger runs long, the loop falls behind; it then ingests back-to-back until it catches up.`
+      ? `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. The benchmark controls two things: where ledgers come from, and when. It feeds the generated ledgers at a fixed close interval — <strong>${fmtNsAxis(closeNs)}</strong> for this run${paceIsBlockTime ? `, the Phase ${sel.phase} block time` : ""}. The clock starts when the first ledger arrives — the <strong>anchor</strong>. From there, every ledger has a fixed due time: ledger <em>i</em> is due at <code>anchor + i × interval</code>. The loop sleeps until each due time, then ingests. When a ledger runs long, the loop falls behind; it then ingests back-to-back until it catches up.`
       : `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. This run was not paced: ledgers were fed back-to-back.`;
 
     /* ---- section skeleton ---- */
@@ -613,34 +613,33 @@
     <section id="method">
       <div class="sec-head"><span class="sec-num">02</span><h2>Methodology</h2></div>
       <h3 class="method-sub">Test data</h3>
-      <p class="sec-intro">Synthetic ledgers, generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's target rate. Three profiles cover the target workloads.</p>
+      <p class="sec-intro">Synthetic ledgers, generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's TPL target rate. Three profiles cover the target workloads.</p>
       ${datasetTable}
       <h3 class="method-sub">Ingestion and pacing</h3>
       <p class="sec-intro">${pacePara}</p>
       ${figHTML("fig21", "Fig 2.1", "How ledgers are fed — the close-interval schedule", "",
-        `Schematic. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. On schedule, the loop sleeps until the due time, then ingests (L0–L2). A slow ledger (L3) puts the loop behind; the next ledger (L4) starts at once, with no sleep, until the loop catches back up (L5). The gap between a late commit and its due time is the lag.`, { noTable: true })}
+        `Schematic. The solid line is the anchor — the first ledger arrives and the clock starts. Startup time before the anchor is not on the schedule, however long it takes. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. On schedule, the loop sleeps until the due time, then ingests (L0–L2). A slow ledger (L3) puts the loop behind; the next ledger (L4) starts at once, with no sleep, until the loop catches back up (L5). The gap between a late commit and its due time is the lag.`, { noTable: true })}
     </section>
 
     <section id="goal">
-      <div class="sec-head"><span class="sec-num">03</span><h2>Ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
-      <p class="sec-intro">One bar per profile: the p99 of per-ledger ingestion latency over every ledger of the run (${medRuns}). Two references, kept separate: the <strong>ingestion target</strong> — the goal — and the <strong>block time</strong> — the cadence ledgers arrive at.</p>
+      <div class="sec-head"><span class="sec-num">03</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
       ${figHTML("fig31", "Fig 3.1", "Ingestion latency p99 by workload profile", "fig31-legend",
         `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${fmtNsAxis(goalNs)}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
       <p class="sec-intro" id="goal-readout"></p>
     </section>
 
     <section id="phases">
-      <div class="sec-head"><span class="sec-num">04</span><h2>Per-ledger latency — end to end, and every phase</h2></div>
-      <p class="sec-intro">Where a ledger's time goes. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Their per-ledger sum is the <strong>end to end</strong> lane below, recorded as <code>ingest_total</code>.</p>
+      <div class="sec-head"><span class="sec-num">04</span><h2>Per-ledger RPC ingestion latency — end to end, and every phase</h2></div>
+      <p class="sec-intro">Where a ledger's time goes during ingestion. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Their per-ledger sum is the <strong>end to end</strong> lane below, recorded as <code>ingest_total</code>.</p>
       <div class="phase-guide">
-        <p>Nothing reaches RocksDB until <strong>commit</strong> — the three middle phases stage writes into one batch.</p>
+        <p><strong>RocksDB</strong> is the live store — an embedded key-value database on the node's local disk. Ingestion breaks each ledger down and files it there: the compressed ledger bytes, the transaction-hash entries, the events. Nothing reaches RocksDB until <strong>commit</strong> — the three middle phases stage writes into one batch.</p>
         <ul>
-          <li><strong>extract</strong> — decode the ledger meta in one walk. Pull out each transaction's hash and its contract events, shaped for writing.</li>
+          <li><strong>extract</strong> — decode the raw ledger meta and read it once, transaction by transaction. Pull out each transaction's hash and its contract events, shaped for writing.</li>
           <li><strong>ledgers</strong> — compress the raw ledger bytes (zstd) and stage them.</li>
           <li><strong>txhash</strong> — stage the transaction-hash → ledger-sequence entries.</li>
           <li><strong>events</strong> — stage each event's payload and its term-index rows (the keys behind topic lookups).</li>
           <li><strong>commit (fsync)</strong> — write the staged batch to RocksDB: one atomic write, one <strong>fsync</strong>. One fsync per ledger is the durability design; a heavy commit phase is that design's price, not a defect.</li>
-          <li><strong>apply</strong> — after the batch is durable, refresh the in-memory event index (roaring bitmaps) that serves queries.</li>
+          <li><strong>apply</strong> — after the batch is durable, update the in-memory event lookups that serve queries: the term index and the per-ledger event counts. Only events have this in-memory step.</li>
         </ul>
         <p>Most of the p99 tail sits in <strong>commit</strong> and <strong>apply</strong>; on the heaviest profile, apply dominates.</p>
       </div>
@@ -651,7 +650,6 @@
     <section id="machine" class="method">
       <div class="sec-head"><span class="sec-num">05</span><h2>Machine metadata</h2></div>
       <p class="sec-intro">Raw provenance for the box behind these numbers.</p>
-      <dl id="fsync-dl"></dl>
       <pre class="metadata" id="machine-metadata"></pre>
     </section>
     ` + footerHTML(D, runId);
@@ -720,27 +718,11 @@
     }
 
     /* ---- machine metadata ---- */
+    // The raw dump is verbatim except the harness's iteration-count echo
+    // line, which repeats campaign config in internal vocabulary already
+    // covered by the masthead.
     (function machineMeta() {
-      const mac = D.machine || {};
-      const raw = mac.fsync_probe || "";
-      const dl = document.getElementById("fsync-dl");
-      if (dl && raw) {
-        // The probe is `dd if=/dev/zero bs=4k count=2000 oflag=dsync` = 2,000
-        // synced 4 KiB writes (8,192,000 bytes). Derive per-write latency only
-        // when the byte count pins count=2000.
-        let secs = null;
-        if (/^8192000 bytes/.test(raw)) {
-          const m = raw.match(/copied,\s*([\d.]+)\s*s\b/) || raw.match(/in\s+([\d.]+)\s*secs?\b/);
-          const v = m ? parseFloat(m[1]) : NaN;
-          if (isFinite(v) && v > 0) secs = v;
-        }
-        const perWrite = secs != null ? ` ≈ ${trim(secs / 2000 * 1e6)} µs per synced write` : "";
-        dl.innerHTML = `<dt>fsync probe</dt><dd>Before the campaign the harness timed 2,000 individually synced 4&nbsp;KiB writes (<code>dd … oflag=dsync</code>) on the benchmark volume. This checks that the device really pays for fsync — the floor under the per-ledger commit. This box: <code>${esc(raw)}</code>${perWrite}.</dd>`;
-      }
-      // The raw dump is verbatim except the harness's iteration-count echo
-      // line, which repeats campaign config in internal vocabulary already
-      // covered by the masthead.
-      const lines = String(mac.raw || "").trim().split("\n").filter(l => !/-iters:/.test(l));
+      const lines = String((D.machine || {}).raw || "").trim().split("\n").filter(l => !/-iters:/.test(l));
       document.getElementById("machine-metadata").textContent = lines.join("\n");
     })();
   }

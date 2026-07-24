@@ -9,6 +9,7 @@
   const reportEl = document.getElementById("report");
   const selectEl = document.getElementById("run-select");
   const themeBtn = document.getElementById("theme-toggle");
+  const summaryLink = document.getElementById("summary-link");
   const tip = document.getElementById("tip");
 
   let MANIFEST = null;
@@ -1786,6 +1787,7 @@
     const entry = MANIFEST.runs.find(r => r.id === id) || MANIFEST.runs[0];
     if (!entry) return;
     selectEl.value = entry.id;
+    if (summaryLink) summaryLink.href = `summary.html?run=${encodeURIComponent(entry.id)}`;
     const url = new URL(location.href);
     url.searchParams.set("run", entry.id);
     if (push) history.pushState({ run: entry.id }, "", url); else history.replaceState({ run: entry.id }, "", url);

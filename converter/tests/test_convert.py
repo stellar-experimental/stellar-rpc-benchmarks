@@ -180,16 +180,16 @@ class ManifestTests(unittest.TestCase):
                                         "kind": "pubnet", "path": "runs/a.json"})
             convert.update_manifest(d, {"id": "b", "name": "B", "date": "2026-03-01",
                                         "kind": "synthetic", "path": "runs/b.json"})
-            # replace "a" with a newer date -> should move to front and not duplicate
+            # replace "a" with a newer date -> should move to the end and not duplicate
             convert.update_manifest(d, {"id": "a", "name": "A2", "date": "2026-05-01",
                                         "kind": "pubnet", "path": "runs/a.json"})
             with open(os.path.join(d, "index.json")) as fh:
                 man = json.load(fh)
             self.assertEqual(man["schema_version"], 1)
             ids = [r["id"] for r in man["runs"]]
-            self.assertEqual(ids, ["a", "b"])           # date desc: 2026-05, 2026-03
+            self.assertEqual(ids, ["b", "a"])           # date asc: 2026-03, 2026-05
             self.assertEqual(len(man["runs"]), 2)        # replaced, not duplicated
-            self.assertEqual(man["runs"][0]["name"], "A2")
+            self.assertEqual(man["runs"][1]["name"], "A2")
 
 
 if __name__ == "__main__":

@@ -714,7 +714,7 @@ def update_manifest(out_dir, entry):
     data["schema_version"] = 1
     runs = [r for r in data.get("runs", []) if r.get("id") != entry["id"]]
     runs.append(entry)
-    runs.sort(key=lambda r: (r["date"], r["id"]), reverse=True)
+    runs.sort(key=lambda r: (r["date"], r["id"]))
     data["runs"] = runs
     with open(path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
