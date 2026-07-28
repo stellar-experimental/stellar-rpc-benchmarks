@@ -12,6 +12,20 @@
   .mast-sub a, .footer a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
   .mast-sub a:hover, .footer a:hover { border-bottom-color: var(--accent); }
 
+  /* scope pill on section headings: which clock the numbers are on */
+  .scope-tag {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; white-space: nowrap;
+    color: var(--ink-2); border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--ink) 5%, transparent);
+    border-radius: 999px; padding: 3px 10px;
+  }
+  /* the sum spelled out under a tile value */
+  .tile-eq {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
+    color: var(--ink-2); font-variant-numeric: tabular-nums; margin: 0 0 6px;
+  }
+
   /* --- horizontal CSS bar rows (headline p99) --- */
   .cbar { display: grid; grid-template-columns: minmax(130px, 170px) 1fr 76px; gap: 6px 12px; align-items: center; margin: 14px 0 6px; }
   .cbar-lab { font-size: 13px; font-weight: 550; color: var(--ink); line-height: 1.3; }
