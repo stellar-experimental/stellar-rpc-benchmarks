@@ -206,7 +206,7 @@
       <span class="eq">=</span>
       <span class="term-pill network" style="--tp:var(--hot)">block time<span class="x2">× N</span></span>
       <span class="op">+</span>
-      <span class="term-pill estimated" style="--tp:var(--s5)">tx submission</span>
+      <span class="term-pill estimated" style="--tp:var(--s5)" id="tx-pill">tx submission</span>
       <span class="op">+</span>
       <span class="term-pill measured" style="--tp:var(--s1)">ingestion</span>
       <span class="op">+</span>
@@ -236,10 +236,10 @@
       <div class="term-card" style="--tp:var(--s5)">
         <div class="tc-head">
           <span class="tc-name">P99 tx submission</span>
-          <span class="prov estimated"><span class="sw"></span>Estimated</span>
+          <span class="prov estimated" id="tx-card-prov"><span class="sw"></span>Estimated</span>
         </div>
         <div class="tc-entity">entity · <b>Platform team · Client → RPC v2</b></div>
-        <p>The time for a transaction to travel from the client to Stellar RPC v2. This value is an estimate.
+        <p id="tx-card-text">The time for a transaction to travel from the client to Stellar RPC v2. This value is an estimate.
           A measured value from RPC v2 will replace it.</p>
       </div>
       <div class="term-card" style="--tp:var(--s1)">
@@ -320,6 +320,7 @@
   /* ---- module state ---- */
   let TARGETS = null;      // parsed targets.json
   let MANIFEST = null;     // parsed runs/index.json
+  let TXSUB = null;        // measured tx submission { ns, rtt, runId } from docs/txsub/, null → fixed estimate
   const RUN = { id: null, meta: null, data: null, measured: null, error: null, loading: false };
   const STATE = { phase: null, runId: null };
 
@@ -370,10 +371,12 @@
   const multLabel = (c, n) => (c.key === "block" ? ` × ${n}` : "");
 
   /* ---- stacked bar ---- */
-  function segHTML(c, vals, scaleMax, ingestProv, n) {
+  // provs: per-slice provenance overrides ({ ingest: "target"|"measured", tx: "measured" });
+  // any slice not named falls back to its COMPONENTS default.
+  function segHTML(c, vals, scaleMax, provs, n) {
     const v = contrib(c, vals, n);
     const pct = scaleMax > 0 ? (v / scaleMax) * 100 : 0;
-    const prov = c.key === "ingest" ? ingestProv : c.prov;
+    const prov = provs[c.key] || c.prov;
     const hatch = prov === "estimated" ? " estimated" : (prov === "target" ? " target" : "");
     return `<div class="seg${hatch}" style="width:${pct}%;background:var(${c.colorVar})"
                  title="${c.label}${multLabel(c, n)}: ${fmt(v)}">
@@ -381,21 +384,21 @@
             </div>`;
   }
 
-  function barHTML(vals, scaleMax, ceilingNs, ingestProv, n) {
+  function barHTML(vals, scaleMax, ceilingNs, provs, n) {
     const ceilPct = scaleMax > 0 ? (ceilingNs / scaleMax) * 100 : 0;
     return `<div class="bar-wrap"><div class="bar">
-      ${COMPONENTS.map(c => segHTML(c, vals, scaleMax, ingestProv, n)).join("")}
+      ${COMPONENTS.map(c => segHTML(c, vals, scaleMax, provs, n)).join("")}
       <div class="seg empty"></div>
       ${ceilingNs > 0 && ceilPct <= 100 ? `<div class="budget-mark" style="left:${ceilPct}%" data-lab="budget ${fmt(ceilingNs)}"></div>` : ""}
     </div></div>`;
   }
 
   /* ---- breakdown table ---- */
-  function breakdownTable(vals, ingestProv, n) {
+  function breakdownTable(vals, provs, n) {
     const total = COMPONENTS.reduce((s, c) => s + contrib(c, vals, n), 0);
     const rows = COMPONENTS.map(c => {
       const v = contrib(c, vals, n);
-      const prov = c.key === "ingest" ? ingestProv : c.prov;
+      const prov = provs[c.key] || c.prov;
       return `<tr style="--tp:var(${c.colorVar})">
         <td class="comp"><span class="sw"></span>${c.label}${multLabel(c, n)}</td>
         <td>${provCell(prov)}</td>
@@ -473,10 +476,13 @@
 
     const goalVals = { block, tx, ingest: targetNs, query };
     const goalE2E = COMPONENTS.reduce((s, c) => s + contrib(c, goalVals, n), 0);
+    const goalProvs = { ingest: "target" };
 
     const measured = RUN.measured;
-    const currentVals = measured ? { block, tx, ingest: measured.ns, query } : null;
+    const txCur = TXSUB ? TXSUB.ns : tx;   // measured tx submission when available, phase-independent
+    const currentVals = measured ? { block, tx: txCur, ingest: measured.ns, query } : null;
     const currentE2E = currentVals ? COMPONENTS.reduce((s, c) => s + contrib(c, currentVals, n), 0) : null;
+    const curProvs = { ingest: "measured", tx: TXSUB ? "measured" : "estimated" };
 
     const scaleMax = Math.max(goalE2E, currentE2E || 0, ceiling);
 
@@ -489,7 +495,7 @@
         </div>
         <p class="panel-sub">Block time ${fmt(block)} × ${n}, ingestion target ${fmt(targetNs)}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}.
           The declared E2E budget is ${fmt(ceiling)}.</p>
-        ${barHTML(goalVals, scaleMax, ceiling, "target", n)}
+        ${barHTML(goalVals, scaleMax, ceiling, goalProvs, n)}
         <div class="e2e">
           <div class="e2e-k">Goal E2E (derived)</div>
           <div class="e2e-big">${fmt(goalE2E)}</div>
@@ -497,7 +503,7 @@
             ${ceiling > 0 ? verdict(goalWithin, goalE2E === ceiling ? "on budget" : `${goalWithin ? fmt(ceiling - goalE2E) + " under" : fmt(goalE2E - ceiling) + " over"} budget`) : ""}
           </div>
         </div>
-        ${breakdownTable(goalVals, "target", n)}
+        ${breakdownTable(goalVals, goalProvs, n)}
       </div>`;
 
     /* --- current panel --- */
@@ -513,8 +519,10 @@
       const currentWithin = ceiling > 0 ? currentE2E <= ceiling : true;
       currentBody = `
         <p class="measured-src">Ingestion = <strong>${fmt(measured.ns)}</strong>, the worst of ${measured.count} profile${measured.count === 1 ? "" : "s"}
-          (<code>${esc(measured.profile)}</code>) in <strong>${esc(RUN.meta.name)}</strong> · ${esc(RUN.meta.date)}.</p>
-        ${barHTML(currentVals, scaleMax, ceiling, "measured", n)}
+          (<code>${esc(measured.profile)}</code>) in <strong>${esc(RUN.meta.name)}</strong> · ${esc(RUN.meta.date)}.${
+            TXSUB ? ` Tx submission = <strong>${fmt(TXSUB.ns)}</strong>, from the
+          <a href="tx-submission.html">tx-submission benchmark</a> (worst-profile in-RPC p99 + the assumed ${fmt(TXSUB.rtt)} network round trip).` : ""}</p>
+        ${barHTML(currentVals, scaleMax, ceiling, curProvs, n)}
         <div class="e2e">
           <div class="e2e-k">Current E2E (derived)</div>
           <div class="e2e-big" style="color:${currentWithin ? "var(--ink)" : "var(--warn)"}">${fmt(currentE2E)}</div>
@@ -523,7 +531,7 @@
             ${ceiling > 0 ? verdict(currentWithin, `E2E ${currentWithin ? "≤" : ">"} ${fmt(ceiling)} budget`) : ""}
           </div>
         </div>
-        ${breakdownTable(currentVals, "measured", n)}`;
+        ${breakdownTable(currentVals, curProvs, n)}`;
     }
     const currentPanel = `
       <div class="panel current">
@@ -550,9 +558,13 @@
     const runPhase = RUN.data && RUN.data.campaign ? RUN.data.campaign.phase : null;
     const mismatch = runPhase != null && runPhase !== STATE.phase
       ? ` This run was paced for Phase ${runPhase}; you are viewing it against the Phase ${STATE.phase} goal.` : "";
+    const txNote = TXSUB
+      ? `Tx submission is measured — ${fmt(TXSUB.ns)}, phase-independent (<a href="tx-submission.html">tx-submission benchmark</a>); ` +
+        `the goal keeps the ${fmt(tx)} allocation. Query (${fmt(query)}) is a fixed estimate.`
+      : `Tx submission (${fmt(tx)}) and query (${fmt(query)}) are fixed estimates.`;
     document.getElementById("source-note").innerHTML =
       `Goal numbers from <code>targets.json</code>: Phase ${p.phase} — ${fmt(block)} block time × ${n}, ${fmt(ceiling)} E2E budget, ` +
-      `${fmt(targetNs)} ingestion target. Tx submission (${fmt(tx)}) and query (${fmt(query)}) are fixed estimates.` + mismatch;
+      `${fmt(targetNs)} ingestion target. ` + txNote + mismatch;
   }
 
   /* ---- deep-link ?phase=N&run=ID ---- */
@@ -563,6 +575,39 @@
     history.replaceState({}, "", url);
   }
 
+  /* ---- measured tx submission (docs/txsub/) — best-effort; null keeps the estimate ---- */
+  async function loadTxsub() {
+    try {
+      const m = await fetch("txsub/index.json", { cache: "no-cache" })
+        .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+      const run = (m.runs || []).find(r => r.role === "headline");
+      const rtt = m.assumed_network_rtt_ns;
+      if (!run || rtt == null) return null;
+      const sums = await Promise.all(Object.values(run.summaries || {}).map(p =>
+        fetch("txsub/" + p, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
+      let worst = null;
+      for (const s of sums) {
+        const v = s && s.handler && s.handler.p99_ns;
+        if (typeof v === "number" && (worst == null || v > worst)) worst = v;
+      }
+      return worst == null ? null : { ns: worst + rtt, rtt, runId: run.id };
+    } catch (err) { return null; }
+  }
+
+  // Once the measured value is in, the static "estimated" markers on the tx
+  // slice (formula pill + term card) flip to measured.
+  function markTxMeasured() {
+    const pill = document.getElementById("tx-pill");
+    if (pill) pill.classList.remove("estimated");
+    const badge = document.getElementById("tx-card-prov");
+    if (badge) { badge.className = "prov measured"; badge.innerHTML = `<span class="sw"></span>Measured`; }
+    const txt = document.getElementById("tx-card-text");
+    if (txt) txt.innerHTML = `The time for a transaction to travel from the client to Stellar RPC v2.
+      Measured by the <a href="tx-submission.html">tx-submission benchmark</a>: the worst profile's in-RPC
+      p99 plus an assumed ${fmt(TXSUB.rtt)} network round trip. Phase-independent — the same value applies
+      at every phase; the goal panel keeps the fixed allocation.`;
+  }
+
   /* ---- boot ---- */
   async function boot() {
     try {
@@ -571,6 +616,8 @@
         fetch("runs/index.json", { cache: "no-cache" }).then(r => { if (!r.ok) throw new Error("runs/index.json HTTP " + r.status); return r.json(); }),
       ]);
       TARGETS = t; MANIFEST = m;
+      TXSUB = await loadTxsub();
+      if (TXSUB) markTxMeasured();
     } catch (err) {
       console.error(err);
       cmpEl.innerHTML = `<div class="error-box">Could not load data (${esc(err.message)}). Serve the folder: <code>make serve</code> — <code>file://</code> will not work.</div>`;
