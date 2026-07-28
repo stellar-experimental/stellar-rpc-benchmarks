@@ -43,8 +43,11 @@
     </figure>`;
   }
 
-  const secHead = (no, title) =>
-    `<div class="sec-head"><span class="sec-num">${no}</span><h2>${title}</h2></div>`;
+  // tag: a small scope pill on the heading row — which clock the section's
+  // numbers are on (with vs without the assumed network round trip).
+  const secHead = (no, title, tag) =>
+    `<div class="sec-head"><span class="sec-num">${no}</span><h2>${title}</h2>${
+      tag ? `<span class="scope-tag">${tag}</span>` : ""}</div>`;
 
   /* ---- shared handler percentile table (headline + confirmation) ---- */
   function handlerTable(id, profiles) {
@@ -75,8 +78,8 @@
     const rtt = manifest.assumed_network_rtt_ns;
     const model = targets && targets.fixed_estimates && targets.fixed_estimates.tx_submit_p99_ns;
 
-    const tile = (v, k, sub) =>
-      `<div class="tile"><div class="tile-value">${v}</div><div class="tile-label"><strong>${k}.</strong> ${sub}</div></div>`;
+    const tile = (v, k, sub, eq) =>
+      `<div class="tile"><div class="tile-value">${v}</div>${eq ? `<div class="tile-eq">${eq}</div>` : ""}<div class="tile-label"><strong>${k}.</strong> ${sub}</div></div>`;
     let tiles = "";
     if (model != null) {
       tiles += tile(fmt(model), "Target value",
@@ -89,11 +92,12 @@
           ? ` <span class="chip">▪ ${fmt(model - basis)} under the model</span>`
           : ` <span class="chip warn">▲ ${fmt(basis - model)} over the model</span>`;
       tiles += tile(fmt(basis), "Calculated value" + chip,
-        `worst-profile handler p99 (${esc(label(worst.mode))}, ${fmt(worst.ns)}, standalone) + the assumed ${fmt(rtt)} network round trip.`);
+        `worst-profile handler p99 (${esc(label(worst.mode))}, standalone) + the assumed network round trip.`,
+        `= ${fmt(rtt)} network (assumed) + ${fmt(worst.ns)} in-RPC (measured)`);
     }
 
     return `<section id="budget">
-      ${secHead(no, "The tx submission budget")}
+      ${secHead(no, "The tx submission budget", rtt != null ? `includes ~${fmt(rtt)} network` : "")}
       <p class="sec-intro">The tx submission slice of the end-to-end latency model decomposes as
         <strong>client↔RPC network time</strong> — assumed at ~${fmt(rtt)} round trip, not measured here —
         plus the <strong>in-RPC time</strong> this benchmark measures. </p>
@@ -116,11 +120,11 @@
 
   function headlineSection(no, run) {
     return `<section id="headline">
-      ${secHead(no, "Main results — standalone network")}
+      ${secHead(no, "Main results — standalone network", "in-RPC only — no network time")}
       <p class="sec-intro">Tx submission duration per profile, measured at RPC's <code>sendTransaction</code> handler: Load: ${fmtInt(run.target_rps)} rps ×
         ${fmtInt(run.duration_s)} s per profile against RPC ${esc(run.rpc_version)} on ${esc(run.instance)}.</p>
       ${figure("Fig 2.1", "Handler p99 per profile", "", p99Bars(run._profiles),
-        "The tail (p99) is the number that matters for the submission budget; the full distribution is in the table below.")}
+        "The tail (p99) is the in-RPC number; §01 adds the assumed network round trip on top of the worst one. The full distribution is in the table below.")}
       ${handlerTable("headline-table", run._profiles)}
     </section>`;
   }
@@ -171,7 +175,7 @@
       <span class="lg-item"><span class="lg-sw" style="background:var(--s5)"></span>RPC residue — XDR decode, hash, JSONify</span>
     </div>`;
     return `<section id="split">
-      ${secHead(no, "Where the time goes")}
+      ${secHead(no, "Where the time goes", "in-RPC only — no network time")}
       <p class="sec-intro">The handler <strong>mean</strong> splits additively into the RPC→Core
         <code>POST /tx</code> leg and RPC's own processing (XDR decode, hash, JSONify).</p>
       ${figure("Fig 3.1", "Handler mean: core leg vs RPC residue", legend, splitBars(profiles),
@@ -195,7 +199,7 @@
     const ns = run._profiles.map((p) => p.data.handler.count);
     const nTxt = ns.length ? (Math.min(...ns) === Math.max(...ns) ? fmtInt(ns[0]) : `${fmtInt(Math.min(...ns))}–${fmtInt(Math.max(...ns))}`) : "—";
     return `<section id="confirmation">
-      ${secHead(no, "Testnet confirmation")}
+      ${secHead(no, "Testnet confirmation", "in-RPC only — no network time")}
       <p class="sec-intro">${agreeTxt}the much smaller sample (n = ${nTxt} per profile at
         ${fmtInt(run.target_rps)} rps × ${fmtInt(run.duration_s)} s) makes tail quantiles noisy, so the
         standalone run stays the main result.</p>
