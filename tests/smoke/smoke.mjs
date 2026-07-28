@@ -365,6 +365,25 @@ for (const run of manifest.runs) {
   window.close();
 }
 
+/* ---------------- tx-submission interim page (tx-submission.html) ---------------- */
+/* Renders the harvest summaries under docs/txsub/ (verbatim external contract,
+   not run JSONs): headline handler table, mean split bars, testnet table. */
+{
+  const group = "tx-submission";
+  console.log(`\n=== tx-submission.html ===`);
+  const { window, errors } = await loadViewer("", { page: "tx-submission.html", script: "txsub.js" });
+  const doc = window.document;
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  const headRows = doc.querySelectorAll("#headline-table tbody tr").length;
+  check(group, "three headline profile rows", headRows === 3, headRows + " rows");
+  const splitBars = doc.querySelectorAll(".ts-splitbar").length;
+  check(group, "three split bars", splitBars === 3, splitBars + " bars");
+  // Sanity value: the standalone soroswap handler p99 (4564515 ns) renders as 4.56 ms.
+  const soroswapRow = [...doc.querySelectorAll("#headline-table tbody tr")].map(txt).find((t) => /Soroswap/.test(t));
+  check(group, "soroswap handler p99 renders as 4.56 ms", !!soroswapRow && /4\.56 ms/.test(soroswapRow), soroswapRow || "row missing");
+  window.close();
+}
+
 console.log(`\nSMOKE SUMMARY: ${pass} passed, ${fail} failed (${manifest.runs.length} runs)`);
 if (fail) {
   console.log("Failures:");

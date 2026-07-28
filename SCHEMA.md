@@ -266,3 +266,9 @@ Explicitly-passed CLI args (`--run-id`, `--run-date`, …) always win over manif
 Where free-text machine metadata and the structured manifests overlap, the **structured data
 wins**: `hardware` supersedes the parsed `machine` instance/vcpus/mem, and `invocation.json`
 binary identity supersedes the `repo:` line.
+
+## Not run JSONs — `docs/txsub/**`
+
+The files under `docs/txsub/` are **not** schema-v1 run JSONs: they are transaction-submission
+harvest summaries committed verbatim from stellar-rpc-blaster's `scripts/tx-submission/harvest.py`
+(an external contract), listed in `docs/txsub/index.json` and rendered by `docs/tx-submission.html`.
