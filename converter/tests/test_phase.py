@@ -52,8 +52,8 @@ class PhaseTableTests(unittest.TestCase):
         self.assertEqual(by[1]["e2e_budget_ns"], 5_000_000_000)
         self.assertEqual(by[2]["e2e_budget_ns"], 2_500_000_000)
         self.assertEqual(by[3]["e2e_budget_ns"], 2_000_000_000)
-        self.assertEqual(by[1]["ingest_p99_target_ns"], 900_000_000)
-        self.assertEqual(by[3]["ingest_p99_target_ns"], 100_000_000)
+        self.assertEqual(by[1]["ingest_p99_target_ns"], 880_000_000)
+        self.assertEqual(by[3]["ingest_p99_target_ns"], 80_000_000)
         self.assertEqual(by[1]["orgs"], 10)
         self.assertEqual(by[2]["orgs"], 19)
         self.assertEqual(by[3]["orgs"], 31)
@@ -74,16 +74,16 @@ class PhaseTableTests(unittest.TestCase):
 
     def test_phase2_ingest_target_derived_from_e2e_budget(self):
         # Phase 2 states no explicit ingest-slice target; it is derived from the
-        # e2e budget: 2.5s = 1s*2 + 60ms + ingest + 40ms  ->  ingest = 400ms.
+        # e2e budget: 2.5s = 1s*2 + 60ms + ingest + 60ms  ->  ingest = 380ms.
         by = {p["phase"]: p for p in convert.PHASE_TARGETS}
-        self.assertEqual(by[2]["ingest_p99_target_ns"], 400_000_000)
+        self.assertEqual(by[2]["ingest_p99_target_ns"], 380_000_000)
 
     def test_ingest_p99_target_formula(self):
         self.assertEqual(
-            convert.ingest_p99_target(1_000_000_000, 2_500_000_000), 400_000_000)
+            convert.ingest_p99_target(1_000_000_000, 2_500_000_000), 380_000_000)
         # Explicit phase-1 target matches the formula.
         self.assertEqual(
-            convert.ingest_p99_target(2_000_000_000, 5_000_000_000), 900_000_000)
+            convert.ingest_p99_target(2_000_000_000, 5_000_000_000), 880_000_000)
 
 
 class PhaseEmissionTests(unittest.TestCase):

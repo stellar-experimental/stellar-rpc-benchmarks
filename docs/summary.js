@@ -29,6 +29,7 @@
   let CURRENT = null;       // { meta, data } of the run on screen
   let LIVE_TARGETS = null;  // phases[] from targets.json, or null if unfetched
   let LIVE_FIXED = null;    // fixed_estimates from targets.json (tx submission, query)
+  let MEASURED_TX = null;   // measured tx-submission basis (ns) from docs/txsub/, or null → estimate
   let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
   let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
   let redrawTimer = null;
@@ -520,6 +521,29 @@
       console.warn("targets.json not loaded; falling back to baked phase_targets", err);
     }
   }
+  // Measured tx submission (the tx-submission benchmark): worst headline-run
+  // profile's handler p99 + the manifest's assumed network RTT. Best-effort —
+  // on any failure the fixed estimate stands.
+  async function loadTxsub() {
+    try {
+      const res = await fetch("txsub/index.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const m = await res.json();
+      const run = (m.runs || []).find(r => r.role === "headline");
+      const rtt = m.assumed_network_rtt_ns;
+      if (!run || rtt == null) return;
+      const sums = await Promise.all(Object.values(run.summaries || {}).map(p =>
+        fetch("txsub/" + p, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
+      let worst = null;
+      for (const s of sums) {
+        const v = s && s.handler && s.handler.p99_ns;
+        if (typeof v === "number" && (worst == null || v > worst)) worst = v;
+      }
+      if (worst != null) MEASURED_TX = worst + rtt;
+    } catch (err) {
+      console.warn("txsub data not loaded; tx-submission slice stays an estimate", err);
+    }
+  }
   async function loadDatasetSizes() {
     try {
       const res = await fetch("dataset-sizes.json", { cache: "no-cache" });
@@ -757,7 +781,7 @@
       ? `Phase ${sel.phase} pipelines consensus and execution, so a transaction completes after ${nBlocks} ledger closes`
       : `a transaction submitted now lands in the <em>next</em> ledger close, not the one in flight`) : "";
     const budgetFig = canBudget ? figHTML("fig11", "Fig 1.1", "Where ingestion sits in the end-to-end budget", "fig11-legend",
-      `The four slices of the end-to-end (E2E) round trip, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices are targets or estimates (tx submission and query stay estimates until their benchmarks land); the solid slice is measured. Ingestion is the one slice these benchmarks move.`) : "";
+      `The four slices of the end-to-end (E2E) round trip, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices come from outside this benchmark${MEASURED_TX ? " (tx submission is measured by its own benchmark; query stays an estimate until its benchmark lands)" : " (tx submission and query stay estimates until their benchmarks land)"}; the solid slice is what this run measures. Ingestion is the one slice these benchmarks move.`) : "";
 
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
@@ -831,40 +855,43 @@
     if (canBudget) {
       const wp99 = ING[goalWorst].driver.ingest_total.p99.m;
       const blockTotal = nBlocks * blockNs;
-      const e2eOf = ing => blockTotal + txNs + ing + queryNs;
-      const segs = (ingNs, hatch) => [
+      const txRunNs = MEASURED_TX || txNs;     // measured tx submission when available, phase-independent
+      const txRunLabel = MEASURED_TX ? "tx submission (measured + assumed RTT)" : "tx submission (estimate)";
+      const e2eOf = (ing, txV) => blockTotal + txV + ing + queryNs;
+      const segs = (ingNs, hatch, txV) => [
         { color: C.de, ns: blockTotal, lab: `Stellar Core consensus — ${fmtNsAxis(blockTotal)}`, ink: true },
-        { color: C.de, ns: txNs, hatch: true },
+        { color: C.de, ns: txV, hatch: true },
         { color: C.s1, ns: ingNs, hatch: hatch, lab: fmtNs(ingNs), callout: true },
         { color: C.de, ns: queryNs, hatch: true },
       ];
-      const tip = (ingNs, ingLabel) => [
+      const tip = (ingNs, ingLabel, txV, txLabel) => [
         { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
-        { color: C.de, value: fmtNs(txNs), label: "tx submission (estimate)" },
+        { color: C.de, value: fmtNs(txV), label: txLabel },
         { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
         { color: C.de, value: fmtNs(queryNs), label: "query (estimate)" },
-        { value: fmtNs(e2eOf(ingNs)), label: "end-to-end (derived)" },
+        { value: fmtNs(e2eOf(ingNs, txV)), label: "end-to-end (derived)" },
       ];
       budgetChart("fig11-body", [
         { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
-          segs: segs(goalNs, true), tip: tip(goalNs, "ingestion (target)") },
+          segs: segs(goalNs, true, txNs), tip: tip(goalNs, "ingestion (target)", txNs, "tx submission (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
-          segs: segs(wp99, false), tip: tip(wp99, "ingestion (measured p99)") },
+          segs: segs(wp99, false, txRunNs), tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel) },
       ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
       legend("fig11-legend", [
         { label: "Stellar Core consensus", color: C.de },
-        { label: "tx submission + query (estimates)", color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
+        { label: MEASURED_TX ? "tx submission (measured) + query (estimate)" : "tx submission + query (estimates)",
+          color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
         { label: "ingestion", color: C.s1 },
         { label: "E2E budget", color: CVAR("--warn"), line: true },
       ]);
       const dTxt = e2e => { const d = budgetNs - e2e; return d === 0 ? "on budget" : d > 0 ? fmtNs(d) + " under" : fmtNs(-d) + " over"; };
       tableView("fig11", ["Slice", `Phase ${sel.phase} goal`, "This run", "Provenance"], [
         [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
-        ["tx submission", fmtNsAxis(txNs), fmtNsAxis(txNs), "estimate"],
+        ["tx submission", fmtNsAxis(txNs), MEASURED_TX ? fmtNs(txRunNs) : fmtNsAxis(txNs), MEASURED_TX ? "allocated → measured" : "estimate"],
         ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
         ["query", fmtNsAxis(queryNs), fmtNsAxis(queryNs), "estimate"],
-        ["end-to-end (derived)", fmtNs(e2eOf(goalNs)), fmtNs(e2eOf(wp99)), "derived"],
-        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eOf(goalNs)), dTxt(e2eOf(wp99)), "derived"],
+        ["end-to-end (derived)", fmtNs(e2eOf(goalNs, txNs)), fmtNs(e2eOf(wp99, txRunNs)), "derived"],
+        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eOf(goalNs, txNs)), dTxt(e2eOf(wp99, txRunNs)), "derived"],
       ]);
     }
 
@@ -1019,7 +1046,7 @@
   }
 
   async function boot() {
-    await Promise.all([loadLiveTargets(), loadDatasetSizes()]);
+    await Promise.all([loadLiveTargets(), loadDatasetSizes(), loadTxsub()]);
     try {
       const res = await fetch("runs/index.json", { cache: "no-cache" });
       if (!res.ok) throw new Error("HTTP " + res.status);

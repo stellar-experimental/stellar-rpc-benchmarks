@@ -130,11 +130,11 @@ converted and lets the viewer degrade gracefully offline; the live viewer/model 
   "block_time_ns": 2000000000,        // the phase block time; also the keep-up budget
   "e2e_budget_ns": 5000000000,        // end-to-end budget (externalized → client);
                                       //   context only — this benchmark does not measure it
-  "ingest_p99_target_ns": 900000000,  // ingest-slice target (meta available in captive
+  "ingest_p99_target_ns": 880000000,  // ingest-slice target (meta available in captive
                                       //   core → ingested in RPC) — the row this benchmark
                                       //   measures as per-ledger ingest_total p99. When a phase
                                       //   omits it (phase 2), the converter derives it from the
-                                      //   e2e budget: e2e = block_time*2 + 60ms + ingest + 40ms.
+                                      //   e2e budget: e2e = block_time*2 + 60ms + ingest + 60ms.
   "workloads": [                      // the three model workloads at this phase
     { "name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000 }, … ],
   "orgs": 10,

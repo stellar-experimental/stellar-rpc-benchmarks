@@ -79,8 +79,8 @@
       `<div class="tile"><div class="tile-value">${v}</div><div class="tile-label"><strong>${k}.</strong> ${sub}</div></div>`;
     let tiles = "";
     if (model != null) {
-      tiles += tile(fmt(model), "Model value today",
-        `<code>fixed_estimates.tx_submit_p99_ns</code> in <code>targets.json</code> — what the E2E latency model currently charges the whole submission slice.`);
+      tiles += tile(fmt(model), "Target value",
+        `What the E2E latency model currently allocates to the submission slice.`);
     }
     if (worst && rtt != null) {
       const basis = worst.ns + rtt;
@@ -88,16 +88,15 @@
         : basis <= model
           ? ` <span class="chip">▪ ${fmt(model - basis)} under the model</span>`
           : ` <span class="chip warn">▲ ${fmt(basis - model)} over the model</span>`;
-      tiles += tile(fmt(basis), "Measured basis" + chip,
+      tiles += tile(fmt(basis), "Calculated value" + chip,
         `worst-profile handler p99 (${esc(label(worst.mode))}, ${fmt(worst.ns)}, standalone) + the assumed ${fmt(rtt)} network round trip.`);
     }
 
     return `<section id="budget">
-      ${secHead(no, "The submission budget")}
-      <p class="sec-intro">The submission slice of the end-to-end latency model decomposes as
+      ${secHead(no, "The tx submission budget")}
+      <p class="sec-intro">The tx submission slice of the end-to-end latency model decomposes as
         <strong>client↔RPC network time</strong> — assumed at ~${fmt(rtt)} round trip, not measured here —
-        plus the <strong>in-RPC time</strong> this benchmark measures. Side by side, they say whether the
-        model's fixed estimate for the slice is honest.</p>
+        plus the <strong>in-RPC time</strong> this benchmark measures. </p>
       <div class="tiles">${tiles}</div>
     </section>`;
   }
@@ -115,30 +114,14 @@
     return `<div class="cbar">${rows}</div>`;
   }
 
-  function crossCheckNote(profiles) {
-    const checked = profiles.filter((p) => p.data.json_rpc_cross_check && p.data.json_rpc_cross_check.present);
-    if (!checked.length) return "";
-    const mismatch = checked.filter((p) => p.data.json_rpc_cross_check.mean_ns !== p.data.handler.mean_ns);
-    if (!mismatch.length) {
-      return `<p class="phase-caption">Validation: the same handler duration measured independently by the
-        Prometheus <code>soroban_rpc_json_rpc_request_duration_seconds{endpoint=&quot;sendTransaction&quot;}</code>
-        Summary reports the identical mean for every profile — the log-derived samples and the in-process
-        metric agree.</p>`;
-    }
-    return `<p class="phase-caption">Validation: the Prometheus-side mean differs from the log-derived mean for
-      ${mismatch.map((p) => `${esc(label(p.mode))} (${fmt(p.data.handler.mean_ns)} log vs ${fmt(p.data.json_rpc_cross_check.mean_ns)} metric)`).join(", ")}.</p>`;
-  }
-
   function headlineSection(no, run) {
     return `<section id="headline">
-      ${secHead(no, "Headline — standalone network")}
-      <p class="sec-intro">Full <code>sendTransaction</code> handler duration per profile: exact per-request
-        samples from RPC's own log, nearest-rank percentiles. Load: ${fmtInt(run.target_rps)} rps ×
+      ${secHead(no, "Main results — standalone network")}
+      <p class="sec-intro">Tx submission duration per profile, measured at RPC's <code>sendTransaction</code> handler: Load: ${fmtInt(run.target_rps)} rps ×
         ${fmtInt(run.duration_s)} s per profile against RPC ${esc(run.rpc_version)} on ${esc(run.instance)}.</p>
       ${figure("Fig 2.1", "Handler p99 per profile", "", p99Bars(run._profiles),
         "The tail (p99) is the number that matters for the submission budget; the full distribution is in the table below.")}
       ${handlerTable("headline-table", run._profiles)}
-      ${crossCheckNote(run._profiles)}
     </section>`;
   }
 
@@ -190,8 +173,7 @@
     return `<section id="split">
       ${secHead(no, "Where the time goes")}
       <p class="sec-intro">The handler <strong>mean</strong> splits additively into the RPC→Core
-        <code>POST /tx</code> leg and RPC's own processing (XDR decode, hash, JSONify) — standalone run.
-        Only means decompose this way.</p>
+        <code>POST /tx</code> leg and RPC's own processing (XDR decode, hash, JSONify).</p>
       ${figure("Fig 3.1", "Handler mean: core leg vs RPC residue", legend, splitBars(profiles),
         "Bars share one scale (the largest handler mean). Segment labels are the mean and its share of that profile's handler mean.")}
       ${coreLegTable(profiles)}
@@ -216,7 +198,7 @@
       ${secHead(no, "Testnet confirmation")}
       <p class="sec-intro">${agreeTxt}the much smaller sample (n = ${nTxt} per profile at
         ${fmtInt(run.target_rps)} rps × ${fmtInt(run.duration_s)} s) makes tail quantiles noisy, so the
-        standalone run stays the headline.</p>
+        standalone run stays the main result.</p>
       ${handlerTable("confirm-table", run._profiles)}
     </section>`;
   }
@@ -224,6 +206,19 @@
   /* ---- 05 · method & provenance ---- */
   function methodSection(no, runs) {
     const gcsLink = (gs) => `<a href="https://console.cloud.google.com/storage/browser/${esc(String(gs).replace("gs://", ""))}">${esc(gs)} ↗</a>`;
+    const crossCheck = (() => {
+      const checked = [];
+      for (const r of runs) {
+        for (const p of r._profiles || []) {
+          if (p.data.json_rpc_cross_check && p.data.json_rpc_cross_check.present) checked.push(p);
+        }
+      }
+      if (!checked.length) return "";
+      const off = checked.filter((p) => p.data.json_rpc_cross_check.mean_ns !== p.data.handler.mean_ns);
+      if (!off.length) return " Its mean matches the log-derived handler mean exactly for every profile.";
+      return ` Its mean differs from the log-derived handler mean for ${off.map((p) =>
+        `${esc(label(p.mode))} (${fmt(p.data.handler.mean_ns)} log vs ${fmt(p.data.json_rpc_cross_check.mean_ns)} metric)`).join(", ")}.`;
+    })();
     const cfgRows = runs.map((r) => `<tr>
       <td>${esc(r.network)}</td>
       <td>${esc(r.role)}</td>
@@ -234,38 +229,38 @@
     </tr>`).join("");
     const bundles = runs.filter((r) => r.gcs).map((r) =>
       `<div class="meta-cell"><div class="meta-k">${esc(r.network)} bundle</div><div class="meta-v">${gcsLink(r.gcs)}</div></div>`).join("");
-    const warnItems = [];
-    for (const r of runs) {
-      for (const p of r._profiles) {
-        for (const w of p.data.warnings || []) {
-          warnItems.push(`<li><b>⚠</b> <code>${esc(r.id)}</code> · ${esc(label(p.mode))} — ${esc(w)}</li>`);
-        }
-      }
-    }
     return `<section id="method" class="method">
-      ${secHead(no, "Method & provenance")}
+      ${secHead(no, "Methodology & Data")}
+      ${bundles ? `<div class="meta-grid" style="margin-top:18px">${bundles}</div>` : ""}
+      <p class="sec-intro">Each bundle holds:</p>
+      <ul class="bundle-files">
+        <li><code>rpc-log-&lt;profile&gt;.log</code> — the RPC process log; the per-request lines the
+          durations come from.</li>
+        <li><code>metrics-&lt;profile&gt;.prom</code> — a snapshot of RPC's <code>/metrics</code> taken right
+          after the run; holds the two Prometheus Summaries below.</li>
+        <li><code>client-&lt;profile&gt;.ndjson</code> — the load generator's per-request records.</li>
+        <li><code>meta.json</code> — the run config.</li>
+        <li><code>summary-&lt;profile&gt;.json</code> — the aggregate <code>harvest.py</code>
+          (stellar-rpc-blaster <code>scripts/tx-submission/</code>) produces from the above. These six files
+          are committed verbatim under <code>docs/txsub/</code> and are what this page renders.</li>
+      </ul>
       <dl>
-        <dt>Handler duration (the headline)</dt>
+        <dt>Handler duration (the main measurement)</dt>
         <dd>Every <code>finished JSONRPC request</code> line in RPC's log, joined to its
-          <code>starting JSONRPC request</code> line on the <code>req</code> id. Exact per-request samples;
-          percentiles are nearest-rank over the full set.</dd>
+          <code>starting JSONRPC request</code> line on the <code>req</code> id. Every request's duration
+          is kept; a percentile is the actual duration at that rank.</dd>
         <dt>Core leg</dt>
         <dd>The <code>soroban_rpc_txsub_submission_duration_seconds</code> Prometheus Summary — the RPC→Core
           <code>POST /tx</code> leg — scraped right after each run: per-status p50/p90/p99 plus an exact mean
           from <code>sum</code>/<code>count</code>.</dd>
         <dt>Cross-check</dt>
         <dd>The <code>soroban_rpc_json_rpc_request_duration_seconds{endpoint=&quot;sendTransaction&quot;}</code>
-          Summary — the same handler duration from the Prometheus side, rendered only as the validation note
-          above, never as a second data series.</dd>
-        <dt>Producer</dt>
-        <dd><code>harvest.py</code> in stellar-rpc-blaster <code>scripts/tx-submission/</code>. The summary
-          files under <code>docs/txsub/</code> are committed verbatim from its output.</dd>
+          Summary measures the same handler duration from the Prometheus side. It is a consistency check
+          only, never a second data series.${crossCheck}</dd>
       </dl>
       <div class="tv-scroll" style="margin-top:18px"><table class="data" id="config-table">
         <thead><tr><th>Network</th><th>role</th><th>date</th><th>load</th><th>rpc version</th><th>instance</th></tr></thead>
         <tbody>${cfgRows}</tbody></table></div>
-      ${bundles ? `<div class="meta-grid" style="margin-top:16px">${bundles}</div>` : ""}
-      ${warnItems.length ? `<ul class="warn-list">${warnItems.join("")}</ul>` : ""}
     </section>`;
   }
 
@@ -273,23 +268,14 @@
   function masthead(manifest) {
     const dates = [...new Set((manifest.runs || []).map((r) => r.date).filter(Boolean))];
     return `<header class="masthead">
-      <div class="mast-eyebrow"><span>Interim Report · Transaction Submission</span><span>${esc(dates.join(" · "))}</span></div>
-      <h1>sendTransaction: time spent inside RPC</h1>
-      <p class="mast-sub">A one-off benchmark measured the time the <code>stellar-rpc</code> process spends
-        inside a single <code>sendTransaction</code> request — three transaction profiles on two networks,
-        exact per-request percentiles from RPC's own instrumentation. Context:
+      <div class="mast-eyebrow"><span>RPC · Transaction Submission</span><span>${esc(dates.join(" · "))}</span></div>
+      <h1>RPC: Benchmarking Transaction Submission</h1>
+      <p class="mast-sub">A benchmark that measures the time the <code>stellar-rpc</code> process spends
+        inside a single <code>sendTransaction</code> request. We measure three transaction profiles on two networks (standalone and testnet). 
+        Context:
         <a href="https://github.com/stellar/stellar-rpc/issues/869">stellar/stellar-rpc#869</a> · back to the
         <a href="index.html">benchmark reports</a>.</p>
     </header>`;
-  }
-
-  function footer() {
-    return `<div class="footer">
-      Interim page: these summaries do not fit the run-JSON schema (<code>SCHEMA.md</code>) — one run with
-      exact per-request percentiles instead of 5-rep CSV campaigns — so they live verbatim under
-      <code>docs/txsub/</code> until the multi-family report refactor. Adding a run = upload the bundle to
-      GCS, copy its summaries, add a manifest entry (see <code>README.md</code>).
-    </div>`;
   }
 
   function render(manifest, targets, failures) {
@@ -316,7 +302,6 @@
       html += confirmationSection(num(), confirmation, headline);
     }
     html += methodSection(num(), runs);
-    html += footer();
     report.innerHTML = html;
   }
 
