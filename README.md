@@ -94,6 +94,22 @@ git push
 Omitting any required variable fails with a message naming the missing one. `results-in/`
 is git-ignored.
 
+## Transaction-submission results (interim page)
+
+`docs/tx-submission.html` reports a one-off `sendTransaction` benchmark
+(stellar/stellar-rpc#869): the time the stellar-rpc process spends inside one submission
+request, across three transaction profiles on two networks. Those results don't fit the
+schema-v1 run JSON (single run, exact per-request percentiles — not 5-rep CSV campaigns),
+so the harvest summaries produced by stellar-rpc-blaster's
+`scripts/tx-submission/harvest.py` are committed **verbatim** under `docs/txsub/` and
+rendered by `docs/txsub.js`. This is deliberate and interim — a unifying refactor happens
+when the other benchmark families land.
+
+To add a future run: upload the bundle to GCS, copy its `summary-<mode>.json` files
+byte-identical into `docs/txsub/<bundle-id>/`, and add an entry to
+`docs/txsub/index.json` (network, role, date, rps × duration, rpc_version, instance,
+GCS path, summary paths).
+
 ## GitHub Action flow (`.github/workflows/ingest.yml`)
 
 `workflow_dispatch` with inputs `gcs_path`, `run_id`, `run_name`, `dataset_kind`

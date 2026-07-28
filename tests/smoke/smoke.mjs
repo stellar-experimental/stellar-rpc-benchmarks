@@ -138,7 +138,7 @@ function checkSanity(kind, doc, group, D) {
       check(group, "banner shows both goal + keep-up verdicts",
         /(MEETS GOAL|MISS)/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 140));
       if (group.startsWith("phase2-")) {
-        // SAC's ~604 ms ingest p99 misses the 400 ms Phase 2 goal: the headline
+        // SAC's ~604 ms ingest p99 misses the 380 ms Phase 2 goal: the headline
         // must read 2 / 3 with a MISS, not an all-clear 3 / 3.
         check(group, "phase 2 headline is 2 / 3 MISS (not all-clear)",
           /2 \/ 3/.test(banner) && /MISS/.test(banner) && !/MEETS GOAL/.test(banner), banner.slice(0, 140));
@@ -231,16 +231,16 @@ if (phaseRun) {
     check(group, "phase table rendered", !!tbl, "missing");
     const tblTxt = txt(tbl);
     check(group, "all three phases in table", /Phase 1/.test(tblTxt) && /Phase 2/.test(tblTxt) && /Phase 3/.test(tblTxt), tblTxt.slice(0, 100));
-    check(group, "phase 2 ingest-slice target derived from e2e budget (400 ms)", /400 ms/.test(tblTxt), tblTxt.slice(0, 100));
+    check(group, "phase 2 ingest-slice target derived from e2e budget (380 ms)", /380 ms/.test(tblTxt), tblTxt.slice(0, 100));
     const selTh = doc.querySelector("#phase-block th.ph-sel");
     check(group, `matched phase (${matched}) highlighted`, !!selTh && txt(selTh).includes(`Phase ${matched}`), selTh ? txt(selTh) : "missing");
     check(group, "matched phase badged 'this run'", /this run/.test(txt(doc.getElementById("phase-block"))), "missing");
     check(group, "no caveat at default (matched) selection", !doc.querySelector(".phase-caveat"), "caveat present");
     const svgTxt = txt(doc.querySelector("#fig42-body"));
     check(group, "budget line at Phase 1 block time (2 s)", /2 s — Phase 1 block time/.test(svgTxt), svgTxt.slice(0, 200));
-    check(group, "ingest target line at 900 ms", /900 ms — Phase 1 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
+    check(group, "ingest target line at 880 ms", /880 ms — Phase 1 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
     const readout = txt(doc.getElementById("ingest-target-readout"));
-    check(group, "pass/miss readout vs Phase 1 target", /vs Phase 1 target 900 ms/.test(readout) && /(PASS|MISS)/.test(readout), readout.slice(0, 140));
+    check(group, "pass/miss readout vs Phase 1 target", /vs Phase 1 target 880 ms/.test(readout) && /(PASS|MISS)/.test(readout), readout.slice(0, 140));
     // Tier-1: peak memory + pacing now surface in the DEFAULT report, not just ?view=hot.
     check(group, "peak-memory figure rendered", !!doc.querySelector("#fig21-body svg"), "missing");
     const memTv = txt(doc.querySelector("#fig21-tv"));
@@ -263,9 +263,9 @@ if (phaseRun) {
     check(group, "caveat names Phase 3 and the actual pace", /Viewing against Phase 3 targets/.test(caveat) && /2 s close interval/.test(caveat), caveat.slice(0, 160));
     const svgTxt = txt(doc.querySelector("#fig42-body"));
     check(group, "budget line re-based to 600 ms", /600 ms — Phase 3 block time/.test(svgTxt), svgTxt.slice(0, 200));
-    check(group, "ingest target line re-based to 100 ms", /100 ms — Phase 3 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
+    check(group, "ingest target line re-based to 80 ms", /80 ms — Phase 3 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
     const readout = txt(doc.getElementById("ingest-target-readout"));
-    check(group, "readout vs Phase 3 target 100 ms", /vs Phase 3 target 100 ms/.test(readout), readout.slice(0, 140));
+    check(group, "readout vs Phase 3 target 80 ms", /vs Phase 3 target 80 ms/.test(readout), readout.slice(0, 140));
     // The pacing figure's budget is always the run's ACTUAL close interval —
     // never re-based when another phase is selected.
     const paceReadout = txt(doc.getElementById("pace-readout-full"));
@@ -356,12 +356,31 @@ for (const run of manifest.runs) {
   check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
   // Per-run sanity values.
   if (run.id.startsWith("phase2-")) {
-    check(group, "Phase 2 ingestion target derived (400 ms)", /400 ms/.test(phTbl), phTbl.slice(0, 200));
-    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 400 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
+    check(group, "Phase 2 ingestion target derived (380 ms)", /380 ms/.test(phTbl), phTbl.slice(0, 200));
+    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 380 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
     check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
   } else if (run.id.startsWith("phase1-")) {
     check(group, "phase 1 banner: 3 / 3 MEETS GOAL", /3 \/ 3/.test(bannerTxt) && /MEETS GOAL/.test(bannerTxt), bannerTxt.slice(0, 140));
   }
+  window.close();
+}
+
+/* ---------------- tx-submission interim page (tx-submission.html) ---------------- */
+/* Renders the harvest summaries under docs/txsub/ (verbatim external contract,
+   not run JSONs): headline handler table, mean split bars, testnet table. */
+{
+  const group = "tx-submission";
+  console.log(`\n=== tx-submission.html ===`);
+  const { window, errors } = await loadViewer("", { page: "tx-submission.html", script: "txsub.js" });
+  const doc = window.document;
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  const headRows = doc.querySelectorAll("#headline-table tbody tr").length;
+  check(group, "three headline profile rows", headRows === 3, headRows + " rows");
+  const splitBars = doc.querySelectorAll(".ts-splitbar").length;
+  check(group, "three split bars", splitBars === 3, splitBars + " bars");
+  // Sanity value: the standalone soroswap handler p99 (4564515 ns) renders as 4.56 ms.
+  const soroswapRow = [...doc.querySelectorAll("#headline-table tbody tr")].map(txt).find((t) => /Soroswap/.test(t));
+  check(group, "soroswap handler p99 renders as 4.56 ms", !!soroswapRow && /4\.56 ms/.test(soroswapRow), soroswapRow || "row missing");
   window.close();
 }
 
