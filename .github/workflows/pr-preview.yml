@@ -23,15 +23,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cache-bust viewer assets
-        # Same content-hash stamping as deploy-pages.yml. Matters more here: the
-        # preview URL is constant across pushes to a PR, so without it a browser
-        # keeps serving the cached app.js/styles.css while you iterate. Harmless on
-        # the close event (nothing is deployed then).
-        run: |
-          app_hash=$(sha256sum docs/app.js | cut -c1-8)
-          css_hash=$(sha256sum docs/styles.css | cut -c1-8)
-          sed -i "s|href=\"styles.css\"|href=\"styles.css?v=${css_hash}\"|" docs/index.html
-          sed -i "s|src=\"app.js\"|src=\"app.js?v=${app_hash}\"|" docs/index.html
+        # Same script as deploy-pages.yml, so a preview stamps the same asset set
+        # a deploy does. Matters more here: the preview URL is constant across
+        # pushes to a PR, so without it a browser keeps serving the cached assets
+        # while you iterate. Harmless on the close event (nothing is deployed then).
+        run: .github/scripts/cache-bust.sh
 
       - name: Deploy preview
         uses: rossjrw/pr-preview-action@v1

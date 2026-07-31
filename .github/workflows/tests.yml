@@ -1,0 +1,46 @@
+name: Tests
+
+# Run both test suites on every PR and every push to main. The numbers in this
+# repo are the product, and until now nothing checked them: a change to
+# convert.py, the viewer, or a committed run JSON could merge green.
+#
+# Deliberately no paths filter. A run JSON is data the viewer has to render, so
+# `docs/runs/**`-only PRs must clear the smoke test just like code changes do.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  converter:
+    name: Converter tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Unit + golden tests
+        # convert.py is Python 3 stdlib only, so the preinstalled python3 is
+        # enough — no pip step. The golden tests convert two real datasets that
+        # only exist on the operator's machine; here they report as skipped.
+        run: make test
+
+  viewer:
+    name: Viewer smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        # jsdom is the repo's only dev dependency and `make smoke` installs it
+        # itself; the pin is just so a Node major bump is a deliberate edit.
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Smoke-test the viewer
+        run: make smoke
