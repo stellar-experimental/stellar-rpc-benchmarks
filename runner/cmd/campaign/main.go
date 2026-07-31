@@ -9,7 +9,26 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
+
+// defaultBenchRoot is the benchmark machine's NVMe mount; BENCH_ROOT overrides
+// it on any other machine.
+const defaultBenchRoot = "/mnt/nvme/bench"
+
+// placeholderSha stands in for the built commit when the ref cannot be
+// resolved locally. It must be 8 hex digits, or a --resume would reject the run
+// ids derived from it as malformed.
+const placeholderSha = "deadbeef"
+
+// stampLayout is the run id's UTC timestamp, e.g. 20260101T000000Z.
+const stampLayout = "20060102T150405Z"
 
 const topUsage = `campaign — stellar-rpc full-history benchmark campaigns
 
@@ -103,6 +122,63 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
+// planCmd prints the steps a campaign would execute. It builds no clone,
+// fetches nothing, and writes nothing — it is readable on any machine.
+func planCmd(pos []string, stdout, stderr io.Writer) int {
+	if len(pos) != 1 {
+		fmt.Fprint(stderr, subUsage["plan"])
+		fmt.Fprint(stderr, "error: plan needs exactly one config path\n")
+		return 2
+	}
+	cfg, err := config.Load(pos[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 2
+	}
+	benchRoot := os.Getenv("BENCH_ROOT")
+	if benchRoot == "" {
+		benchRoot = defaultBenchRoot
+	}
+	in := plan.Inputs{
+		BenchRoot: benchRoot,
+		Stamp:     time.Now().UTC().Format(stampLayout),
+	}
+	src := filepath.Join(benchRoot, "src")
+	if sha, ok := resolveRef(src, cfg.Ref); ok {
+		in.BuiltCommit, in.Sha8 = sha, sha[:8]
+	} else {
+		// Planning fetches nothing, so the ref may not resolve locally yet:
+		// plan with the ref itself and a placeholder sha in derived paths.
+		in.BuiltCommit, in.Sha8 = cfg.Ref, placeholderSha
+		fmt.Fprintf(stdout, "== note: ref '%s' is not resolvable in %s — using placeholder sha '%s' in paths\n",
+			cfg.Ref, src, placeholderSha)
+	}
+	plan.Build(cfg, in).Print(stdout)
+	return 0
+}
+
+// resolveRef reports the commit ref names inside the build clone at src, if
+// there is one. Remote-tracking branches are tried first so a stale local ref
+// never shadows the fetched branch tip; the fallback covers tags and raw commit
+// hashes. Task 8 replaces this with the full ensure_src/resolve_ref port
+// (clone, fetch, reset) that `campaign run` needs; `plan` deliberately stays
+// offline, so it works with whatever the clone already knows.
+func resolveRef(src, ref string) (string, bool) {
+	if _, err := os.Stat(filepath.Join(src, ".git")); err != nil {
+		return "", false
+	}
+	for _, rev := range []string{"refs/remotes/origin/" + ref + "^{commit}", ref + "^{commit}"} {
+		out, err := exec.Command("git", "-C", src, "rev-parse", "--verify", "--quiet", rev).Output()
+		if err != nil {
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); len(sha) >= 8 {
+			return sha, true
+		}
+	}
+	return "", false
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -118,11 +194,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "run", "plan", "preflight", "publish":
 		fs := subFlags(args[0], stderr)
-		if _, err := parseArgs(fs, args[1:]); err != nil {
+		pos, err := parseArgs(fs, args[1:])
+		if err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return 0
 			}
 			return 2
+		}
+		if args[0] == "plan" {
+			return planCmd(pos, stdout, stderr)
 		}
 		fmt.Fprint(stderr, subUsage[args[0]])
 		fmt.Fprintf(stderr, "error: %s is not implemented yet\n", args[0])

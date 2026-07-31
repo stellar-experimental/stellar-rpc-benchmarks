@@ -369,6 +369,11 @@ chunks = [8]
 			want: []string{"dataset 'local'", "chunk IDs must be non-negative integers", "-2"},
 		},
 		{
+			name: "duplicate chunk id",
+			src:  strings.Replace(minimal, "chunks = [7]", "chunks = [1, 1]", 1),
+			want: []string{"dataset 'local'", "duplicate chunk ID", "1"},
+		},
+		{
 			name: "unknown dataset kind",
 			src:  strings.Replace(minimal, `kind = "packs-local"`, `kind = "packs-http"`, 1),
 			want: []string{"dataset 'local'", "kind must be packs-local|packs-gs|bsb-s3|fixture", "packs-http"},

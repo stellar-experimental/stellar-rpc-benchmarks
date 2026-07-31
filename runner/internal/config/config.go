@@ -233,10 +233,20 @@ func (d *Dataset) validate(seen map[string]bool) error {
 	if len(d.Chunks) == 0 {
 		return fmt.Errorf("config: dataset '%s': chunks must list at least one chunk ID", d.Name)
 	}
+	// Duplicate chunk IDs are rejected outright, which bash did not do: step
+	// IDs embed <dataset>-c<chunk>-run<r>, so a repeated chunk would produce
+	// two steps with the same ID and the same output directory — ambiguous to
+	// depend on and, on resume, indistinguishable from finished work. Bash
+	// silently let the second copy overwrite the first's out dirs.
+	seenChunks := make(map[int]bool, len(d.Chunks))
 	for _, chunk := range d.Chunks {
 		if chunk < 0 {
 			return fmt.Errorf("config: dataset '%s': chunk IDs must be non-negative integers (got '%d')", d.Name, chunk)
 		}
+		if seenChunks[chunk] {
+			return fmt.Errorf("config: dataset '%s': duplicate chunk ID '%d'", d.Name, chunk)
+		}
+		seenChunks[chunk] = true
 	}
 	switch d.Kind {
 	case KindPacksLocal:

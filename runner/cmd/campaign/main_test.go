@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -93,6 +95,58 @@ func TestParseArgsRejectsUnknownFlagAfterPositional(t *testing.T) {
 	}
 }
 
+const planConfig = `
+name = "cli"
+ingest = "cold"
+query = false
+runs = 1
+
+[[dataset]]
+name = "ds"
+kind = "packs-local"
+location = "/packs/ds"
+chunks = [1]
+`
+
+func TestPlanCmd(t *testing.T) {
+	t.Run("unreadable config exits 2 with the config error", func(t *testing.T) {
+		t.Setenv("BENCH_ROOT", t.TempDir())
+		var stdout, stderr bytes.Buffer
+		if got := run([]string{"plan", filepath.Join(t.TempDir(), "nope.toml")}, &stdout, &stderr); got != 2 {
+			t.Errorf("exit code = %d, want 2", got)
+		}
+		if !strings.Contains(stderr.String(), "config:") {
+			t.Errorf("stderr = %q, want the config error", stderr.String())
+		}
+	})
+
+	t.Run("a valid config plans against a bench root with no clone", func(t *testing.T) {
+		benchRoot := t.TempDir()
+		t.Setenv("BENCH_ROOT", benchRoot)
+		cfg := filepath.Join(t.TempDir(), "campaign.toml")
+		if err := os.WriteFile(cfg, []byte(planConfig), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		var stdout, stderr bytes.Buffer
+		if got := run([]string{"plan", cfg}, &stdout, &stderr); got != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr: %s)", got, stderr.String())
+		}
+		for _, want := range []string{
+			"using placeholder sha 'deadbeef' in paths",
+			"== build\n",
+			filepath.Join(benchRoot, "bin", "stellar-rpc-deadbeef"),
+			"== ingest-cold-ds-c1-run1\n",
+		} {
+			if !strings.Contains(stdout.String(), want) {
+				t.Errorf("stdout missing %q, got:\n%s", want, stdout.String())
+			}
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("stderr = %q, want empty", stderr.String())
+		}
+	})
+}
+
 func TestRunDispatch(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -148,10 +202,10 @@ func TestRunDispatch(t *testing.T) {
 			stderr: []string{"not defined: -bogus", "usage: campaign run <config.toml>"},
 		},
 		{
-			name:   "plan stub",
+			name:   "plan without a config names what is missing",
 			args:   []string{"plan"},
 			exit:   2,
-			stderr: []string{"usage: campaign plan <config.toml>", "error: plan is not implemented yet"},
+			stderr: []string{"usage: campaign plan <config.toml>", "error: plan needs exactly one config path"},
 		},
 		{
 			name:   "preflight stub",
