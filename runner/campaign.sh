@@ -9,10 +9,21 @@
 # directory.
 #
 # Usage:
-#   ./runner/campaign.sh <path/to/campaign.cfg> [--dry-run]
+#   ./runner/campaign.sh <path/to/campaign.cfg> [--dry-run] [--resume <results-dir>]
 #
 # --dry-run prints every command the campaign would execute, with resolved
 # paths and flags. It performs no builds, downloads, or benchmark runs.
+#
+# --resume continues an interrupted campaign into an existing results
+# directory instead of starting a new one. The run id (the directory's
+# basename) is reused, and every timed leg whose --out directory already holds
+# a finished benchmark is skipped; a leg that was mid-flight when the campaign
+# died is wiped and re-run. The directory must belong to this config's NAME and
+# to the commit REF resolves to right now — resuming onto a different commit
+# would mix binaries inside one bundle, so it is refused. --dry-run --resume
+# prints the plan a resume would follow against the real directory. Resume is
+# same-boot only: $BENCH_ROOT is instance-store scratch, so a stopped instance
+# takes the results directory (and the hot DBs) with it.
 #
 # Environment:
 #   BENCH_ROOT  storage root for the build clone, datasets, scratch space, and
@@ -21,7 +32,10 @@
 #
 # Results land in $BENCH_ROOT/results/<NAME>-<sha>-<stamp>/ together with the
 # campaign config, the benchmarked binary's identity (binary.txt),
-# machine-metadata.txt, and metadata.json. The results directory is bundled to
+# machine-metadata.txt, the runner's own console log (campaign.log), and
+# metadata.json — written as soon as the directory exists and rewritten with
+# finished_at at the end, so a campaign that is killed still leaves a
+# parseable bundle. The results directory is bundled to
 # /tmp/bench-results-<NAME>-<sha>-<stamp>.tgz (the EBS root on the benchmark
 # machine, so the bundle survives an instance stop). When PUBLISH_URI is set
 # the bundle is also uploaded to <PUBLISH_URI>/<NAME>-<sha>-<stamp>/ by
@@ -90,15 +104,25 @@ run() {
 }
 
 # --- arguments -----------------------------------------------------------------
-[ $# -ge 1 ] || die "usage: campaign.sh <path/to/campaign.cfg> [--dry-run]"
+[ $# -ge 1 ] || die "usage: campaign.sh <path/to/campaign.cfg> [--dry-run] [--resume <results-dir>]"
 CFG_ARG=$1
 shift
 DRY=0
-for arg in "$@"; do
-  case "$arg" in
+RESUME_DIR=
+SESSION=start
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY=1 ;;
-    *) die "unknown argument: $arg" ;;
+    --resume)
+      [ $# -ge 2 ] || die "--resume needs a results directory"
+      shift
+      [ -d "$1" ] || die "--resume: results directory not found: $1"
+      RESUME_DIR=$(cd "$1" && pwd)
+      SESSION=resume
+      ;;
+    *) die "unknown argument: $1" ;;
   esac
+  shift
 done
 [ -f "$CFG_ARG" ] || die "config not found: $CFG_ARG"
 CFG="$(cd "$(dirname "$CFG_ARG")" && pwd)/$(basename "$CFG_ARG")"
@@ -367,35 +391,60 @@ prepare_dataset() { # prepare_dataset INDEX
 }
 
 # --- benchmark loops: one fresh process and one fresh --out dir per run ---------
+
+# resume_skip OUT: on a resumed campaign, true when OUT already holds a leg an
+# earlier session finished. The bench subcommands write invocation.json as the
+# run completes, next to the driver.csv they stream during it, so the two
+# together are the completion marker: a directory holding one without the other
+# was mid-flight when the campaign died. Such a directory is wiped so the leg
+# re-runs into a clean --out. Outside a resume this is always false and no
+# existing output is inspected.
+resume_skip() {
+  [ -n "$RESUME_DIR" ] && [ -d "$1" ] || return 1
+  if [ -f "$1/invocation.json" ] && [ -f "$1/driver.csv" ]; then
+    note "resume: $(basename "$1") already complete — skipping"
+    return 0
+  fi
+  note "resume: $(basename "$1") is a partial leg — wiping and re-running"
+  run rm -rf "$1"
+  return 1
+}
+
 run_ingest_cold() {
-  local i c r name root chunks
+  local i c r name root chunks out
   for i in "${!DS_NAME[@]}"; do
     name=${DS_NAME[$i]} root=${DS_ROOT[$i]}
     read -r -a chunks <<<"${DS_CHUNKS[$i]}"
     for c in "${chunks[@]}"; do
       for r in $(seq 1 "$RUNS"); do
         note "ingest-cold $name chunk $c run $r/$RUNS"
+        out=$RES/ingest-cold-$name-c$c-run$r
+        if resume_skip "$out"; then continue; fi
         run rm -rf "$BENCH_ROOT/scratch/$name/$c"
         run "$BIN" bench-ingest cold \
           --source=pack --pack-dir="$root/ledgers" \
           --start-chunk="$c" --num-chunks=1 --workers="$WORKERS" \
           --cold-out-dir="$BENCH_ROOT/scratch/$name/$c" \
-          --out="$RES/ingest-cold-$name-c$c-run$r"
+          --out="$out"
       done
     done
   done
 }
 
 # The hot DB is deleted before each run; the last run's DB is kept because
-# the hot query suite reads it.
+# the hot query suite reads it. On a resumed campaign that is the last rep that
+# actually ran — every rep of a cell ingests the same chunk, so whichever one
+# it is leaves an equivalent DB.
 run_ingest_hot() {
-  local i c r name root chunks cmd
+  local i c r name root chunks cmd out
   for i in "${!DS_NAME[@]}"; do
     name=${DS_NAME[$i]} root=${DS_ROOT[$i]}
     read -r -a chunks <<<"${DS_CHUNKS[$i]}"
     for c in "${chunks[@]}"; do
       for r in $(seq 1 "$RUNS"); do
         note "ingest-hot $name chunk $c run $r/$RUNS"
+        out=$RES/ingest-hot-$name-c$c-run$r
+        if resume_skip "$out"; then continue; fi
         run rm -rf "$BENCH_ROOT/hot/$name/$c"
         cmd=("$BIN" bench-ingest hot
           --source=pack --pack-dir="$root/ledgers"
@@ -404,7 +453,7 @@ run_ingest_hot() {
         if [ "$HOT_NUM_LEDGERS" -gt 0 ]; then
           cmd+=(--num-ledgers="$HOT_NUM_LEDGERS")
         fi
-        cmd+=(--out="$RES/ingest-hot-$name-c$c-run$r")
+        cmd+=(--out="$out")
         run "${cmd[@]}"
       done
     done
@@ -412,33 +461,45 @@ run_ingest_hot() {
 }
 
 run_query_cold() {
-  local i c r name root chunks
+  local i c r name root chunks out
   for i in "${!DS_NAME[@]}"; do
     name=${DS_NAME[$i]} root=${DS_ROOT[$i]}
     read -r -a chunks <<<"${DS_CHUNKS[$i]}"
     for c in "${chunks[@]}"; do
       for r in $(seq 1 "$RUNS"); do
         note "query-cold $name chunk $c run $r/$RUNS"
+        out=$RES/query-cold-$name-c$c-run$r
+        if resume_skip "$out"; then continue; fi
         run "$BIN" bench-query cold \
           --cold-dir="$root" --start-chunk="$c" --num-chunks=1 \
           --types=ledgers,txpage,txhash,events \
           --query-concurrency="$QC" --iters="$COLD_ITERS" \
-          --out="$RES/query-cold-$name-c$c-run$r"
+          --out="$out"
       done
     done
   done
 }
 
 run_query_hot() {
-  local i c r name chunks cmd
+  local i c r name chunks cmd out hot
   for i in "${!DS_NAME[@]}"; do
     name=${DS_NAME[$i]}
     read -r -a chunks <<<"${DS_CHUNKS[$i]}"
     for c in "${chunks[@]}"; do
+      hot=$BENCH_ROOT/hot/$name/$c
       for r in $(seq 1 "$RUNS"); do
         note "query-hot $name chunk $c run $r/$RUNS"
+        out=$RES/query-hot-$name-c$c-run$r
+        if resume_skip "$out"; then continue; fi
+        # This suite reads the DB the last hot-ingest rep left behind. A resume
+        # that skipped every one of those legs needs it to have survived from
+        # the original session; it sits on the same instance-store scratch as
+        # $RES, so in practice either both are there or neither is.
+        if [ -n "$RESUME_DIR" ] && [ "$DRY" -eq 0 ] && [ ! -d "$hot" ]; then
+          die "resume: hot DB $hot is gone — re-run the hot ingest for $name chunk $c (rm -rf $RES/ingest-hot-$name-c$c-run* and resume again) or start a fresh campaign"
+        fi
         cmd=("$BIN" bench-query hot
-          --hot-dir="$BENCH_ROOT/hot/$name/$c" --chunk="$c"
+          --hot-dir="$hot" --chunk="$c"
           "--types=ledgers,txpage,txhash,events"
           --query-concurrency="$QC" --iters="$HOT_ITERS" --warmup=20)
         # A capped hot ingest leaves a truncated DB; keep the query sampler
@@ -446,7 +507,7 @@ run_query_hot() {
         if [ "$HOT_NUM_LEDGERS" -gt 0 ]; then
           cmd+=(--sample-ledgers="$HOT_NUM_LEDGERS")
         fi
-        cmd+=(--out="$RES/query-hot-$name-c$c-run$r")
+        cmd+=(--out="$out")
         run "${cmd[@]}"
       done
     done
@@ -503,10 +564,18 @@ write_machine_metadata() {
 # each --out directory's invocation.json; this file records what no single
 # invocation knows. Its shape is a cross-repo contract with the converter —
 # see runner/README.md and SCHEMA.md § Inputs before changing it.
+#
+# write_campaign_metadata final writes the finished manifest; with any other
+# argument (or none) finished_at is left out. The file is written twice — once
+# as soon as $RES exists, so a campaign that is killed mid-flight still leaves a
+# parseable bundle and a started_at for --resume to recover, and once at the end
+# with finished_at.
 write_campaign_metadata() {
   local i token datasets_json hardware_json
-  local itype='' iid='' cpus='' mem=''
+  local itype='' iid='' cpus='' mem='' finished_at='' resumed=false
   local -a chunks
+  [ "${1:-}" != final ] || finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  [ -z "$RESUME_DIR" ] || resumed=true
   datasets_json=$(
     for i in "${!DS_NAME[@]}"; do
       read -r -a chunks <<<"${DS_CHUNKS[$i]}"
@@ -552,7 +621,8 @@ write_campaign_metadata() {
     --argjson hardware "$hardware_json" \
     --arg hostname "$(hostname)" \
     --arg started_at "$STARTED_AT" \
-    --arg finished_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg finished_at "$finished_at" \
+    --argjson resumed "$resumed" \
     '{
       schema_version: 1,
       run_id: $run_id,
@@ -569,14 +639,17 @@ write_campaign_metadata() {
         cold_iters: $cold_iters,
         hot_iters: $hot_iters,
         workers: $workers,
-        hot_num_ledgers: $hot_num_ledgers
+        hot_num_ledgers: $hot_num_ledgers,
+        resumed: $resumed
       },
       datasets: $datasets,
       hardware: $hardware,
       hostname: $hostname,
       started_at: $started_at,
       finished_at: $finished_at
-    }' >"$RES/metadata.json"
+    }
+    | if $resumed then . else del(.campaign.resumed) end
+    | if $finished_at == "" then del(.finished_at) else . end' >"$RES/metadata.json"
 }
 
 # --- campaign --------------------------------------------------------------------
@@ -590,17 +663,43 @@ if BUILT_COMMIT=$(resolve_ref); then
   SHA=$(git -C "$SRC" rev-parse --short=8 "$BUILT_COMMIT")
 elif [ "$DRY" -eq 1 ]; then
   # --dry-run cloned and fetched nothing, so REF may not resolve locally yet:
-  # plan with the ref itself and a placeholder sha in derived paths.
-  note "dry run: REF '$REF' not resolvable without the clone — using placeholder sha 'drysha00' in paths"
+  # plan with the ref itself and a placeholder sha in derived paths. The
+  # placeholder must be 8 hex digits, or --dry-run --resume rejects its own
+  # run ids as malformed.
+  note "dry run: REF '$REF' not resolvable without the clone — using placeholder sha 'deadbeef' in paths"
   BUILT_COMMIT=$REF
-  SHA=drysha00
+  SHA=deadbeef
 else
   die "REF '$REF' does not resolve to a commit in $REPO"
 fi
 
 BIN=$BENCH_ROOT/bin/stellar-rpc-$SHA
-STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+STAMP=
+STARTED_AT=
+if [ -n "$RESUME_DIR" ]; then
+  # The bundle basename is the run id; reusing it is the whole point of a
+  # resume, so it has to describe this campaign and this binary. NAME may
+  # contain '-', so the sha and stamp are matched as the fixed tail.
+  resume_base=$(basename "$RESUME_DIR")
+  [[ $resume_base =~ ^(.+)-([0-9a-f]{8})-([0-9]{8}T[0-9]{6}Z)$ ]] ||
+    die "--resume: '$resume_base' is not a <NAME>-<sha>-<stamp> results directory"
+  [ "${BASH_REMATCH[1]}" = "$NAME" ] ||
+    die "--resume: '$resume_base' belongs to campaign '${BASH_REMATCH[1]}', but this config's NAME is '$NAME'"
+  [ "${BASH_REMATCH[2]}" = "$SHA" ] ||
+    die "--resume: '$resume_base' was benchmarked with commit ${BASH_REMATCH[2]}, but REF '$REF' now resolves to $SHA — resuming would mix two binaries in one bundle; check out the same ref or start a fresh campaign"
+  [ "$RESUME_DIR" = "$BENCH_ROOT/results/$resume_base" ] ||
+    die "--resume: '$RESUME_DIR' is not this BENCH_ROOT's results directory (expected $BENCH_ROOT/results/$resume_base) — set BENCH_ROOT to the original campaign's root"
+  STAMP=${BASH_REMATCH[3]}
+  note "resume: continuing $resume_base — finished legs are skipped"
+  # started_at comes from the bundle so metadata.json still spans the whole
+  # campaign. Bundles written before metadata.json was written up front don't
+  # have one; those record this session's start instead.
+  STARTED_AT=$(jq -r '.started_at // empty' "$RESUME_DIR/metadata.json" 2>/dev/null || true)
+  [ -n "$STARTED_AT" ] ||
+    note "resume: no started_at in $resume_base/metadata.json — recording this session's start"
+fi
+[ -n "$STAMP" ] || STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+[ -n "$STARTED_AT" ] || STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RES=$BENCH_ROOT/results/$NAME-$SHA-$STAMP
 TARBALL=/tmp/bench-results-$NAME-$SHA-$STAMP.tgz
 
@@ -608,6 +707,14 @@ note "campaign $NAME → $RES"
 if [ "$DRY" -eq 0 ]; then
   mkdir -p "$BENCH_ROOT"/bin "$BENCH_ROOT"/golden "$BENCH_ROOT"/scratch "$BENCH_ROOT"/hot "$BENCH_ROOT"/fixture "$RES"
   cp "$CFG" "$RES/"
+  # From here on the runner's console is also part of the bundle: on a campaign
+  # that dies it is the only record of how far it got. Appended, so the
+  # sessions of a resumed campaign accumulate in one file.
+  exec > >(tee -a "$RES/campaign.log") 2>&1
+  note "session $SESSION $(date -u +%Y-%m-%dT%H:%M:%SZ) — logging to $RES/campaign.log"
+  # A manifest up front makes a killed campaign's partial bundle parseable;
+  # the end-of-campaign rewrite adds finished_at.
+  write_campaign_metadata
 fi
 
 build_binary
@@ -637,7 +744,7 @@ if [ "$DRY" -eq 1 ]; then
 fi
 
 write_machine_metadata
-write_campaign_metadata
+write_campaign_metadata final
 tar -C "$BENCH_ROOT/results" -czf "$TARBALL" "$NAME-$SHA-$STAMP"
 note "campaign done: $TARBALL"
 

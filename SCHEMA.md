@@ -256,7 +256,9 @@ and additive, so manifest-less bundles convert unchanged:
   `run_date`), the `campaign` config (incl. `close_interval` → `campaign.close_interval_ns`),
   the structured `hardware` object, and `hostname`. `datasets[].kind` is the dataset
   **transport** (`packs-local|packs-gs|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
-  campaign display order.
+  campaign display order. `finished_at` is absent until the campaign finishes (the runner
+  writes the manifest up front), and `campaign.resumed` appears only on a bundle built
+  across more than one `campaign.sh --resume` session.
 - **`invocation.json`** in each per-invocation `--out` dir (schema_version 1) — written by
   the four bench subcommands. Source of truth for binary identity (`binary.{commit_hash,
   branch,version,build_timestamp}`) and the resolved subcommand `flags`. Consistency of the
