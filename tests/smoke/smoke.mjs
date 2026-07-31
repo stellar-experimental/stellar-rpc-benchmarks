@@ -135,8 +135,12 @@ function checkSanity(kind, doc, group, D) {
     if (phase != null) {
       // Phase runs lead with the phase-goal verdict (ingest p99 vs target); the
       // block-model keep-up is shown as a secondary line, never the headline.
+      // Both verdicts are two-state — the goal is MEETS GOAL or MISS, the keep-up
+      // is KEEPS UP or OVER INTERVAL — and a run legitimately lands in any
+      // combination, so assert a verdict is present, not which one it is. The
+      // per-run blocks below pin the actual state for each committed run.
       check(group, "banner shows both goal + keep-up verdicts",
-        /(MEETS GOAL|MISS)/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 140));
+        /(MEETS GOAL|MISS)/.test(banner) && /(KEEPS UP|OVER INTERVAL)/.test(banner), banner.slice(0, 140));
       if (group.startsWith("phase2-")) {
         // SAC's ~604 ms ingest p99 misses the 380 ms Phase 2 goal: the headline
         // must read 2 / 3 with a MISS, not an all-clear 3 / 3.
@@ -156,6 +160,19 @@ function checkSanity(kind, doc, group, D) {
     } else if (group === "synthetic-2026-07-16-apply-fix") {
       check(group, "sac p99 305 ms within interval (apply-tail fix)", /305 ms/.test(tgt) && !/305 ms ▲/.test(tgt), tgt.slice(0, 200));
       check(group, "sac end-to-end p50 ≈ 122 ms (apply-tail fix)", /122 ms/.test(f42), f42.slice(0, 120));
+    } else if (group === "phase3-c6id8xl-c48a55c6-20260724T214257Z") {
+      // Phase 3 paces at exactly the 600 ms interval, so every profile sustains it
+      // with 1.0× headroom and none is credited as keeping up: the keep-up verdict
+      // is 0 / 3 OVER INTERVAL, not KEEPS UP. sac is the profile whose tail also
+      // overruns a single interval outright.
+      check(group, "phase 3 keep-up verdict: 0 / 3 OVER INTERVAL (not KEEPS UP)",
+        /0 \/ 3/.test(banner) && /3 OVER INTERVAL/.test(banner) && !/KEEPS UP/.test(banner), banner.slice(0, 140));
+      check(group, "sac p99 749 ms flagged 1.2× interval", /749 ms ▲ 1\.2× interval/.test(tgt), tgt.slice(0, 200));
+    } else if (group === "phase3-m6id2xl-c48a55c6-20260724T000926Z") {
+      // Same shape on the smaller box, with a longer sac tail (858 ms vs 749 ms).
+      check(group, "phase 3 keep-up verdict: 0 / 3 OVER INTERVAL (not KEEPS UP)",
+        /0 \/ 3/.test(banner) && /3 OVER INTERVAL/.test(banner) && !/KEEPS UP/.test(banner), banner.slice(0, 140));
+      check(group, "sac p99 858 ms flagged 1.4× interval", /858 ms ▲ 1\.4× interval/.test(tgt), tgt.slice(0, 200));
     }
   }
 }
@@ -358,7 +375,14 @@ for (const run of manifest.runs) {
   if (run.id.startsWith("phase2-")) {
     check(group, "Phase 2 ingestion target derived (380 ms)", /380 ms/.test(phTbl), phTbl.slice(0, 200));
     check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 380 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
-    check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
+    // SAC's p99 is a per-box number, not a per-phase one — both Phase 2 runs miss
+    // the 380 ms goal, but at 604 ms on the m6id.2xlarge and 456 ms on the faster
+    // c6id.8xlarge. Key each figure to its own run id.
+    if (run.id === "phase2-m6id2xl-c48a55c6-20260723T035541Z") {
+      check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
+    } else if (run.id === "phase2-c6id8xl-c48a55c6-20260724T000724Z") {
+      check(group, "SAC p99 ≈ 456 ms surfaced", /45[56](\.\d)? ms/.test(text), text.slice(0, 120));
+    }
   } else if (run.id.startsWith("phase1-")) {
     check(group, "phase 1 banner: 3 / 3 MEETS GOAL", /3 \/ 3/.test(bannerTxt) && /MEETS GOAL/.test(bannerTxt), bannerTxt.slice(0, 140));
   }

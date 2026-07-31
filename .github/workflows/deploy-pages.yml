@@ -24,22 +24,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cache-bust viewer assets
-        # Pages serves app.js/styles.css with a 10-min max-age and browsers cache
-        # them, so viewer code changes weren't visible without a manual cache clear.
-        # Stamp a content hash onto each asset URL in index.html: the URL changes
-        # only when the file's bytes change, so run-only deploys keep the cache warm
-        # while viewer edits force a re-fetch. Runs on the ephemeral checkout only —
-        # main stays unstamped, so `make serve` and the smoke test are unaffected.
-        run: |
-          app_hash=$(sha256sum docs/app.js | cut -c1-8)
-          css_hash=$(sha256sum docs/styles.css | cut -c1-8)
-          sum_js_hash=$(sha256sum docs/summary.js | cut -c1-8)
-          sum_css_hash=$(sha256sum docs/summary.css | cut -c1-8)
-          sed -i "s|href=\"styles.css\"|href=\"styles.css?v=${css_hash}\"|" docs/index.html
-          sed -i "s|src=\"app.js\"|src=\"app.js?v=${app_hash}\"|" docs/index.html
-          sed -i "s|href=\"styles.css\"|href=\"styles.css?v=${css_hash}\"|" docs/summary.html
-          sed -i "s|href=\"summary.css\"|href=\"summary.css?v=${sum_css_hash}\"|" docs/summary.html
-          sed -i "s|src=\"summary.js\"|src=\"summary.js?v=${sum_js_hash}\"|" docs/summary.html
+        # Shared with pr-preview.yml so the two can't drift over which assets get
+        # stamped; the script documents the why. Runs on the ephemeral checkout
+        # only — main stays unstamped, so `make serve` and the smoke test are
+        # unaffected.
+        run: .github/scripts/cache-bust.sh
 
       - name: Deploy docs/ to gh-pages
         uses: JamesIves/github-pages-deploy-action@v4
