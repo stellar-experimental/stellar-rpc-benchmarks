@@ -41,8 +41,8 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
   "build": { "commit": "<sha>", "branch": "<name>", "go": "…", "rust": "…",
              "version": "v20.3.1-412-g…", "build_timestamp": "…" },
              // commit/branch/go/rust from the machine-metadata `repo:` line; when a
-             // campaign bundle carries invocation.json, its binary.{commit_hash,
-             // branch,version,build_timestamp} override commit/branch and add
+             // campaign bundle carries invocation.json, its binary.{commitHash,
+             // branch,version,buildTimestamp} override commit/branch and add
              // version/build_timestamp (the structured binary identity wins).
   "hardware": {                            // optional; verbatim from metadata.json (campaign bundles)
     "instance_type": "m6id.2xlarge", "instance_id": "i-…",  // instance_* omitted off EC2
@@ -259,11 +259,17 @@ and additive, so manifest-less bundles convert unchanged:
   campaign display order. `finished_at` is absent until the campaign finishes (the runner
   writes the manifest up front), and `campaign.resumed` appears only on a bundle built
   across more than one `campaign.sh --resume` session.
-- **`invocation.json`** in each per-invocation `--out` dir (schema_version 1) — written by
-  the four bench subcommands. Source of truth for binary identity (`binary.{commit_hash,
-  branch,version,build_timestamp}`) and the resolved subcommand `flags`. Consistency of the
-  binary commit is cross-checked across invocations (and against `metadata.campaign.built_commit`);
-  a mismatch warns.
+- **`invocation.json`** in each per-invocation `--out` dir (`schemaVersion` 1, camelCase
+  keys — written by the four bench subcommands; stellar-rpc's `invocation.go` is the
+  producer, merged as stellar-rpc#907). Source of truth for binary identity
+  (`binary.{commitHash,branch,version,buildTimestamp}`) and the resolved subcommand
+  `flags`; also carries `hostname`, `startedAt`/`finishedAt`, and — **on a failed run
+  only** — an `error` field (a failed run still writes the manifest, so presence alone
+  does not mean success; the converter warns loudly on an error-bearing invocation, whose
+  CSVs are partial). The converter also accepts the snake_case spellings
+  (`commit_hash`, `build_timestamp`) that pre-#907 drafts of the schema used. Consistency
+  of the binary commit is cross-checked across invocations (and against
+  `metadata.campaign.built_commit`); a mismatch warns.
 
 Explicitly-passed CLI args (`--run-id`, `--run-date`, …) always win over manifest defaults.
 Where free-text machine metadata and the structured manifests overlap, the **structured data

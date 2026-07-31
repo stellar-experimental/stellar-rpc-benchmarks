@@ -393,19 +393,26 @@ prepare_dataset() { # prepare_dataset INDEX
 # --- benchmark loops: one fresh process and one fresh --out dir per run ---------
 
 # resume_skip OUT: on a resumed campaign, true when OUT already holds a leg an
-# earlier session finished. The bench subcommands write invocation.json as the
-# run completes, next to the driver.csv they stream during it, so the two
-# together are the completion marker: a directory holding one without the other
-# was mid-flight when the campaign died. Such a directory is wiped so the leg
-# re-runs into a clean --out. Outside a resume this is always false and no
-# existing output is inspected.
+# earlier session finished successfully. The bench subcommands write
+# invocation.json as the run completes, next to the driver.csv they stream
+# during it — but a FAILED run also writes invocation.json, with an `error`
+# field (stellar-rpc#907) — so completion means: both files present AND no
+# error recorded. Anything else (mid-flight kill, recorded failure, unreadable
+# manifest) is wiped so the leg re-runs into a clean --out. Outside a resume
+# this is always false and no existing output is inspected.
 resume_skip() {
+  local err
   [ -n "$RESUME_DIR" ] && [ -d "$1" ] || return 1
   if [ -f "$1/invocation.json" ] && [ -f "$1/driver.csv" ]; then
-    note "resume: $(basename "$1") already complete — skipping"
-    return 0
+    err=$(jq -r '.error // empty' "$1/invocation.json" 2>/dev/null || echo "unreadable invocation.json")
+    if [ -z "$err" ]; then
+      note "resume: $(basename "$1") already complete — skipping"
+      return 0
+    fi
+    note "resume: $(basename "$1") failed in an earlier session ($err) — wiping and re-running"
+  else
+    note "resume: $(basename "$1") is a partial leg — wiping and re-running"
   fi
-  note "resume: $(basename "$1") is a partial leg — wiping and re-running"
   run rm -rf "$1"
   return 1
 }

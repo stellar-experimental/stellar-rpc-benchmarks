@@ -20,12 +20,11 @@ operator flow end to end.
 ## Compatibility floor
 
 The runner requires a stellar-rpc ref whose bench subcommands **write `invocation.json`
-into every `--out` directory** — that is stellar-rpc's `bench-run-metadata` branch or any
-descendant of it (its merge commit into `feature/full-history`, once merged). The default
-`REF=feature/full-history` satisfies this only after that merge lands; until then, set
-`REF=bench-run-metadata` (or a descendant) in the campaign config. Older refs produce
-bundles without per-invocation manifests, which the converter accepts but with weaker
-provenance (see `SCHEMA.md` § Inputs).
+into every `--out` directory** — stellar-rpc#907 (`6f35679f`) or any descendant of it.
+That commit is merged into `feature/full-history`, so the default
+`REF=feature/full-history` satisfies the floor. Older refs produce bundles without
+per-invocation manifests, which the converter accepts but with weaker provenance (see
+`SCHEMA.md` § Inputs).
 
 ## `$BENCH_ROOT` layout
 
@@ -63,9 +62,11 @@ BENCH_ROOT=/mnt/nvme/bench ./runner/campaign.sh my-campaign.cfg \
   --resume /mnt/nvme/bench/results/<NAME>-<sha>-<stamp>
 ```
 
-Every timed leg whose `--out` directory already holds both `invocation.json` and
-`driver.csv` is skipped; a leg that was mid-flight when the campaign died has one without
-the other, so it is wiped and re-run. Add `--dry-run` to print the plan against the real
+Every timed leg whose `--out` directory already holds both `invocation.json` (without an
+`error` field) and `driver.csv` is skipped. A leg that was mid-flight when the campaign
+died has one file without the other, and a leg that *failed* has both plus an `error`
+recorded in `invocation.json` (a failed run still writes the manifest, as of
+stellar-rpc#907) — either way it is wiped and re-run. Add `--dry-run` to print the plan against the real
 directory before committing hours to it. The run id is reused, so the bundle keeps its
 identity: `metadata.json` still carries the original `started_at` (recovered from the
 bundle), `finished_at` is the last session's end, and `campaign.resumed` records that the
@@ -115,9 +116,12 @@ Who owns what:
   bundle. Only the root-level free files (the config, `binary.txt`, `machine-metadata.txt`,
   `campaign.log`) sit outside the contract; the converter reads named files and per-leg
   subdirectories, so adding one is safe.
-- **`invocation.json`** (each `--out` dir, `schema_version` 1) — written by stellar-rpc's
-  `bench-ingest` / `bench-query`. Binary identity (`binary.{commit_hash, branch, version,
-  build_timestamp}`) and the resolved subcommand flags.
+- **`invocation.json`** (each `--out` dir, `schemaVersion` 1, camelCase keys) — written by
+  stellar-rpc's `bench-ingest` / `bench-query` (`invocation.go`, merged as
+  stellar-rpc#907). Binary identity (`binary.{commitHash, branch, version,
+  buildTimestamp}`), the resolved subcommand flags, `hostname`,
+  `startedAt`/`finishedAt`, and — on a failed run only — an `error` field. It is written
+  for failed runs too, so its presence alone is not a success marker.
 
 The consumer side of this contract — exactly which fields the converter reads, and the
 precedence rules between the manifests, the free-text metadata, and CLI arguments — is
