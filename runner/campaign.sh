@@ -663,10 +663,12 @@ if BUILT_COMMIT=$(resolve_ref); then
   SHA=$(git -C "$SRC" rev-parse --short=8 "$BUILT_COMMIT")
 elif [ "$DRY" -eq 1 ]; then
   # --dry-run cloned and fetched nothing, so REF may not resolve locally yet:
-  # plan with the ref itself and a placeholder sha in derived paths.
-  note "dry run: REF '$REF' not resolvable without the clone — using placeholder sha 'drysha00' in paths"
+  # plan with the ref itself and a placeholder sha in derived paths. The
+  # placeholder must be 8 hex digits, or --dry-run --resume rejects its own
+  # run ids as malformed.
+  note "dry run: REF '$REF' not resolvable without the clone — using placeholder sha 'deadbeef' in paths"
   BUILT_COMMIT=$REF
-  SHA=drysha00
+  SHA=deadbeef
 else
   die "REF '$REF' does not resolve to a commit in $REPO"
 fi
