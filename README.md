@@ -81,17 +81,92 @@ stellar-rpc ref it requires (the compatibility floor).
 ./runner/publish.sh /mnt/nvme/bench/results/<run-id> gs://rpc-full-history/benchmarks
 ```
 
-The published bundle is exactly what the next section converts into a committed run
-JSON — closing the loop: campaign config → run → publish → convert → viewer.
+The published bundle is exactly what the next section ingests into a committed run
+JSON — closing the loop: campaign config → run → publish → ingest → viewer.
 
-## Add a run locally (the primary flow today)
+## Add a run
 
-On a laptop that's authenticated to GCS (`gcloud auth login`), pull a results directory
-down, convert it, and commit. Worked example:
+`scripts/ingest.sh` is the one path from a published bundle to a committed run: it
+fetches the bundle, converts it, and stages the result as a `run/<run_id>` branch. The
+same script backs `make ingest` and the GitHub Action below, so a run ingested from a
+laptop and one ingested from CI are byte-identical, commit message included.
 
 ```bash
-# 1. Pull the results directory from GCS. (This is the exact path recorded as this
-#    run's provenance in docs/runs/pubnet-2026-07-13.json.)
+# On a laptop authenticated to GCS (gcloud auth login). That gs:// path is the
+# one recorded as campaign.source_gcs in docs/runs/phase3-c6id8xl-c48a55c6-20260724T214257Z.json.
+make ingest \
+  BUNDLE=gs://rpc-full-history/results/phase3-c6id8xl-c48a55c6-20260724T214257Z \
+  KIND=synthetic
+```
+
+`BUNDLE` is auto-detected and may be a `gs://` or `s3://` bundle URI, a local bundle
+directory, or a `bench-results-<run_id>.tgz` tarball — the shapes `runner/campaign.sh` and
+`runner/publish.sh` leave behind. `KIND` is the one thing you have to state, because it is
+the one fact the bundle doesn't record: `datasets[].kind` in the manifest is the dataset's
+*transport* (`packs-gs`, `bsb-s3`, …), not pubnet-vs-synthetic.
+
+Everything else is derived from the bundle's own `metadata.json`
+(see [SCHEMA.md § Inputs](SCHEMA.md#inputs--result-bundle-layouts--manifests)):
+
+| Derived                 | From                                             |
+|-------------------------|--------------------------------------------------|
+| Run id, and so the file | `run_id` → `docs/runs/<run_id>.json`             |
+| Run date                | `started_at`                                     |
+| Run name                | `campaign.name`                                  |
+| `campaign.source_gcs`   | the `gs://` URI you passed (recorded as provenance) |
+| Commit / PR body        | campaign config, close interval, datasets, hardware |
+
+Three modes, least to most committal:
+
+| Mode        | Effect                                                                     |
+|-------------|-----------------------------------------------------------------------------|
+| `--dry-run` | Converts into a **temp** directory — never `docs/runs/` — and prints the converter output, the derived run id, the would-be commit body, the would-be branch, and the exact git/gh commands full mode would run. Executes none of them. A remote bundle isn't fetched either; the fetch command is printed instead, so a dry run works offline. |
+| `--local`   | Converts into `docs/runs/`, creates `run/<run_id>` off HEAD, commits the two changed files. No push, no PR. |
+| (default)   | `--local`, then `git push -u origin run/<run_id>` and `gh pr create`.        |
+
+`make ingest` passes `--local` on purpose: it stops at the commit, so you can read the
+diff and `make serve` the result before anything leaves the machine. Call the script
+directly for the other two modes:
+
+```bash
+# Look before you leap — converts to a temp dir, touches nothing:
+scripts/ingest.sh gs://rpc-full-history/results/<run-id> --dataset-kind synthetic --dry-run
+
+# Full: convert, branch, commit, push, open the PR (needs gh authenticated):
+scripts/ingest.sh gs://rpc-full-history/results/<run-id> --dataset-kind synthetic
+```
+
+The PR targets the default branch and carries the campaign one-liners, any converter
+warnings, and a note pointing the reviewer at the preview: `pr-preview.yml` publishes
+that PR's `docs/`, so the new run can be read in the viewer before anyone merges it.
+Merging is the deploy.
+
+Two rails keep the flow from surprising you. The script refuses to run against a working
+tree with uncommitted tracked changes, and refuses to overwrite an already-ingested run —
+an existing `docs/runs/<run_id>.json` is an error until you pass `--force`. A `--force`
+re-ingest reuses the existing `run/<run_id>` branch instead of failing on it, and exits
+quietly when the reconverted JSON turns out byte-identical to the committed one.
+
+Anything after a literal `--` is passed straight through to `convert.py`, which is how you
+override a derived field without leaving the flow:
+
+```bash
+scripts/ingest.sh gs://rpc-full-history/results/<run-id> --dataset-kind synthetic -- \
+  --run-name "Phase 3 — c6id.8xlarge rerun" \
+  --unit-facts converter/facts/synthetic-2026-07-15.json
+```
+
+### `make convert` — the layer underneath
+
+`make convert` calls `converter/convert.py` and nothing else: no fetch, no branch, no
+commit. Reach for it when the bundle can't identify itself — the **legacy** pubnet and
+synthetic layouts predate `metadata.json`, so `--run-id`/`--run-name`/`--run-date` have no
+defaults to fall back on — or when you want to name every field by hand. Worked example
+against the archived pubnet run (`docs/runs/archive/pubnet-2026-07-13.json`):
+
+```bash
+# 1. Pull the results directory from GCS. (This is the exact path recorded as that
+#    run's provenance.)
 gcloud storage cp -r \
   gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a \
   ./results-in
@@ -105,11 +180,10 @@ make convert \
   RUN_DATE=2026-07-13 \
   GCS=gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a
 
-# 3. Review the diff, then commit + push. The deploy-pages workflow syncs
-#    docs/ to the gh-pages branch and Pages redeploys.
+# 3. Review the diff, then commit on a branch and open a PR — the same place
+#    `scripts/ingest.sh` would have left you.
 git add docs/runs
 git commit -m "Add run pubnet-2026-07-13"
-git push
 ```
 
 `make convert` variables:
@@ -145,13 +219,26 @@ GCS path, summary paths).
 
 ## GitHub Action flow (`.github/workflows/ingest.yml`)
 
-`workflow_dispatch` with inputs `gcs_path`, `run_id`, `run_name`, `dataset_kind`
-(pubnet|synthetic), `run_date`, and optional `unit_facts` (a repo path to a `--unit-facts`
-sidecar JSON for synthetic dataset meta). It checks out the repo, authenticates to GCP via Workload
-Identity Federation, `gcloud storage cp -r` the results directory into `./results-in`, runs
-the converter, and commits the new/updated `docs/runs/*.json` + manifest back to `main`.
-Permissions are minimal: `contents: write` (to commit) and `id-token: write` (for the OIDC
-token WIF exchanges).
+`workflow_dispatch` running `scripts/ingest.sh` in full mode — the same script as the
+local flow above, which is the point: CI is not a second implementation that can drift.
+Three inputs, two of them required:
+
+| Input          | Required | Meaning                                                       |
+|----------------|----------|---------------------------------------------------------------|
+| `gcs_path`     | yes      | `gs://` path to the campaign result bundle                     |
+| `dataset_kind` | yes      | `pubnet` or `synthetic`                                        |
+| `extra_args`   | no       | Passed to `convert.py` after `--` (e.g. `--unit-facts …`)      |
+
+Run id, date, and name are not asked for — they come from the bundle's `metadata.json`.
+`extra_args` is one freeform string word-split on whitespace, so a value containing spaces
+can't be expressed there; use the local flow for those.
+
+The job checks out the repo, authenticates to GCP via Workload Identity Federation, then
+hands the `gs://` path to the script, which fetches, converts, commits on `run/<run_id>`,
+pushes, and opens the PR against the default branch. Runs therefore arrive as reviewable
+PRs with a `pr-preview.yml` render attached, exactly like the local flow — not as a push
+straight to `main`. Permissions: `contents: write` and `pull-requests: write` (push the
+branch, open the PR) plus `id-token: write` (the OIDC token WIF exchanges).
 
 **This workflow does not run yet — the GCP-side setup is pending.** It fails early with a
 clear message until two repository variables exist
@@ -162,8 +249,9 @@ clear message until two repository variables exist
 
 Creating them requires, in GCP project **`dev-hubble`**, a workload identity pool + provider
 (federating this GitHub repo) and a service account with `roles/storage.objectViewer` on
-`gs://rpc-full-history`. That GCP setup is out of this repo's hands; until it lands, use the
-local flow above.
+`gs://rpc-full-history`. That GCP setup is out of this repo's hands; until it lands,
+`make ingest` from a laptop is the way runs get in — and it runs the same script, so
+nothing about a run changes when the dispatch starts working.
 
 ## Data model
 
@@ -186,18 +274,22 @@ statement.
 
 ```
 stellar-rpc-benchmarks/
-├── Makefile                 # convert / test / serve / help
+├── Makefile                 # ingest / convert / test / smoke / serve / help
 ├── README.md
 ├── SCHEMA.md                # run JSON schema v1 (the data contract)
 ├── .github/
 │   └── workflows/
-│       ├── ingest.yml       # workflow_dispatch: GCS results dir → committed run
+│       ├── ingest.yml       # workflow_dispatch: GCS bundle → run PR (delegates to scripts/ingest.sh)
+│       ├── deploy-pages.yml # sync main:/docs to the gh-pages branch Pages serves
+│       ├── pr-preview.yml   # publish each PR's docs/ under gh-pages:/pr-preview/pr-<n>/
 │       └── shellcheck.yml   # lint runner/ scripts on every PR that touches them
 ├── runner/                  # benchmark operations: devbox scripts producing result bundles
 │   ├── bootstrap.sh         # provision the devbox (idempotent, no builds)
 │   ├── campaign.sh          # campaign config → results bundle (see runner/README.md)
 │   ├── publish.sh           # bundle → gs:// or s3://
 │   └── example-campaign.cfg # annotated config to copy from
+├── scripts/
+│   └── ingest.sh            # bundle → converted run → run/<id> branch → PR (make ingest)
 ├── converter/
 │   ├── convert.py           # results dir → docs/runs/<id>.json (+ manifest), stdlib only
 │   ├── facts/               # per-unit sidecar facts (e.g. synthetic model/tps/pack)
@@ -207,10 +299,17 @@ stellar-rpc-benchmarks/
 └── docs/                    # GitHub Pages root (static vanilla-JS viewer)
     ├── index.html           # the viewer shell (dropdown / ?run=<id>)
     ├── app.js               # renderers (per dataset.kind) + charts
-    ├── styles.css           # design system (light + dark)
+    ├── styles.css           # design system (light + dark), shared by every page
+    ├── summary.html         # stakeholder summary page (summary.js + summary.css)
+    ├── latency-model.html   # end-to-end latency model against the phase targets
+    ├── tx-submission.html   # transaction-submission report (txsub.js)
+    ├── targets.json         # Phase 1/2/3 performance targets — single source of truth
+    ├── dataset-sizes.json   # measured sizes of the synthetic dataset profiles
+    ├── txsub/               # tx-submission harvest summaries, verbatim (+ index.json)
     └── runs/
         ├── index.json       # manifest of runs (oldest date first)
-        └── <run-id>.json    # one file per run (schema v1)
+        ├── <run-id>.json    # one file per run (schema v1)
+        └── archive/         # retired pre-campaign runs, with their own manifest
 ```
 
 ## Future work

@@ -1,5 +1,6 @@
 # Stellar RPC full-history benchmarks — local ops.
-# `make` (or `make help`) lists targets. `make convert` is the primary local flow.
+# `make` (or `make help`) lists targets. `make ingest` is the primary local flow;
+# `make convert` is the layer underneath it.
 
 .DEFAULT_GOAL := help
 .PHONY: help convert ingest test smoke serve
