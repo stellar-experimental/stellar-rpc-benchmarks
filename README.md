@@ -10,7 +10,8 @@ step, no server: the numbers live in git and the site is just HTML/JS reading th
 ## What this is
 
 The bench suite (`stellar-rpc bench-ingest cold|hot`, `bench-query cold|hot`) runs in
-campaigns on an AWS NVMe devbox (`m6id.2xlarge`). Each campaign is several configurations
+campaigns on an AWS NVMe devbox (`m6id.2xlarge`), driven by the config-driven runner in
+[`runner/`](runner/) (see "Run a campaign" below). Each campaign is several configurations
 × 5 fresh-process runs; every run writes CSVs
 (`stage,n,n_items,total_ns,p50_ns,p90_ns,p99_ns,max_ns`) into its own directory, and the
 results are mirrored to GCS under `gs://rpc-full-history/benchmarks/`.
@@ -50,6 +51,38 @@ over HTTP, so opening `docs/index.html` as a `file://` URL will **not** work —
 To smoke-test the viewer headlessly (loads each run in a jsdom DOM, asserts zero JS
 errors and the expected figure/section counts and sanity values), run `make smoke`
 (needs Node; installs `jsdom` under `tests/smoke/` on first run).
+
+## Run a campaign
+
+Campaigns run on the benchmark devbox via the scripts in [`runner/`](runner/) — this
+repo's operations side. The runner treats stellar-rpc as a **black box**: it maintains a
+build clone of it under `$BENCH_ROOT/src`, builds the configured ref, and drives the
+bench subcommands — no standalone stellar-rpc checkout is needed anywhere. See
+[runner/README.md](runner/README.md) for the bundle layout it produces and the minimum
+stellar-rpc ref it requires (the compatibility floor).
+
+```bash
+# 0. One-time on a fresh devbox (and again after every instance stop/start,
+#    which wipes the NVMe instance store): provision the machine.
+./runner/bootstrap.sh
+
+# 1. Write a campaign config (copy runner/example-campaign.cfg, adjust the keys)
+#    and sanity-check the full command plan. --dry-run builds, downloads, and
+#    runs nothing — it works on any machine, e.g. a laptop:
+./runner/campaign.sh my-campaign.cfg --dry-run
+
+# 2. Run it (in tmux — campaigns run for hours). Results land in
+#    $BENCH_ROOT/results/<NAME>-<sha>-<stamp>/, tarred to /tmp so the bundle
+#    survives an instance stop.
+./runner/campaign.sh my-campaign.cfg
+
+# 3. Publish the bundle to GCS. This happens automatically when the config
+#    sets PUBLISH_URI; run it by hand otherwise (or to retry a failed upload):
+./runner/publish.sh /mnt/nvme/bench/results/<run-id> gs://rpc-full-history/benchmarks
+```
+
+The published bundle is exactly what the next section converts into a committed run
+JSON — closing the loop: campaign config → run → publish → convert → viewer.
 
 ## Add a run locally (the primary flow today)
 
@@ -158,7 +191,13 @@ stellar-rpc-benchmarks/
 ├── SCHEMA.md                # run JSON schema v1 (the data contract)
 ├── .github/
 │   └── workflows/
-│       └── ingest.yml       # workflow_dispatch: GCS results dir → committed run
+│       ├── ingest.yml       # workflow_dispatch: GCS results dir → committed run
+│       └── shellcheck.yml   # lint runner/ scripts on every PR that touches them
+├── runner/                  # benchmark operations: devbox scripts producing result bundles
+│   ├── bootstrap.sh         # provision the devbox (idempotent, no builds)
+│   ├── campaign.sh          # campaign config → results bundle (see runner/README.md)
+│   ├── publish.sh           # bundle → gs:// or s3://
+│   └── example-campaign.cfg # annotated config to copy from
 ├── converter/
 │   ├── convert.py           # results dir → docs/runs/<id>.json (+ manifest), stdlib only
 │   ├── facts/               # per-unit sidecar facts (e.g. synthetic model/tps/pack)

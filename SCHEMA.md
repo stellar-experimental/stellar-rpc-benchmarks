@@ -239,7 +239,8 @@ The converter auto-detects the input bundle layout from its subdirectory names:
 - **synthetic** — `synth-{cold,hot}-<profile>-run<R>`.
 - **pubnet** — `ingest-{cold,hot}-<chunk>-run<R>`, `query-{cold,hot}-<chunk>-run<R>`,
   `golden-download-<chunk>` (a timed sourcing leg surfaced as the `golden` section).
-- **campaign** — produced by `campaign.sh`. Timed dirs sit at the bundle root as
+- **campaign** — produced by `runner/campaign.sh` (the producer-side bundle layout is
+  documented in `runner/README.md`). Timed dirs sit at the bundle root as
   `{ingest,query}-{cold,hot}-<dataset>-c<chunk>-run<R>`; the unit id is the composite
   `<dataset>-c<chunk>` (e.g. `sac-6000-c1`). Untimed prep dirs `golden-<dataset>-c<chunk>`
   are dataset preparation, **not results** — the converter skips them and warns. The
