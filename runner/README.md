@@ -51,6 +51,38 @@ The finished bundle is also tarred to `/tmp/bench-results-<NAME>-<sha>-<stamp>.t
 root, survives an instance stop) and, when `PUBLISH_URI` is set, uploaded to
 `<PUBLISH_URI>/<NAME>-<sha>-<stamp>/`.
 
+## Resuming a crashed campaign
+
+A campaign is hours of work — the phase-1 reference run took ~17 hours, with single
+hot-ingest legs near 5.5 — so a crash or an OOM kill at the last rep should not cost the
+whole thing. `--resume` continues into the existing results directory instead of starting a
+new one:
+
+```bash
+BENCH_ROOT=/mnt/nvme/bench ./runner/campaign.sh my-campaign.cfg \
+  --resume /mnt/nvme/bench/results/<NAME>-<sha>-<stamp>
+```
+
+Every timed leg whose `--out` directory already holds both `invocation.json` and
+`driver.csv` is skipped; a leg that was mid-flight when the campaign died has one without
+the other, so it is wiped and re-run. Add `--dry-run` to print the plan against the real
+directory before committing hours to it. The run id is reused, so the bundle keeps its
+identity: `metadata.json` still carries the original `started_at` (recovered from the
+bundle), `finished_at` is the last session's end, and `campaign.resumed` records that the
+bundle took more than one session. `campaign.log` accumulates every session's console
+output, so the whole history stays in the bundle.
+
+The runner refuses to resume a directory whose name doesn't match this config's `NAME` and
+the commit `REF` resolves to right now — resuming onto a different commit would mix two
+binaries inside one bundle.
+
+**Same boot only.** `$BENCH_ROOT` is the NVMe instance store: stopping and starting the
+instance wipes the results directory, the golden datasets, and the hot DBs together. If the
+results directory survived, resume it; if the box restarted, there is nothing to resume onto
+and the campaign starts over. The hot query suite reads the DB the last hot ingest left
+behind, so in the unlikely case that the DB is gone but the results directory is not, the
+runner stops and names the hot-ingest legs to drop before resuming.
+
 ## Campaign bundle layout — the cross-repo contract
 
 A campaign bundle is what `publish.sh` uploads and what `converter/convert.py` consumes
@@ -61,6 +93,8 @@ A campaign bundle is what `publish.sh` uploads and what `converter/convert.py` c
 ├── <config>.cfg                             # the campaign config, verbatim
 ├── binary.txt                               # benchmarked binary identity (free text)
 ├── machine-metadata.txt                     # machine facts (free text)
+├── campaign.log                             # the runner's console output, one session
+│                                            #   appended per --resume (free text)
 ├── metadata.json                            # ← written by campaign.sh (THIS repo)
 ├── golden-<dataset>-c<chunk>/               # untimed dataset prep — not results;
 │                                            #   the converter skips these and warns
@@ -75,7 +109,12 @@ Who owns what:
 
 - **`metadata.json`** (bundle root, `schema_version` 1) — written by `campaign.sh` here.
   Run identity (`run_id`, `started_at`), the campaign config knobs (incl.
-  `close_interval`), the dataset list, structured `hardware`, and `hostname`.
+  `close_interval`), the dataset list, structured `hardware`, and `hostname`. It is written
+  as soon as the bundle directory exists — without `finished_at`, which only the
+  end-of-campaign rewrite adds — so a campaign that is killed still leaves a parseable
+  bundle. Only the root-level free files (the config, `binary.txt`, `machine-metadata.txt`,
+  `campaign.log`) sit outside the contract; the converter reads named files and per-leg
+  subdirectories, so adding one is safe.
 - **`invocation.json`** (each `--out` dir, `schema_version` 1) — written by stellar-rpc's
   `bench-ingest` / `bench-query`. Binary identity (`binary.{commit_hash, branch, version,
   build_timestamp}`) and the resolved subcommand flags.
