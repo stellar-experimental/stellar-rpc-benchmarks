@@ -39,17 +39,19 @@
 #     --dataset-kind synthetic --local
 #
 # CI NOTE
-#   The future CI ingest workflow (.github/workflows/ingest.yml) is expected to
-#   call this same script once bucket credentials / OIDC (the dev-hubble WIF
-#   setup) exist — the script is the single source of truth for the fetch →
-#   convert → PR flow, invoked locally today and from CI later.
+#   .github/workflows/ingest.yml calls this script in full mode — it passes the
+#   dispatched gs:// path and --dataset-kind and does nothing else itself. So
+#   this script is the single source of truth for the fetch → convert → PR flow
+#   on both sides, and a CI-ingested run is identical to a locally ingested one.
+#   That workflow still can't run until bucket credentials / OIDC (the
+#   dev-hubble WIF setup) exist; it fails early and loudly until then.
 
 set -euo pipefail
 
 # ------------------------------------------------------------------ helpers
 PROG="$(basename "$0")"
 die()   { echo "$PROG: error: $*" >&2; exit 1; }
-usage() { sed -n '3,45p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; }
 
 TMPDIRS=()
 cleanup() {
