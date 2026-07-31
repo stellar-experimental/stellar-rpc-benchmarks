@@ -3,7 +3,7 @@
 # `make convert` is the layer underneath it.
 
 .DEFAULT_GOAL := help
-.PHONY: help convert ingest test smoke serve
+.PHONY: help convert ingest test smoke serve runner-build runner-test
 
 # Variables required by `convert`. `convert` fails early if any is empty.
 CONVERT_REQUIRED := RESULTS RUN_ID RUN_NAME KIND RUN_DATE
@@ -42,6 +42,12 @@ ingest: ## Ingest a campaign bundle into a run/<id> PR branch (BUNDLE, KIND; --l
 
 test: ## Run the converter unit + golden tests
 	python3 -m unittest discover converter/tests
+
+runner-build: ## Build the Go campaign runner
+	cd runner && go build ./...
+
+runner-test: ## Vet and test the Go campaign runner
+	cd runner && go vet ./... && go test ./...
 
 smoke: ## Run the jsdom viewer smoke test (needs node; installs deps on first run)
 	npm --prefix tests/smoke install --silent
