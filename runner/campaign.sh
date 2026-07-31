@@ -176,7 +176,7 @@ case "$QUERY" in
 esac
 [[ $CLOSE_INTERVAL =~ $re_dur ]] || die "config: CLOSE_INTERVAL must be a Go duration or 0 (got '$CLOSE_INTERVAL')"
 for k in RUNS COLD_ITERS HOT_ITERS WORKERS; do
-  [[ ${!k} =~ $re_int ]] && [ "${!k}" -ge 1 ] || die "config: $k must be an integer >= 1 (got '${!k}')"
+  { [[ ${!k} =~ $re_int ]] && [ "${!k}" -ge 1 ]; } || die "config: $k must be an integer >= 1 (got '${!k}')"
 done
 [[ $HOT_NUM_LEDGERS =~ $re_int ]] || die "config: HOT_NUM_LEDGERS must be an integer >= 0 (got '$HOT_NUM_LEDGERS')"
 [[ $QC =~ $re_qc ]] || die "config: QC must be a comma-separated integer list (got '$QC')"
@@ -306,6 +306,10 @@ prepare_dataset() { # prepare_dataset INDEX
         note "dataset $name: golden packs already at $root — skipping fetch"
       else
         note "dataset $name: fetch $loc"
+        # golden_present was false, so $root is absent or an empty leftover:
+        # clear it, or the mv below would nest the partial inside it. The
+        # partial itself is kept — rsync resumes into a half-fetched tree.
+        run rm -rf "$root"
         run mkdir -p "$root.partial"
         run gcloud storage rsync -r "$loc" "$root.partial"
         run mv "$root.partial" "$root"
@@ -315,7 +319,7 @@ prepare_dataset() { # prepare_dataset INDEX
       if golden_present "$root"; then
         note "dataset $name: golden packs already at $root — skipping backfill"
       else
-        run rm -rf "$root.partial"
+        run rm -rf "$root" "$root.partial"
         for c in "${chunks[@]}"; do
           note "dataset $name: golden backfill of chunk $c from S3 (untimed)"
           # AWS_EC2_METADATA_DISABLED is set on this command only: without it
@@ -339,7 +343,7 @@ prepare_dataset() { # prepare_dataset INDEX
       else
         stage=$BENCH_ROOT/fixture/$name/ledgers
         note "dataset $name: generate a fixture pack tree"
-        run rm -rf "$BENCH_ROOT/fixture/$name" "$root.partial"
+        run rm -rf "$BENCH_ROOT/fixture/$name" "$root" "$root.partial"
         for c in "${chunks[@]}"; do
           note "dataset $name: generate fixture chunk $c ($loc ledgers)"
           run "$BIN" bench-ingest fixture \
