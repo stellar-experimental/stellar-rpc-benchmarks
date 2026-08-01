@@ -124,18 +124,20 @@ def _hot_phases(u, run):
 
 
 def _write_invocation(d, subcommand, close_interval):
+    # Mirrors stellar-rpc's writer (invocation.go, #907): camelCase keys,
+    # written for failed runs too (then with an `error` field).
     flags = {"out": d, "num-ledgers": "100", "source": "pack"}
     if subcommand.endswith("hot"):
         flags["close-interval"] = close_interval
     inv = {
-        "schema_version": 1,
+        "schemaVersion": 1,
         "command": "stellar-rpc " + subcommand,
         "flags": flags,
-        "binary": {"version": VERSION, "commit_hash": COMMIT,
-                   "build_timestamp": "2026-07-22T00:10:00", "branch": BRANCH},
+        "binary": {"version": VERSION, "commitHash": COMMIT,
+                   "buildTimestamp": "2026-07-22T00:10:00", "branch": BRANCH},
         "hostname": "user-dev-063a",
-        "started_at": "2026-07-22T01:00:00Z",
-        "finished_at": "2026-07-22T03:47:12Z",
+        "startedAt": "2026-07-22T01:00:00Z",
+        "finishedAt": "2026-07-22T03:47:12Z",
     }
     with open(os.path.join(d, "invocation.json"), "w") as f:
         json.dump(inv, f, indent=2)

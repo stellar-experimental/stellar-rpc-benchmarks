@@ -288,14 +288,22 @@ def load_campaign_manifest(results_dir):
 
 
 def load_invocations(results_dir):
-    """[(dirname, invocation.json dict)] for every per-invocation dir that has one."""
+    """[(dirname, invocation.json dict)] for every per-invocation dir that has one.
+    A failed run also writes invocation.json, with an `error` field (stellar-rpc#907):
+    its CSVs are partial, so a bundle carrying one is loudly suspect."""
     out = []
     for p in sorted(glob.glob(os.path.join(results_dir, "*", "invocation.json"))):
         try:
             with open(p) as f:
-                out.append((os.path.basename(os.path.dirname(p)), json.load(f)))
+                inv = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             warn(f"could not read {os.path.relpath(p, results_dir)} ({e}); ignoring")
+            continue
+        d = os.path.basename(os.path.dirname(p))
+        if inv.get("error"):
+            warn(f"{d} is a FAILED run ({inv['error']!r}); its CSVs are partial "
+                 "— re-run or drop that leg before publishing this conversion")
+        out.append((d, inv))
     return out
 
 
@@ -316,10 +324,18 @@ def hardware_into_machine(machine, hw):
         machine["kernel"] = hw["uname"]
 
 
+def _normalize_binary(b):
+    """invocation.json binary identity keyed snake_case regardless of producer:
+    stellar-rpc#907 writes camelCase (commitHash, buildTimestamp); earlier
+    drafts of the schema used snake_case. Accept both spellings."""
+    renames = {"commitHash": "commit_hash", "buildTimestamp": "build_timestamp"}
+    return {renames.get(k, k): v for k, v in b.items()}
+
+
 def resolve_binary(build, metadata, invocations):
     """Merge invocation.json binary identity into build (authoritative over the
     machine-metadata `repo:` parse) and warn on any commit mismatch."""
-    binaries = [inv["binary"] for _, inv in invocations if inv.get("binary")]
+    binaries = [_normalize_binary(inv["binary"]) for _, inv in invocations if inv.get("binary")]
     commits = {b["commit_hash"] for b in binaries if b.get("commit_hash")}
     if metadata and metadata.get("campaign", {}).get("built_commit"):
         commits.add(metadata["campaign"]["built_commit"])

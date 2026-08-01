@@ -41,8 +41,8 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
   "build": { "commit": "<sha>", "branch": "<name>", "go": "…", "rust": "…",
              "version": "v20.3.1-412-g…", "build_timestamp": "…" },
              // commit/branch/go/rust from the machine-metadata `repo:` line; when a
-             // campaign bundle carries invocation.json, its binary.{commit_hash,
-             // branch,version,build_timestamp} override commit/branch and add
+             // campaign bundle carries invocation.json, its binary.{commitHash,
+             // branch,version,buildTimestamp} override commit/branch and add
              // version/build_timestamp (the structured binary identity wins).
   "hardware": {                            // optional; verbatim from metadata.json (campaign bundles)
     "instance_type": "m6id.2xlarge", "instance_id": "i-…",  // instance_* omitted off EC2
@@ -80,7 +80,7 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   table, copied verbatim at convert time — see
                                            //   "Phase 1/2/3 performance targets" below.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
-    "config_file": "…​.cfg",               // optional; metadata.json campaign.config_file
+    "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs
                                            //   (ingest/query/runs/query_concurrency/cold_iters/
                                            //   hot_iters/workers/hot_num_ledgers/ref/built_commit)
@@ -239,7 +239,8 @@ The converter auto-detects the input bundle layout from its subdirectory names:
 - **synthetic** — `synth-{cold,hot}-<profile>-run<R>`.
 - **pubnet** — `ingest-{cold,hot}-<chunk>-run<R>`, `query-{cold,hot}-<chunk>-run<R>`,
   `golden-download-<chunk>` (a timed sourcing leg surfaced as the `golden` section).
-- **campaign** — produced by `campaign.sh`. Timed dirs sit at the bundle root as
+- **campaign** — produced by the campaign CLI in `runner/` (the producer-side bundle layout
+  is documented in `runner/README.md`). Timed dirs sit at the bundle root as
   `{ingest,query}-{cold,hot}-<dataset>-c<chunk>-run<R>`; the unit id is the composite
   `<dataset>-c<chunk>` (e.g. `sac-6000-c1`). Untimed prep dirs `golden-<dataset>-c<chunk>`
   are dataset preparation, **not results** — the converter skips them and warns. The
@@ -247,20 +248,41 @@ The converter auto-detects the input bundle layout from its subdirectory names:
   orthogonal to `dataset.kind` (a campaign may carry pubnet or synthetic data).
 
 Every bundle also carries a free-text `*machine-metadata*.txt` at the root (parsed into
-`machine`). A campaign bundle additionally carries **two JSON manifests** — both optional
-and additive, so manifest-less bundles convert unchanged:
+`machine`). A campaign bundle additionally carries **JSON manifests** — all optional and
+additive, so manifest-less bundles convert unchanged:
 
 - **`metadata.json`** at the bundle root (schema_version 1) — the campaign runner's record.
   Source of truth for run identity (`run_id` → default `run_id`; `started_at` → default
   `run_date`), the `campaign` config (incl. `close_interval` → `campaign.close_interval_ns`),
   the structured `hardware` object, and `hostname`. `datasets[].kind` is the dataset
   **transport** (`packs-local|packs-gs|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
-  campaign display order.
-- **`invocation.json`** in each per-invocation `--out` dir (schema_version 1) — written by
-  the four bench subcommands. Source of truth for binary identity (`binary.{commit_hash,
-  branch,version,build_timestamp}`) and the resolved subcommand `flags`. Consistency of the
-  binary commit is cross-checked across invocations (and against `metadata.campaign.built_commit`);
-  a mismatch warns.
+  campaign display order. `finished_at` is absent until the campaign finishes (the runner
+  writes the manifest up front), and `campaign.resumed` appears only on a bundle built
+  across more than one `--resume` session. `status` (`running|finished|failed`) is
+  additive and written the same way — `running` up front, rewritten at the end; bash-era
+  bundles have none, so absent means unknown, not healthy.
+- **`plan.json`** at the bundle root (schema_version 1) — the campaign as data: the
+  ordered steps the runner intended to execute, with their ids, kinds, argv,
+  dependencies, and derived paths. Runner-owned and additive; **the converter ignores it
+  today**.
+- **`leg.json`** in each timed `--out` dir (schema_version 1) — the runner's own
+  completion sentinel, written after the benchmark process ends whether it succeeded or
+  not: `id`, `argv`, `exit_code`, `started_at`, `finished_at`, `duration_ns`, and `error`
+  on a failure. It supersedes the invocation.json-presence heuristic the bash runner used
+  to decide what a `--resume` could skip — `invocation.json` is written by the process
+  being measured, so a killed process leaves none. Runner-owned and additive; **the
+  converter ignores it today**.
+- **`invocation.json`** in each per-invocation `--out` dir (`schemaVersion` 1, camelCase
+  keys — written by the four bench subcommands; stellar-rpc's `invocation.go` is the
+  producer, merged as stellar-rpc#907). Source of truth for binary identity
+  (`binary.{commitHash,branch,version,buildTimestamp}`) and the resolved subcommand
+  `flags`; also carries `hostname`, `startedAt`/`finishedAt`, and — **on a failed run
+  only** — an `error` field (a failed run still writes the manifest, so presence alone
+  does not mean success; the converter warns loudly on an error-bearing invocation, whose
+  CSVs are partial). The converter also accepts the snake_case spellings
+  (`commit_hash`, `build_timestamp`) that pre-#907 drafts of the schema used. Consistency
+  of the binary commit is cross-checked across invocations (and against
+  `metadata.campaign.built_commit`); a mismatch warns.
 
 Explicitly-passed CLI args (`--run-id`, `--run-date`, …) always win over manifest defaults.
 Where free-text machine metadata and the structured manifests overlap, the **structured data

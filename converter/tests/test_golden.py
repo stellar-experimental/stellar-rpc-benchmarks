@@ -1,5 +1,6 @@
 """Golden tests against the two real local datasets. Skip cleanly (with a clear
-message) when the source directories are absent."""
+message) when the source directories are absent or unreadable (e.g. macOS TCC
+denying the terminal access to ~/Downloads)."""
 import argparse
 import os
 import sys
@@ -11,6 +12,14 @@ import convert  # noqa: E402
 
 PUBNET_DIR = os.path.expanduser("~/Downloads/bench-063a/results")
 SYNTH_DIR = os.path.expanduser("~/Downloads/bench-synth/results")
+
+
+def _readable_dir(d):
+    try:
+        os.listdir(d)
+        return True
+    except OSError:
+        return False
 FACTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "facts", "synthetic-2026-07-15.json")
 
@@ -28,8 +37,8 @@ def run_convert(results_dir, **overrides):
     return data, list(convert._warnings)
 
 
-@unittest.skipUnless(os.path.isdir(PUBNET_DIR),
-                     f"pubnet dataset absent at {PUBNET_DIR}; skipping golden test")
+@unittest.skipUnless(_readable_dir(PUBNET_DIR),
+                     f"pubnet dataset absent or unreadable at {PUBNET_DIR}; skipping golden test")
 class PubnetGoldenTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -75,8 +84,8 @@ class PubnetGoldenTests(unittest.TestCase):
         self.assertEqual(self.data["checks"]["kind"], "query_p99_threshold")
 
 
-@unittest.skipUnless(os.path.isdir(SYNTH_DIR),
-                     f"synthetic dataset absent at {SYNTH_DIR}; skipping golden test")
+@unittest.skipUnless(_readable_dir(SYNTH_DIR),
+                     f"synthetic dataset absent or unreadable at {SYNTH_DIR}; skipping golden test")
 class SynthGoldenTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
