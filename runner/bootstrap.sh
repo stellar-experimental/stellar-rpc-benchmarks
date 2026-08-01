@@ -3,7 +3,7 @@
 # Idempotent bootstrap for a full-history benchmark machine: an EC2 instance
 # with a local NVMe instance store (e.g. m6id.2xlarge) running Ubuntu 24.04.
 # It only provisions — NVMe mount, apt packages, Go, Rust, native libs, env;
-# campaign.sh does all cloning-current and building. Safe to re-run any time —
+# the campaign CLI does all cloning-current and building. Safe to re-run any time —
 # in particular after an instance stop/start, which wipes the NVMe instance
 # store (golden packs are re-downloaded and the build clone re-created by the
 # next bootstrap/campaign run).
@@ -61,9 +61,9 @@ sudo apt-get install -y -qq build-essential git jq pkg-config cmake ninja-build 
 # gcloud: packs-gs datasets and gs:// publishing. aws: bsb-s3 datasets and
 # s3:// publishing. Neither ships in apt in a form worth installing here.
 command -v gcloud >/dev/null 2>&1 ||
-  echo "WARNING: gcloud not found — packs-gs datasets and gs:// PUBLISH_URI will fail; install it: https://cloud.google.com/sdk/docs/install" >&2
+  echo "WARNING: gcloud not found — packs-gs datasets and gs:// publish_uri will fail; install it: https://cloud.google.com/sdk/docs/install" >&2
 command -v aws >/dev/null 2>&1 ||
-  echo "WARNING: aws not found — bsb-s3 datasets and s3:// PUBLISH_URI will fail; install it: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html" >&2
+  echo "WARNING: aws not found — bsb-s3 datasets and s3:// publish_uri will fail; install it: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html" >&2
 
 # --- Go (pinned; Noble's apt Go is too old) ----------------------------------
 # Pinned so every box benchmarks with the same compiler — a toolchain bump moves
@@ -95,8 +95,8 @@ fi
 
 # --- build clone --------------------------------------------------------------
 # The box needs no standalone stellar-rpc checkout: seed the persistent build
-# clone campaign.sh maintains at $BENCH_ROOT/src, and run the native-lib
-# install scripts below from it. campaign.sh re-points, fetches, and checks
+# clone the campaign CLI maintains at $BENCH_ROOT/src, and run the native-lib
+# install scripts below from it. `campaign run` re-points, fetches, and checks
 # out this clone per campaign (and re-clones it itself if this step is ever
 # skipped).
 if [ ! -d "$SRC/.git" ]; then
@@ -125,4 +125,4 @@ export CGO_CFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
 export CGO_LDFLAGS="-L$HOME/.zstd/lib -L$HOME/.rocksdb/lib"
 export LD_LIBRARY_PATH="$HOME/.zstd/lib:$HOME/.rocksdb/lib"
 
-note "bootstrap OK — campaign.sh builds the benchmark binary on first run"
+note "bootstrap OK — the campaign CLI builds the benchmark binary on first run"

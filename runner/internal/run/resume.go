@@ -31,11 +31,12 @@ type legState struct {
 const legSentinelName = "leg.json"
 
 // LegComplete reports whether a leg's --out directory already holds a leg an
-// earlier session finished successfully. It is the read-only half of the resume
-// decision: `run --dry-run --resume` annotates the plan with it, touching
-// nothing.
-func LegComplete(dir string) bool {
-	return classifyLegDir(dir).kind == legComplete
+// earlier session finished successfully. wantID is the plan's id for the leg,
+// which the sentinel must name to be trusted. It is the read-only half of the
+// resume decision: `run --dry-run --resume` annotates the plan with it,
+// touching nothing.
+func LegComplete(dir, wantID string) bool {
+	return classifyLegDir(dir, wantID).kind == legComplete
 }
 
 // classifyLegDir decides what a resumed campaign should do with a leg's
@@ -43,7 +44,7 @@ func LegComplete(dir string) bool {
 // counts as complete; every ambiguous state resolves to "wipe and re-run",
 // because a half-written leg silently kept would corrupt the aggregates the
 // converter computes over the bundle.
-func classifyLegDir(dir string) legState {
+func classifyLegDir(dir, wantID string) legState {
 	// Only positive absence is absence; everything unreadable resolves to
 	// wipe-and-re-run. Lstat rather than Stat so a dangling symlink is seen as
 	// something-is-there, and permission or I/O errors fall to partial too —
@@ -55,13 +56,21 @@ func classifyLegDir(dir string) legState {
 		return legState{kind: legPartial}
 	}
 
+	// A sentinel is trusted only once it has identified itself: this runner's
+	// schema version and this leg's id. A `{}` that happens to parse, a record
+	// copied in from another leg, or a future schema whose fields mean something
+	// else all prove nothing about this directory, so they are partial.
 	switch sentinel, err := readLegSentinel(filepath.Join(dir, legSentinelName)); {
-	case err == nil && sentinel.ExitCode == 0 && sentinel.Error == "":
+	case err == nil && (sentinel.SchemaVersion != LegSchemaVersion || sentinel.ID != wantID):
+		return legState{kind: legPartial, reason: "sentinel does not match this leg"}
+	case err == nil && sentinel.ExitCode == nil:
+		return legState{kind: legPartial, reason: "sentinel records no exit"}
+	case err == nil && *sentinel.ExitCode == 0 && sentinel.Error == "":
 		return legState{kind: legComplete}
 	case err == nil && sentinel.Error != "":
 		return legState{kind: legFailedEarlier, reason: sentinel.Error}
 	case err == nil:
-		return legState{kind: legFailedEarlier, reason: fmt.Sprintf("exit status %d", sentinel.ExitCode)}
+		return legState{kind: legFailedEarlier, reason: fmt.Sprintf("exit status %d", *sentinel.ExitCode)}
 	case !os.IsNotExist(err):
 		// The sentinel is there but unreadable or corrupt: it proves nothing,
 		// so the leg is treated as partial rather than trusted either way.
@@ -86,16 +95,27 @@ func classifyLegDir(dir string) legState {
 	return legState{kind: legComplete}
 }
 
+// legSentinelView is the read side of leg.json: the fields resume decides on.
+// ExitCode is a pointer because "the runner recorded exit 0" and "there is no
+// exit_code here at all" must not read alike — decoding an absent field into an
+// int would turn a sentinel that records no exit into a claim of success.
+type legSentinelView struct {
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	ExitCode      *int   `json:"exit_code"`
+	Error         string `json:"error"`
+}
+
 // readLegSentinel reads and parses a leg.json. A missing file is reported as
 // os.IsNotExist so the caller can fall back to the bash-era manifests.
-func readLegSentinel(path string) (legSentinel, error) {
+func readLegSentinel(path string) (legSentinelView, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return legSentinel{}, err
+		return legSentinelView{}, err
 	}
-	var s legSentinel
+	var s legSentinelView
 	if err := json.Unmarshal(b, &s); err != nil {
-		return legSentinel{}, err
+		return legSentinelView{}, err
 	}
 	return s, nil
 }

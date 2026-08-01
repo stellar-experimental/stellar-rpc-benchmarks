@@ -54,31 +54,39 @@ errors and the expected figure/section counts and sanity values), run `make smok
 
 ## Run a campaign
 
-Campaigns run on the benchmark devbox via the scripts in [`runner/`](runner/) — this
+Campaigns run on the benchmark devbox via the campaign CLI in [`runner/`](runner/) — this
 repo's operations side. The runner treats stellar-rpc as a **black box**: it maintains a
 build clone of it under `$BENCH_ROOT/src`, builds the configured ref, and drives the
 bench subcommands — no standalone stellar-rpc checkout is needed anywhere. See
-[runner/README.md](runner/README.md) for the bundle layout it produces and the minimum
-stellar-rpc ref it requires (the compatibility floor).
+[runner/README.md](runner/README.md) for the full CLI and config reference, the bundle
+layout it produces, and the minimum stellar-rpc ref it requires (the compatibility floor).
 
 ```bash
 # 0. One-time on a fresh devbox (and again after every instance stop/start,
 #    which wipes the NVMe instance store): provision the machine.
 ./runner/bootstrap.sh
 
-# 1. Write a campaign config (copy runner/example-campaign.cfg, adjust the keys)
-#    and sanity-check the full command plan. --dry-run builds, downloads, and
-#    runs nothing — it works on any machine, e.g. a laptop:
-./runner/campaign.sh my-campaign.cfg --dry-run
+# Everything below runs from runner/ (the devbox has Go; bootstrap installs it).
+cd runner
+
+# 1. Write a campaign config (copy example-campaign.toml, adjust the keys) and
+#    sanity-check the full command plan. --dry-run builds, downloads, and runs
+#    nothing — it works on any machine, e.g. a laptop:
+go run ./cmd/campaign run my-campaign.toml --dry-run
 
 # 2. Run it (in tmux — campaigns run for hours). Results land in
-#    $BENCH_ROOT/results/<NAME>-<sha>-<stamp>/, tarred to /tmp so the bundle
+#    $BENCH_ROOT/results/<name>-<sha>-<stamp>/, tarred to /tmp so the bundle
 #    survives an instance stop.
-./runner/campaign.sh my-campaign.cfg
+go run ./cmd/campaign run my-campaign.toml
 
 # 3. Publish the bundle to GCS. This happens automatically when the config
-#    sets PUBLISH_URI; run it by hand otherwise (or to retry a failed upload):
-./runner/publish.sh /mnt/nvme/bench/results/<run-id> gs://rpc-full-history/benchmarks
+#    sets publish_uri; run it by hand otherwise (or to retry a failed upload —
+#    an upload that died partway leaves objects at the destination, so the
+#    retry needs --force, which is a MERGE: files already there that this
+#    bundle lacks survive it. Against a destination that really is empty,
+#    --force only skips the emptiness check, so it is safe on a first publish):
+go run ./cmd/campaign publish /mnt/nvme/bench/results/<run-id> \
+  gs://rpc-full-history/benchmarks --force
 ```
 
 The published bundle is exactly what the next section ingests into a committed run
@@ -100,8 +108,8 @@ make ingest \
 ```
 
 `BUNDLE` is auto-detected and may be a `gs://` or `s3://` bundle URI, a local bundle
-directory, or a `bench-results-<run_id>.tgz` tarball — the shapes `runner/campaign.sh` and
-`runner/publish.sh` leave behind. `KIND` is the one thing you have to state, because it is
+directory, or a `bench-results-<run_id>.tgz` tarball — the shapes the campaign CLI's
+`run` and `publish` leave behind. `KIND` is the one thing you have to state, because it is
 the one fact the bundle doesn't record: `datasets[].kind` in the manifest is the dataset's
 *transport* (`packs-gs`, `bsb-s3`, …), not pubnet-vs-synthetic.
 
@@ -282,12 +290,13 @@ stellar-rpc-benchmarks/
 │       ├── ingest.yml       # workflow_dispatch: GCS bundle → run PR (delegates to scripts/ingest.sh)
 │       ├── deploy-pages.yml # sync main:/docs to the gh-pages branch Pages serves
 │       ├── pr-preview.yml   # publish each PR's docs/ under gh-pages:/pr-preview/pr-<n>/
-│       └── shellcheck.yml   # lint runner/ scripts on every PR that touches them
-├── runner/                  # benchmark operations: devbox scripts producing result bundles
+│       ├── runner-go.yml    # go vet + go test for the campaign runner
+│       └── shellcheck.yml   # lint the remaining shell scripts on every PR that touches them
+├── runner/                  # benchmark operations: the devbox side producing result bundles
 │   ├── bootstrap.sh         # provision the devbox (idempotent, no builds)
-│   ├── campaign.sh          # campaign config → results bundle (see runner/README.md)
-│   ├── publish.sh           # bundle → gs:// or s3://
-│   └── example-campaign.cfg # annotated config to copy from
+│   ├── cmd/campaign/        # campaign CLI: run · plan · preflight · publish (see runner/README.md)
+│   ├── internal/            # config · plan · run · preflight · publish · bundle
+│   └── example-campaign.toml # annotated config to copy from
 ├── scripts/
 │   └── ingest.sh            # bundle → converted run → run/<id> branch → PR (make ingest)
 ├── converter/

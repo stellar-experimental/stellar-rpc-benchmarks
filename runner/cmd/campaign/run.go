@@ -99,7 +99,7 @@ func dryRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string, stdou
 	if resume != nil {
 		run.Notef(stdout, "resume: continuing %s — finished legs are skipped", resume.RunID)
 		for _, s := range p.Steps {
-			if s.Kind == plan.KindLeg && run.LegComplete(s.OutDir) {
+			if s.Kind == plan.KindLeg && run.LegComplete(s.OutDir, s.ID) {
 				run.Notef(stdout, "resume: %s already complete — would skip", s.ID)
 			}
 		}
@@ -299,7 +299,11 @@ func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
 				res, cfg.PublishURI)
 		} else if publishErr = publish.Run(res, cfg.PublishURI, false, false, out); publishErr != nil {
 			fmt.Fprintf(out, "error: %s\n", publishErr)
-			run.Notef(out, "publish failed — data is safe in %s and %s; retry with: campaign publish %s %s",
+			// A failed upload can still have written objects, which the retry's
+			// immutability check then refuses: name --force here rather than
+			// leaving the operator to rediscover it.
+			run.Notef(out, "publish failed — data is safe in %s and %s; retry with: campaign publish %s %s "+
+				"(add --force if the failed upload left objects behind)",
 				res, p.Tarball, res, cfg.PublishURI)
 		}
 	}

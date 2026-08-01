@@ -86,9 +86,14 @@ func (o outcome) assertLogLacks(t *testing.T, unwanted string) {
 
 func readSentinel(t *testing.T, outDir string) legSentinel {
 	t.Helper()
-	s, err := readLegSentinel(filepath.Join(outDir, legSentinelName))
+	path := filepath.Join(outDir, legSentinelName)
+	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s/%s: %v", outDir, legSentinelName, err)
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var s legSentinel
+	if err := json.Unmarshal(b, &s); err != nil {
+		t.Fatalf("unmarshal %s: %v", path, err)
 	}
 	return s
 }
@@ -110,6 +115,9 @@ func assertExists(t *testing.T, path string) {
 // --- resume decision table -------------------------------------------------
 
 func TestClassifyLegDir(t *testing.T) {
+	// The leg being classified: its plan id is its --out directory's basename,
+	// and the sentinel has to name it to be believed.
+	const legID = "ingest-cold-ds-c0-run1"
 	cases := []struct {
 		name       string
 		setup      func(t *testing.T, dir string)
@@ -141,14 +149,15 @@ func TestClassifyLegDir(t *testing.T) {
 		{
 			name: "sentinel says success",
 			setup: func(t *testing.T, dir string) {
-				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":1,"id":"leg","exit_code":0}`)
+				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":1,"id":"`+legID+`","exit_code":0}`)
 			},
 			want: legComplete,
 		},
 		{
 			name: "sentinel says failure",
 			setup: func(t *testing.T, dir string) {
-				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":1,"exit_code":1,"error":"exit status 1"}`)
+				mustWrite(t, filepath.Join(dir, legSentinelName),
+					`{"schema_version":1,"id":"`+legID+`","exit_code":1,"error":"exit status 1"}`)
 			},
 			want:       legFailedEarlier,
 			wantReason: "exit status 1",
@@ -156,10 +165,48 @@ func TestClassifyLegDir(t *testing.T) {
 		{
 			name: "sentinel with a nonzero exit and no error field",
 			setup: func(t *testing.T, dir string) {
-				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":1,"exit_code":2}`)
+				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":1,"id":"`+legID+`","exit_code":2}`)
 			},
 			want:       legFailedEarlier,
 			wantReason: "exit status 2",
+		},
+		{
+			// The degenerate sentinel: valid JSON, zero exit code by omission,
+			// and no claim to be anything. Believing it would skip a leg that
+			// never ran.
+			name: "empty JSON object as a sentinel",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, legSentinelName), `{}`)
+			},
+			want:       legPartial,
+			wantReason: "sentinel does not match this leg",
+		},
+		{
+			// The right leg, the right schema, and no record of how it ended:
+			// an absent exit_code must not decode into the 0 that means success.
+			name: "sentinel without an exit_code",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":1,"id":"`+legID+`"}`)
+			},
+			want:       legPartial,
+			wantReason: "sentinel records no exit",
+		},
+		{
+			name: "sentinel records a different leg",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, legSentinelName),
+					`{"schema_version":1,"id":"ingest-cold-ds-c0-run2","exit_code":0}`)
+			},
+			want:       legPartial,
+			wantReason: "sentinel does not match this leg",
+		},
+		{
+			name: "sentinel from an unknown schema version",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, legSentinelName), `{"schema_version":0,"id":"`+legID+`","exit_code":0}`)
+			},
+			want:       legPartial,
+			wantReason: "sentinel does not match this leg",
 		},
 		{
 			name: "corrupt sentinel",
@@ -211,10 +258,10 @@ func TestClassifyLegDir(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "ingest-cold-ds-c0-run1")
+			dir := filepath.Join(t.TempDir(), legID)
 			mustMkdir(t, dir)
 			tc.setup(t, dir)
-			got := classifyLegDir(dir)
+			got := classifyLegDir(dir, legID)
 			if got.kind != tc.want {
 				t.Errorf("kind = %v, want %v", got.kind, tc.want)
 			}
@@ -366,7 +413,7 @@ func TestExecuteResume(t *testing.T) {
 func TestExecuteResumeAfterRecordedFailure(t *testing.T) {
 	tmp := t.TempDir()
 	out := filepath.Join(tmp, "res", "query-cold-ds-c0-run1")
-	mustWrite(t, filepath.Join(out, legSentinelName), `{"schema_version":1,"exit_code":1,"error":"exit status 1"}`)
+	mustWrite(t, filepath.Join(out, legSentinelName), `{"schema_version":1,"id":"leg","exit_code":1,"error":"exit status 1"}`)
 
 	p := &plan.Plan{Steps: []plan.Step{shLeg("leg", out, `: > "$1/driver.csv"`)}}
 	got := walk(t, p, Options{Resume: true})
@@ -377,6 +424,27 @@ func TestExecuteResumeAfterRecordedFailure(t *testing.T) {
 	got.assertLogHas(t, "resume: query-cold-ds-c0-run1 failed in an earlier session (exit status 1) — wiping and re-running")
 	if s := readSentinel(t, out); s.ExitCode != 0 || s.Error != "" {
 		t.Errorf("sentinel after re-run = %+v, want a clean success", s)
+	}
+}
+
+// A sentinel that does not name this leg proves nothing about the directory it
+// sits in — a copied or hand-made leg.json must not skip a leg that never ran.
+func TestExecuteResumeRejectsForeignSentinel(t *testing.T) {
+	tmp := t.TempDir()
+	out := filepath.Join(tmp, "res", "ingest-cold-ds-c0-run1")
+	mustWrite(t, filepath.Join(out, legSentinelName), `{"schema_version":1,"id":"ingest-cold-ds-c0-run2","exit_code":0}`)
+	ran := filepath.Join(tmp, "ran.txt")
+
+	p := &plan.Plan{Steps: []plan.Step{shLeg("ingest-cold-ds-c0-run1", out, `echo ran >> "$2"; : > "$1/driver.csv"`, ran)}}
+	got := walk(t, p, Options{Resume: true})
+	if got.err != nil {
+		t.Fatalf("Execute: %v\nlog:\n%s", got.err, got.log)
+	}
+	got.assertStatuses(t, StatusOK)
+	got.assertLogHas(t, "resume: ingest-cold-ds-c0-run1 is a partial leg (sentinel does not match this leg) — wiping and re-running")
+	assertExists(t, ran)
+	if s := readSentinel(t, out); s.ID != "ingest-cold-ds-c0-run1" {
+		t.Errorf("sentinel after re-run = %+v, want this leg's id", s)
 	}
 }
 

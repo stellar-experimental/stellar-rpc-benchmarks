@@ -62,6 +62,9 @@ type Options struct {
 // completion, written whether it succeeded or not. The bench subcommands'
 // invocation.json cannot play this role — it is written by the process being
 // measured, so a process killed before it got there leaves no trace at all.
+//
+// ExitCode carries no omitempty on purpose: exit 0 is the success record resume
+// reads, and a sentinel without the field is not trusted (see legSentinelView).
 type legSentinel struct {
 	SchemaVersion int      `json:"schema_version"`
 	ID            string   `json:"id"`
@@ -186,14 +189,16 @@ func runLeg(s plan.Step, opts Options) StepResult {
 	}
 	if opts.Resume {
 		base := filepath.Base(s.OutDir)
-		state := classifyLegDir(s.OutDir)
-		switch state.kind {
-		case legComplete:
+		state := classifyLegDir(s.OutDir, s.ID)
+		switch {
+		case state.kind == legComplete:
 			Notef(opts.Output, "resume: %s already complete — skipping", base)
 			return StepResult{ID: s.ID, Status: StatusResumed}
-		case legFailedEarlier:
+		case state.kind == legFailedEarlier:
 			Notef(opts.Output, "resume: %s failed in an earlier session (%s) — wiping and re-running", base, state.reason)
-		case legPartial:
+		case state.kind == legPartial && state.reason != "":
+			Notef(opts.Output, "resume: %s is a partial leg (%s) — wiping and re-running", base, state.reason)
+		case state.kind == legPartial:
 			Notef(opts.Output, "resume: %s is a partial leg — wiping and re-running", base)
 		}
 		if state.kind != legAbsent {
