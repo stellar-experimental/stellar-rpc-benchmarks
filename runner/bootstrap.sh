@@ -65,20 +65,32 @@ command -v gcloud >/dev/null 2>&1 ||
 command -v aws >/dev/null 2>&1 ||
   echo "WARNING: aws not found — bsb-s3 datasets and s3:// PUBLISH_URI will fail; install it: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html" >&2
 
-# --- Go (>= 1.26; Noble's apt Go is too old) ---------------------------------
-if ! /usr/local/go/bin/go version 2>/dev/null | grep -Eq 'go1\.(2[6-9]|[3-9][0-9])'; then
-  note "installing Go"
-  GOVER=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1)
+# --- Go (pinned; Noble's apt Go is too old) ----------------------------------
+# Pinned so every box benchmarks with the same compiler — a toolchain bump moves
+# the numbers. When bumping, bump runner/go.mod's `go` directive with it and
+# re-baseline before comparing against older runs. Any other version installed
+# here gets the pinned one laid over it.
+GOVER=go1.26.5
+if ! /usr/local/go/bin/go version 2>/dev/null | grep -qF " $GOVER "; then
+  note "installing Go $GOVER"
   curl -fsSL "https://go.dev/dl/${GOVER}.linux-amd64.tar.gz" -o /tmp/go.tgz
   # decompress as the user: sudo'd tar cannot always exec gzip
   gunzip -f /tmp/go.tgz
   sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xf /tmp/go.tar
 fi
 
-# --- Rust --------------------------------------------------------------------
+# --- Rust (pinned) -----------------------------------------------------------
+# Same reasoning as Go: rustc builds the native libs, so its version is part of
+# the measurement. When bumping, re-baseline before comparing against older runs.
+RUSTVER=1.92.0
 if [ ! -x "$HOME/.cargo/bin/rustc" ]; then
-  note "installing Rust"
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  note "installing Rust $RUSTVER"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "$RUSTVER"
+elif ! "$HOME/.cargo/bin/rustc" --version 2>/dev/null | grep -qF "rustc $RUSTVER "; then
+  # rustup is idempotent, so re-pinning an off-version box is a no-op re-run away
+  note "pinning Rust to $RUSTVER"
+  "$HOME/.cargo/bin/rustup" toolchain install "$RUSTVER" &&
+    "$HOME/.cargo/bin/rustup" default "$RUSTVER"
 fi
 
 # --- build clone --------------------------------------------------------------
