@@ -14,7 +14,7 @@ campaigns on an AWS NVMe devbox (`m6id.2xlarge`), driven by the config-driven ru
 [`runner/`](runner/) (see "Run a campaign" below). Each campaign is several configurations
 × 5 fresh-process runs; every run writes CSVs
 (`stage,n,n_items,total_ns,p50_ns,p90_ns,p99_ns,max_ns`) into its own directory, and the
-results are mirrored to GCS under `gs://rpc-full-history/benchmarks/`.
+results are mirrored to GCS under `gs://rpc-full-history/results/`.
 
 `converter/convert.py` (Python 3, standard library only) turns one results directory into
 `docs/runs/<run-id>.json` (schema v1) and updates the manifest `docs/runs/index.json`. The
@@ -86,7 +86,7 @@ go run ./cmd/campaign run my-campaign.toml
 #    bundle lacks survive it. Against a destination that really is empty,
 #    --force only skips the emptiness check, so it is safe on a first publish):
 go run ./cmd/campaign publish /mnt/nvme/bench/results/<run-id> \
-  gs://rpc-full-history/benchmarks --force
+  gs://rpc-full-history/results --force
 ```
 
 The published bundle is exactly what the next section ingests into a committed run

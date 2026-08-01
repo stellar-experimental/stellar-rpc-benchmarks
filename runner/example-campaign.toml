@@ -65,7 +65,7 @@ query = false
 # Publish the finished bundle to object storage (gs:// or s3://) at the end of
 # the campaign. Default "" = keep results local; publish later by hand with
 # `campaign publish <bundle> <dest-root>`.
-#publish_uri = "gs://rpc-full-history/benchmarks"
+#publish_uri = "gs://rpc-full-history/results"
 
 # Datasets to benchmark: one [[dataset]] table each, with a unique name and the
 # chunk IDs this campaign runs. Every kind converges on a local cold pack root

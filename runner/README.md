@@ -143,8 +143,9 @@ that root is materialized:
   `$BENCH_ROOT/golden/<name>/` and reused by later campaigns.
 - **`bsb-s3`** — `location` is an S3 bucket path; an untimed cold backfill materializes
   `$BENCH_ROOT/golden/<name>/`, one chunk at a time.
-- **`fixture`** — no location and no network: `ledgers` chunks are generated, then an
-  untimed cold ingest freezes them into `$BENCH_ROOT/golden/<name>/`.
+- **`fixture`** — no location and no network: each chunk in `chunks` is generated with
+  `ledgers` ledgers, then an untimed cold ingest freezes them into
+  `$BENCH_ROOT/golden/<name>/`.
 
 Anything the runner materializes is built under `<root>.partial` and renamed onto
 `<root>` only once whole, so an interrupted preparation is never mistaken for a finished
@@ -244,7 +245,7 @@ root, survives an instance stop) and, when `publish_uri` is set, uploaded to
 ## Resuming a crashed campaign
 
 A campaign is hours of work — the phase-1 reference run took ~17 hours, with single
-hot-ingest legs near 5.5 — so a crash or an OOM kill at the last rep should not cost the
+hot-ingest legs near 5.5 hours — so a crash or an OOM kill at the last rep should not cost the
 whole thing. `--resume` continues into the existing results directory instead of starting
 a new one:
 
