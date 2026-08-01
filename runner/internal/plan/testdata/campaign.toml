@@ -1,0 +1,22 @@
+# Golden-test campaign: both ingest suites and both query suites, two reps per
+# cell, over two chunks of a fetched pack tree and a generated fixture — enough
+# shape to pin step ordering, dependencies, and argv without being unreadable.
+name = "golden"
+ingest = "both"
+query = true
+runs = 2
+close_interval = "2s"
+hot_num_ledgers = 50000
+publish_uri = "gs://bucket/results"
+
+[[dataset]]
+name = "packs"
+kind = "packs-gs"
+location = "gs://bucket/cold"
+chunks = [1, 2]
+
+[[dataset]]
+name = "fix"
+kind = "fixture"
+ledgers = 10000
+chunks = [1, 2]

@@ -1,20 +1,22 @@
 name: Ingest benchmark run
 
-# Manually pull one results directory from GCS, convert it to a run JSON,
-# and commit it to main so the deploy-pages workflow redeploys GitHub Pages.
+# Manually pull one campaign result bundle from GCS and open a PR adding it as a
+# committed run JSON.
+#
+# This job is a thin wrapper around scripts/ingest.sh — the same script the local
+# `make ingest` flow runs. It delegates rather than inlining the converter call
+# for three reasons:
+#   - one code path: a run ingested from CI is byte-identical to one ingested
+#     from a laptop, down to the commit message;
+#   - run identity (id, date, name) comes from the bundle's own metadata.json, so
+#     this form asks for two things instead of five;
+#   - runs arrive as a reviewable `run/<run_id>` PR instead of a push straight to
+#     main, and pr-preview.yml renders each one in the viewer before merge.
 on:
   workflow_dispatch:
     inputs:
       gcs_path:
-        description: "gs:// path to a results directory to ingest (e.g. gs://rpc-full-history/benchmarks/2026-07-13-user-dev-063a)"
-        required: true
-        type: string
-      run_id:
-        description: "Run slug — becomes docs/runs/<run_id>.json (e.g. pubnet-2026-07-13)"
-        required: true
-        type: string
-      run_name:
-        description: "Human-readable run name"
+        description: "gs:// path to a campaign result bundle (e.g. gs://rpc-full-history/results/phase3-c6id8xl-c48a55c6-20260724T214257Z)"
         required: true
         type: string
       dataset_kind:
@@ -24,18 +26,16 @@ on:
         options:
           - pubnet
           - synthetic
-      run_date:
-        description: "Run date (YYYY-MM-DD)"
-        required: true
-        type: string
-      unit_facts:
-        description: "Optional repo path to a --unit-facts sidecar JSON (e.g. converter/facts/synthetic-2026-07-15.json)"
+      extra_args:
+        description: "Optional convert.py args, passed after `--` (e.g. --unit-facts converter/facts/synthetic-2026-07-15.json). Word-split on whitespace: a value containing spaces cannot be expressed here — run scripts/ingest.sh locally for that."
         required: false
         type: string
 
-# Minimal: write the committed run JSON, and mint an OIDC token for GCP WIF.
+# contents + pull-requests: the script pushes run/<run_id> and opens its PR.
+# id-token: the OIDC token GCP Workload Identity Federation exchanges.
 permissions:
   contents: write
+  pull-requests: write
   id-token: write
 
 jobs:
@@ -72,44 +72,23 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Download results from GCS
+      # Full mode: fetch → convert → commit on run/<run_id> → push → gh pr create.
+      # The PR targets the repository's default branch, which is where runs land.
+      - name: Ingest bundle and open a run PR
         env:
           GCS_PATH: ${{ inputs.gcs_path }}
-        run: |
-          rm -rf ./results-in
-          mkdir -p ./results-in
-          gcloud storage cp -r "$GCS_PATH" ./results-in
-          # gcloud nests the copied directory under ./results-in/<basename>.
-          echo "RESULTS_DIR=./results-in/$(basename "${GCS_PATH%/}")" >> "$GITHUB_ENV"
-
-      - name: Convert run into docs/runs
-        env:
-          RUN_ID: ${{ inputs.run_id }}
-          RUN_NAME: ${{ inputs.run_name }}
-          RUN_DATE: ${{ inputs.run_date }}
           DATASET_KIND: ${{ inputs.dataset_kind }}
-          GCS_PATH: ${{ inputs.gcs_path }}
-          UNIT_FACTS: ${{ inputs.unit_facts }}
-        run: |
-          python3 converter/convert.py "$RESULTS_DIR" \
-            --run-id "$RUN_ID" \
-            --run-name "$RUN_NAME" \
-            --run-date "$RUN_DATE" \
-            --dataset-kind "$DATASET_KIND" \
-            --source-gcs "$GCS_PATH" \
-            ${UNIT_FACTS:+--unit-facts "$UNIT_FACTS"} \
-            --out-dir docs/runs
-
-      - name: Commit and push the new run
-        env:
-          RUN_ID: ${{ inputs.run_id }}
+          EXTRA_ARGS: ${{ inputs.extra_args }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/runs
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+          if [ -n "$EXTRA_ARGS" ]; then
+            # Deliberately unquoted: extra_args is one freeform string that has to
+            # become several arguments, so it is word-split on whitespace. That is
+            # the documented limit of this input, not an oversight.
+            # shellcheck disable=SC2086
+            scripts/ingest.sh "$GCS_PATH" --dataset-kind "$DATASET_KIND" -- $EXTRA_ARGS
+          else
+            scripts/ingest.sh "$GCS_PATH" --dataset-kind "$DATASET_KIND"
           fi
-          git commit -m "Ingest benchmark run ${RUN_ID}"
-          git push

@@ -1,0 +1,16 @@
+# End-to-end campaign config (cmd/campaign/e2e_test.go): the smallest shape
+# that still exercises all four suites — both ingest tiers, both query tiers —
+# over one chunk of one generated fixture, twice. A fixture dataset is the only
+# kind that needs no network and no operator-supplied pack tree, so the whole
+# campaign runs against the stub binary alone.
+name = "e2e"
+ingest = "both"
+query = true
+runs = 2
+close_interval = "0"
+
+[[dataset]]
+name = "fix"
+kind = "fixture"
+ledgers = 10000
+chunks = [1]
