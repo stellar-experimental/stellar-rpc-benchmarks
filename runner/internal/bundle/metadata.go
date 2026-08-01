@@ -2,6 +2,7 @@ package bundle
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -238,10 +239,21 @@ func memTotalKB() int64 {
 	return 0
 }
 
+// factTimeout bounds every fact-gathering command. A probe that hangs — lsblk on
+// a wedged device, a binary whose `version` never returns — must not cost an
+// unattended campaign its start, so a fact that takes too long is treated the
+// same as one that cannot be gathered. A var so tests can shrink it.
+var factTimeout = 5 * time.Second
+
 // commandOutput runs a fact-gathering command and returns its trimmed stdout,
-// or "" if it cannot be run. Every caller here is best-effort by contract.
+// or "" if it cannot be run or does not finish inside factTimeout. Every caller
+// here is best-effort by contract.
 func commandOutput(name string, args ...string) string {
-	out, err := exec.Command(name, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), factTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

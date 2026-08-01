@@ -255,6 +255,19 @@ func TestCollectHardwareOffEC2(t *testing.T) {
 	}
 }
 
+func TestCommandOutputTimesOut(t *testing.T) {
+	old := factTimeout
+	factTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { factTimeout = old })
+	start := time.Now()
+	if got := commandOutput("sleep", "30"); got != "" {
+		t.Errorf("commandOutput = %q, want \"\" on timeout", got)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("commandOutput took %s, want well under the 30s sleep", elapsed)
+	}
+}
+
 func TestWriteMetadataUnwritableDir(t *testing.T) {
 	err := WriteMetadata(filepath.Join(t.TempDir(), "nope"), goldenInput(t))
 	if err == nil {

@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -158,9 +159,14 @@ func fsyncProbe(benchRoot string) string {
 
 // binaryVersion is the benchmarked binary's own version output, first 3 lines,
 // stdout and stderr together — the binary reports its build stamp there. A
-// binary that cannot run says so in place of its version.
+// binary that cannot run, or does not answer inside factTimeout, says so in
+// place of its version.
 func binaryVersion(binPath string) []string {
-	out, err := exec.Command(binPath, "version").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), factTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binPath, "version")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
 	lines := splitLines(head(strings.TrimRight(string(out), "\n"), 3))
 	if err != nil && len(lines) == 0 {
 		return []string{fmt.Sprintf("version: %v", err)}
