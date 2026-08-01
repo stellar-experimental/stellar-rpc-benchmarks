@@ -56,6 +56,9 @@
           "/bench/golden/packs.partial"
         ]
       ],
+      "pre_clean": [
+        "/bench/golden/packs"
+      ],
       "dataset": {
         "name": "packs",
         "kind": "packs-gs",
@@ -108,6 +111,11 @@
           "--cold-out-dir=/bench/golden/fix.partial",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/golden-fix-c2"
         ]
+      ],
+      "pre_clean": [
+        "/bench/fixture/fix",
+        "/bench/golden/fix",
+        "/bench/golden/fix.partial"
       ],
       "needs": [
         "build"

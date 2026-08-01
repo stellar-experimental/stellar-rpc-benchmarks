@@ -390,6 +390,42 @@ func TestFixtureStepGeneratesThenFreezes(t *testing.T) {
 	}
 }
 
+func TestDatasetPreClean(t *testing.T) {
+	p := buildGolden(t)
+	// packs-gs clears the leftover root so the rename cannot nest the partial
+	// inside it, but keeps the partial itself: rsync resumes into it.
+	if got, want := stepByID(t, p, "dataset-packs").PreClean, []string{"/bench/golden/packs"}; !slices.Equal(got, want) {
+		t.Errorf("packs-gs pre_clean = %v, want %v — the .partial is resumable", got, want)
+	}
+	// A fixture wipes the staging tree by its parent, plus both roots.
+	want := []string{"/bench/fixture/fix", "/bench/golden/fix", "/bench/golden/fix.partial"}
+	if got := stepByID(t, p, "dataset-fix").PreClean; !slices.Equal(got, want) {
+		t.Errorf("fixture pre_clean = %v, want %v", got, want)
+	}
+
+	bsb := Build(load(t, `
+name = "n"
+ingest = "none"
+query = false
+runs = 1
+
+[[dataset]]
+name = "mainnet"
+kind = "bsb-s3"
+location = "s3://bucket/prefix"
+chunks = [4]
+`), goldenInputs())
+	want = []string{"/bench/golden/mainnet", "/bench/golden/mainnet.partial"}
+	if got := stepByID(t, bsb, "dataset-mainnet").PreClean; !slices.Equal(got, want) {
+		t.Errorf("bsb-s3 pre_clean = %v, want %v — a cold backfill cannot resume", got, want)
+	}
+
+	local := Build(load(t, fmt.Sprintf(hotConfig, 0)), goldenInputs())
+	if got := stepByID(t, local, "dataset-ds").PreClean; got != nil {
+		t.Errorf("packs-local pre_clean = %v, want none — those packs are the operator's", got)
+	}
+}
+
 func TestTarballRunsUnconditionally(t *testing.T) {
 	p := buildGolden(t)
 	tarball := stepByID(t, p, "tarball")
@@ -469,10 +505,44 @@ chunks = [4]
 		"== build\n  $ git -C /bench/src -c advice.detachedHead=false checkout -q --detach deadbeefcafebabefeedface1234567890abcdef\n",
 		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench-ingest cold",
 		"== ingest-cold-mainnet-c4-run1\n  $ rm -rf /bench/scratch/mainnet/4\n",
+		// The whole pre_clean list on one line, as the executor wipes it.
+		"== dataset-mainnet\n  $ rm -rf /bench/golden/mainnet /bench/golden/mainnet.partial\n",
+		"  $ mv /bench/golden/mainnet.partial /bench/golden/mainnet\n",
 		"  $ campaign publish /bench/results/n-deadbeef-20260101T000000Z gs://bucket/results\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Print output missing %q, got:\n%s", want, got)
 		}
+	}
+	// The backfill writes its own --cold-out-dir; only a fetch needs the
+	// partial to exist first.
+	if strings.Contains(got, "mkdir -p") {
+		t.Errorf("Print output has a mkdir for a bsb-s3 dataset, got:\n%s", got)
+	}
+}
+
+// TestPrintDatasetChoreography pins the destructive half of a dataset
+// preparation in the dry run: the wipes, the partial, and the rename are the
+// executor's, so nothing but this printer would show them.
+func TestPrintDatasetChoreography(t *testing.T) {
+	var out bytes.Buffer
+	buildGolden(t).Print(&out)
+	got := out.String()
+	for _, want := range []string{
+		"== dataset-packs\n" +
+			"  $ rm -rf /bench/golden/packs\n" +
+			"  $ mkdir -p /bench/golden/packs.partial\n" +
+			"  $ gcloud storage rsync -r gs://bucket/cold /bench/golden/packs.partial\n" +
+			"  $ mv /bench/golden/packs.partial /bench/golden/packs\n",
+		"== dataset-fix\n  $ rm -rf /bench/fixture/fix /bench/golden/fix /bench/golden/fix.partial\n",
+		"  $ mv /bench/golden/fix.partial /bench/golden/fix\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Print output missing %q, got:\n%s", want, got)
+		}
+	}
+	// A fixture freezes straight into --cold-out-dir, so it gets no mkdir.
+	if strings.Contains(got, "mkdir -p /bench/golden/fix.partial") {
+		t.Errorf("Print output has a mkdir for the fixture partial, got:\n%s", got)
 	}
 }

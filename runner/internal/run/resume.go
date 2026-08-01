@@ -30,6 +30,14 @@ type legState struct {
 // is the sentinel resume trusts first.
 const legSentinelName = "leg.json"
 
+// LegComplete reports whether a leg's --out directory already holds a leg an
+// earlier session finished successfully. It is the read-only half of the resume
+// decision: `run --dry-run --resume` annotates the plan with it, touching
+// nothing.
+func LegComplete(dir string) bool {
+	return classifyLegDir(dir).kind == legComplete
+}
+
 // classifyLegDir decides what a resumed campaign should do with a leg's
 // existing --out directory. Only a marker that positively records success
 // counts as complete; every ambiguous state resolves to "wipe and re-run",

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
@@ -51,6 +50,12 @@ type Options struct {
 	// FailFast stops the walk at the first failed step. Default (keep going): a
 	// failure only skips the steps that need it.
 	FailFast bool
+	// OnStepDone is called after every step the walk executed — including the
+	// ones a resume or an existing binary made a no-op, excluding only the ones
+	// skipped because a need failed. The run wiring writes binary.txt from it
+	// the moment the build succeeds, so a campaign that dies during its legs
+	// still leaves the binary's identity in the bundle.
+	OnStepDone func(s plan.Step, res StepResult)
 }
 
 // legSentinel is leg.json: the runner's own record that a leg ran to
@@ -89,6 +94,14 @@ func Execute(p *plan.Plan, opts Options) ([]StepResult, error) {
 	skipNeed := map[string]string{}
 
 	for _, step := range p.Steps {
+		// The tarball and the publish are the wiring's epilogue, not the walk's:
+		// tar must run after the final provenance writes so the bundle it
+		// preserves contains them, and a publish failure is not a benchmark
+		// failure. They are in the plan because they are part of the campaign;
+		// they are skipped here because they belong after every step of it.
+		if step.Kind == plan.KindTarball || step.Kind == plan.KindPublish {
+			continue
+		}
 		if need := firstBadNeed(step, bad); need != "" {
 			Notef(opts.Output, "skipping %s: needs %s, which failed or was skipped", step.ID, need)
 			bad[step.ID] = true
@@ -99,6 +112,9 @@ func Execute(p *plan.Plan, opts Options) ([]StepResult, error) {
 		Notef(opts.Output, "%s", step.ID)
 		res := executeStep(p, step, opts)
 		results = append(results, res)
+		if opts.OnStepDone != nil {
+			opts.OnStepDone(step, res)
+		}
 		if res.Status == StatusFailed {
 			Notef(opts.Output, "%s failed: %v", step.ID, res.Err)
 			bad[step.ID] = true
@@ -157,10 +173,6 @@ func executeStep(p *plan.Plan, s plan.Step, opts Options) StepResult {
 		return runBuild(p, s, opts)
 	case plan.KindDataset:
 		return runDataset(s, opts)
-	case plan.KindTarball:
-		return runCommands(s, opts)
-	case plan.KindPublish:
-		return failure(s, errors.New("publish is not ported yet (task 9)"))
 	default:
 		return failure(s, fmt.Errorf("unknown step kind %q", s.Kind))
 	}
@@ -185,13 +197,13 @@ func runLeg(s plan.Step, opts Options) StepResult {
 			Notef(opts.Output, "resume: %s is a partial leg — wiping and re-running", base)
 		}
 		if state.kind != legAbsent {
-			if err := removeAll(s.OutDir, opts.Output); err != nil {
+			if err := removeAll(opts.Output, s.OutDir); err != nil {
 				return failure(s, err)
 			}
 		}
 	}
 	for _, dir := range s.PreClean {
-		if err := removeAll(dir, opts.Output); err != nil {
+		if err := removeAll(opts.Output, dir); err != nil {
 			return failure(s, err)
 		}
 	}
@@ -221,7 +233,7 @@ func runLeg(s plan.Step, opts Options) StepResult {
 	// Post-cleaning only on success keeps a failed leg's scratch around for
 	// diagnosis. A failure to clean is not a failure of the measurement.
 	for _, dir := range s.PostClean {
-		if err := removeAll(dir, opts.Output); err != nil {
+		if err := removeAll(opts.Output, dir); err != nil {
 			Notef(opts.Output, "warning: %s: %v", s.ID, err)
 		}
 	}
@@ -274,41 +286,6 @@ func runBuild(p *plan.Plan, s plan.Step, opts Options) StepResult {
 	return runCommands(s, opts)
 }
 
-// runDataset converges a dataset on its local cold pack root — or, for now,
-// recognizes the roots that are already there and refuses the rest.
-func runDataset(s plan.Step, opts Options) StepResult {
-	d := s.Dataset
-	if d == nil {
-		return failure(s, errors.New("dataset step has no dataset spec"))
-	}
-	if d.Kind == config.KindPacksLocal {
-		// The operator supplied this root; task 8 validates it holds packs.
-		Notef(opts.Output, "dataset %s: local cold pack root %s", d.Name, d.Root)
-		return StepResult{ID: s.ID, Status: StatusOK}
-	}
-	if goldenPresent(d.Root) {
-		Notef(opts.Output, "dataset %s: golden packs already at %s — skipping", d.Name, d.Root)
-		return StepResult{ID: s.ID, Status: StatusOK}
-	}
-	// Preparing a dataset is more than running its commands: the .partial dance
-	// that keeps an interrupted fetch from looking finished is task 8. Failing
-	// here is the honest answer — half-preparing a root would poison every leg
-	// that reads it.
-	return failure(s, fmt.Errorf("dataset %s: preparation is not ported yet (task 8) — materialize %s by hand or use runner/campaign.sh", d.Name, d.Root))
-}
-
-// goldenPresent reports whether a pack root is there and non-empty, the port of
-// bash's golden_present.
-func goldenPresent(dir string) bool {
-	f, err := os.Open(dir)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	names, err := f.Readdirnames(1)
-	return err == nil && len(names) > 0
-}
-
 // executableExists reports whether path is a regular file anyone may execute.
 func executableExists(path string) bool {
 	fi, err := os.Stat(path)
@@ -327,6 +304,17 @@ func runCommands(s plan.Step, opts Options) StepResult {
 	return StepResult{ID: s.ID, Status: StatusOK}
 }
 
+// RunStep runs one step's commands outside the walk, printed and plumbed
+// exactly as Execute would. It exists for the steps Execute deliberately leaves
+// to the wiring's epilogue — the tarball, which must be made after the final
+// provenance writes.
+func RunStep(s plan.Step, out io.Writer) error {
+	if res := runCommands(s, Options{Output: out}); res.Status != StatusOK {
+		return res.Err
+	}
+	return nil
+}
+
 // runCommand prints the command the way the plan printer and bash's run() do,
 // then executes it with its output going wherever the notes go.
 func runCommand(argv []string, env map[string]string, out io.Writer) error {
@@ -343,11 +331,13 @@ func runCommand(argv []string, env map[string]string, out io.Writer) error {
 	return cmd.Run()
 }
 
-// removeAll wipes a directory, logging it as the command bash ran.
-func removeAll(dir string, out io.Writer) error {
-	fmt.Fprintf(out, "  $ rm -rf %s\n", dir)
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("rm -rf %s: %w", dir, err)
+// removeAll wipes directories, logging them as the single rm -rf bash ran.
+func removeAll(out io.Writer, dirs ...string) error {
+	fmt.Fprintf(out, "  $ rm -rf %s\n", strings.Join(dirs, " "))
+	for _, dir := range dirs {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("rm -rf %s: %w", dir, err)
+		}
 	}
 	return nil
 }

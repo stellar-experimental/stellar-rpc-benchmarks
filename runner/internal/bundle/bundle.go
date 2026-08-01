@@ -69,11 +69,16 @@ func ReadMetadata(bundleDir string) (*Metadata, error) {
 
 // Resume is what a validated --resume hands the run wiring.
 type Resume struct {
-	Dir       string
-	RunID     string
-	Sha8      string // parsed from RunID's fixed tail
-	Stamp     string // parsed from RunID's fixed tail
-	StartedAt string // recovered; "" for pre-crash-safe bundles (caller
+	Dir   string
+	RunID string
+	Sha8  string // parsed from RunID's fixed tail
+	Stamp string // parsed from RunID's fixed tail
+	// ConfigFile is the bundle-root name of the stored config copy, carried
+	// forward so the resumed session's metadata keeps pointing at the file the
+	// campaign was started with even when the operator invoked a differently
+	// named path holding the same bytes.
+	ConfigFile string
+	StartedAt  string // recovered; "" for pre-crash-safe bundles (caller
 	// records this session's start, like bash)
 }
 
@@ -136,7 +141,14 @@ func ValidateResume(dir, cfgPath string, cfg *config.Config,
 	// An empty started_at is not an error: bundles written before metadata.json
 	// was written up front have none, and the caller records this session's
 	// start instead, as bash did.
-	return &Resume{Dir: dir, RunID: meta.RunID, Sha8: sha8, Stamp: stamp, StartedAt: meta.StartedAt}, nil
+	return &Resume{
+		Dir:        dir,
+		RunID:      meta.RunID,
+		Sha8:       sha8,
+		Stamp:      stamp,
+		ConfigFile: meta.Campaign.ConfigFile,
+		StartedAt:  meta.StartedAt,
+	}, nil
 }
 
 // checkStoredConfig is the config-diff guard: it proves the config about to be

@@ -112,7 +112,7 @@ func TestPlanCmd(t *testing.T) {
 	t.Run("unreadable config exits 2 with the config error", func(t *testing.T) {
 		t.Setenv("BENCH_ROOT", t.TempDir())
 		var stdout, stderr bytes.Buffer
-		if got := run([]string{"plan", filepath.Join(t.TempDir(), "nope.toml")}, &stdout, &stderr); got != 2 {
+		if got := dispatch([]string{"plan", filepath.Join(t.TempDir(), "nope.toml")}, &stdout, &stderr); got != 2 {
 			t.Errorf("exit code = %d, want 2", got)
 		}
 		if !strings.Contains(stderr.String(), "config:") {
@@ -128,7 +128,7 @@ func TestPlanCmd(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 		var stdout, stderr bytes.Buffer
-		if got := run([]string{"plan", cfg}, &stdout, &stderr); got != 0 {
+		if got := dispatch([]string{"plan", cfg}, &stdout, &stderr); got != 0 {
 			t.Errorf("exit code = %d, want 0 (stderr: %s)", got, stderr.String())
 		}
 		for _, want := range []string{
@@ -164,7 +164,7 @@ func TestPreflightCmd(t *testing.T) {
 	t.Run("unreadable config exits 2 with the config error", func(t *testing.T) {
 		t.Setenv("BENCH_ROOT", t.TempDir())
 		var stdout, stderr bytes.Buffer
-		if got := run([]string{"preflight", filepath.Join(t.TempDir(), "nope.toml")}, &stdout, &stderr); got != 2 {
+		if got := dispatch([]string{"preflight", filepath.Join(t.TempDir(), "nope.toml")}, &stdout, &stderr); got != 2 {
 			t.Errorf("exit code = %d, want 2", got)
 		}
 		if !strings.Contains(stderr.String(), "config:") {
@@ -183,7 +183,7 @@ func TestPreflightCmd(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 		var stdout, stderr bytes.Buffer
-		if got := run([]string{"preflight", cfg}, &stdout, &stderr); got != 0 {
+		if got := dispatch([]string{"preflight", cfg}, &stdout, &stderr); got != 0 {
 			t.Errorf("exit code = %d, want 0 (stdout: %s)", got, stdout.String())
 		}
 		if !strings.Contains(stdout.String(), "preflight: ok") {
@@ -202,7 +202,7 @@ func TestPreflightCmd(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 		var stdout, stderr bytes.Buffer
-		if got := run([]string{"preflight", cfg}, &stdout, &stderr); got != 1 {
+		if got := dispatch([]string{"preflight", cfg}, &stdout, &stderr); got != 1 {
 			t.Errorf("exit code = %d, want 1 (stdout: %s)", got, stdout.String())
 		}
 		if !strings.Contains(stdout.String(), "preflight: FAIL — git not found in PATH") {
@@ -241,10 +241,10 @@ func TestRunDispatch(t *testing.T) {
 			stderr: []string{"error: unknown subcommand: benchmark", "usage: campaign <subcommand>"},
 		},
 		{
-			name:   "run stub",
+			name:   "run without a config names what is missing",
 			args:   []string{"run"},
 			exit:   2,
-			stderr: []string{"usage: campaign run <config.toml>", "--resume", "error: run is not implemented yet"},
+			stderr: []string{"usage: campaign run <config.toml>", "--resume", "error: run needs exactly one config path"},
 		},
 		{
 			name:      "run -h prints its usage and succeeds",
@@ -288,7 +288,7 @@ func TestRunDispatch(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			got := run(tc.args, &stdout, &stderr)
+			got := dispatch(tc.args, &stdout, &stderr)
 			if got != tc.exit {
 				t.Errorf("exit code = %d, want %d", got, tc.exit)
 			}

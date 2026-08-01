@@ -58,7 +58,9 @@ type Step struct {
 	// whether a resumed leg is already finished.
 	OutDir string `json:"out_dir,omitempty"`
 	// PreClean lists directories to rm -rf before the step runs, so every leg
-	// starts from a known-empty scratch or hot DB.
+	// starts from a known-empty scratch or hot DB and every dataset
+	// materializes onto bare ground. It is the single source of truth for those
+	// wipes: the executor removes exactly this list, and the dry run prints it.
 	PreClean []string `json:"pre_clean,omitempty"`
 	// PostClean lists directories to rm -rf after the step succeeds. This is a
 	// deliberate change from bash, which only cleaned before the next rep and
@@ -232,10 +234,17 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		step.Dataset.Location = d.Location
 	case config.KindPacksGS:
 		step.Dataset.Location = d.Location
+		// Clear the empty leftover of an earlier cleared-out fetch, or the
+		// rename below would nest the partial inside it. The .partial itself is
+		// deliberately not listed: rsync resumes into a half-fetched tree.
+		step.PreClean = []string{root}
 		step.Argv = [][]string{{"gcloud", "storage", "rsync", "-r", d.Location, root + ".partial"}}
 	case config.KindBSBS3:
 		step.Dataset.Location = d.Location
 		step.Needs = []string{"build"}
+		// Unlike a fetch, a cold backfill cannot resume: restarting on top of a
+		// half-written pack tree would double-write it.
+		step.PreClean = []string{root, root + ".partial"}
 		// AWS_EC2_METADATA_DISABLED is set on these commands only: without it
 		// the SDK signs requests with the machine's IAM role and the public
 		// bucket 403s, but setting it for the whole campaign would also hide
@@ -256,6 +265,9 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		stage := filepath.Join(in.BenchRoot, "fixture", d.Name, "ledgers")
 		step.Needs = []string{"build"}
 		step.Dataset.Stage = stage
+		// The staging tree goes too, and by its parent: generation writes the
+		// ledgers/ dir itself, so a stale one from a killed run must not survive.
+		step.PreClean = []string{filepath.Dir(stage), root, root + ".partial"}
 		if d.Ledgers != nil {
 			ledgers := *d.Ledgers
 			step.Dataset.Ledgers = &ledgers
@@ -433,17 +445,40 @@ func (p *Plan) Print(w io.Writer) {
 	}
 	for _, s := range p.Steps {
 		fmt.Fprintf(w, "== %s\n", s.ID)
-		for _, dir := range s.PreClean {
-			fmt.Fprintf(w, "  $ rm -rf %s\n", dir)
+		if len(s.PreClean) > 0 {
+			// One line for the whole list, as the executor's single rm -rf.
+			fmt.Fprintf(w, "  $ rm -rf %s\n", strings.Join(s.PreClean, " "))
+		}
+		// A dataset step's .partial dance belongs to the executor, not to argv,
+		// so the argv lines alone would hide the destructive half of what a
+		// dataset preparation does. These lines are derived from the same
+		// DatasetSpec the executor keys off, so a dry run and campaign.log read
+		// identically.
+		if s.Dataset != nil && s.Dataset.Kind == config.KindPacksGS {
+			fmt.Fprintf(w, "  $ mkdir -p %s.partial\n", s.Dataset.Root)
 		}
 		prefix := envPrefix(s.Env)
 		for _, argv := range s.Argv {
 			fmt.Fprintf(w, "  $ %s%s\n", prefix, strings.Join(argv, " "))
 		}
+		if s.Dataset != nil && materializes(s.Dataset.Kind) {
+			fmt.Fprintf(w, "  $ mv %s.partial %s\n", s.Dataset.Root, s.Dataset.Root)
+		}
 		if s.Kind == KindPublish {
 			fmt.Fprintf(w, "  $ campaign publish %s %s\n", p.ResultsDir, s.PublishURI)
 		}
 	}
+}
+
+// materializes reports whether a dataset kind builds its pack root under
+// <root>.partial and renames it into place once whole. packs-local is the one
+// kind that does not: the operator already has the packs.
+func materializes(kind string) bool {
+	switch kind {
+	case config.KindPacksGS, config.KindBSBS3, config.KindFixture:
+		return true
+	}
+	return false
 }
 
 // envPrefix renders a step's extra environment as bash printed it: an `env

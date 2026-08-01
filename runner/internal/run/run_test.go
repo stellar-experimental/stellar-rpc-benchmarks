@@ -3,6 +3,7 @@ package run
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
@@ -74,6 +74,13 @@ func (o outcome) assertLogHas(t *testing.T, want string) {
 	t.Helper()
 	if !strings.Contains(o.log, want) {
 		t.Errorf("log does not contain %q\nlog:\n%s", want, o.log)
+	}
+}
+
+func (o outcome) assertLogLacks(t *testing.T, unwanted string) {
+	t.Helper()
+	if strings.Contains(o.log, unwanted) {
+		t.Errorf("log contains %q, want it not to\nlog:\n%s", unwanted, o.log)
 	}
 }
 
@@ -456,62 +463,61 @@ func TestExecuteBuild(t *testing.T) {
 	})
 }
 
-func TestExecuteDataset(t *testing.T) {
-	datasetStep := func(name, kind, root string) plan.Step {
-		return plan.Step{
-			ID:      "dataset-" + name,
-			Kind:    plan.KindDataset,
-			Argv:    [][]string{},
-			Dataset: &plan.DatasetSpec{Name: name, Kind: kind, Root: root},
-		}
-	}
-
-	t.Run("packs-local is the operator's own root", func(t *testing.T) {
-		root := t.TempDir()
-		got := walk(t, &plan.Plan{Steps: []plan.Step{datasetStep("local", config.KindPacksLocal, root)}}, Options{})
-		got.assertStatuses(t, StatusOK)
-		got.assertLogHas(t, "dataset local: local cold pack root "+root)
-	})
-
-	t.Run("golden packs already present", func(t *testing.T) {
-		root := filepath.Join(t.TempDir(), "golden", "pubnet")
-		mustWrite(t, filepath.Join(root, "ledgers", "chunk-0.pack"), "packs")
-		got := walk(t, &plan.Plan{Steps: []plan.Step{datasetStep("pubnet", config.KindPacksGS, root)}}, Options{})
-		got.assertStatuses(t, StatusOK)
-		got.assertLogHas(t, "dataset pubnet: golden packs already at "+root+" — skipping")
-	})
-
-	t.Run("preparation is not ported yet", func(t *testing.T) {
-		root := filepath.Join(t.TempDir(), "golden", "pubnet")
-		got := walk(t, &plan.Plan{Steps: []plan.Step{datasetStep("pubnet", config.KindPacksGS, root)}}, Options{})
-		got.assertStatuses(t, StatusFailed)
-		if err := got.results[0].Err; err == nil || !strings.Contains(err.Error(), "not ported yet (task 8)") {
-			t.Errorf("error = %v, want it to name task 8", err)
-		}
-		assertGone(t, root)
-	})
-}
-
-func TestExecutePublishIsAStub(t *testing.T) {
-	p := &plan.Plan{Steps: []plan.Step{{
-		ID: "publish", Kind: plan.KindPublish, Argv: [][]string{}, PublishURI: "gs://bucket/runs",
-	}}}
-	got := walk(t, p, Options{})
-	got.assertStatuses(t, StatusFailed)
-	if err := got.results[0].Err; err == nil || !strings.Contains(err.Error(), "not ported yet (task 9)") {
-		t.Errorf("error = %v, want it to name task 9", err)
-	}
-}
-
-func TestExecuteTarball(t *testing.T) {
+// TestExecuteSkipsTheEpilogue pins the division of labour: the tarball and the
+// publish are in the plan, but Execute leaves them to the run wiring, which
+// makes the tarball only after the final provenance writes.
+func TestExecuteSkipsTheEpilogue(t *testing.T) {
 	tmp := t.TempDir()
 	marker := filepath.Join(tmp, "tarball.txt")
-	p := &plan.Plan{Steps: []plan.Step{{
-		ID: "tarball", Kind: plan.KindTarball, Argv: [][]string{{"/bin/sh", "-c", `: > "$1"`, "sh", marker}},
-	}}}
+	tarball := plan.Step{
+		ID: "tarball", Kind: plan.KindTarball,
+		Argv: [][]string{{"/bin/sh", "-c", `: > "$1"`, "sh", marker}},
+	}
+	p := &plan.Plan{Steps: []plan.Step{
+		shLeg("leg", filepath.Join(tmp, "res", "leg"), `: > "$1/driver.csv"`),
+		tarball,
+		{ID: "publish", Kind: plan.KindPublish, Argv: [][]string{}, PublishURI: "gs://bucket/runs", Needs: []string{"tarball"}},
+	}}
+
 	got := walk(t, p, Options{})
+	if got.err != nil {
+		t.Fatalf("Execute: %v\nlog:\n%s", got.err, got.log)
+	}
+	// Only the leg has a result, and no tar ran.
 	got.assertStatuses(t, StatusOK)
+	assertGone(t, marker)
+
+	// The wiring runs the same step itself, out of the same plan.
+	if err := RunStep(tarball, io.Discard); err != nil {
+		t.Fatalf("RunStep(tarball): %v", err)
+	}
 	assertExists(t, marker)
+}
+
+func TestOnStepDoneFiresForExecutedSteps(t *testing.T) {
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "bin", "stellar-rpc-deadbeef")
+	p := &plan.Plan{Bin: bin, Steps: []plan.Step{
+		{ID: "build", Kind: plan.KindBuild, Argv: [][]string{{"/bin/sh", "-c", `mkdir -p "$(dirname "$1")" && : > "$1"`, "sh", bin}}},
+		shLeg("fail", filepath.Join(tmp, "res", "fail"), `exit 1`),
+		shLeg("dep", filepath.Join(tmp, "res", "dep"), `: > "$1/driver.csv"`),
+	}}
+	p.Steps[2].Needs = []string{"fail"}
+
+	var seen []string
+	var buf bytes.Buffer
+	if _, err := Execute(p, Options{
+		Output: &buf,
+		OnStepDone: func(s plan.Step, r StepResult) {
+			seen = append(seen, s.ID+"="+string(r.Status))
+		},
+	}); err == nil {
+		t.Fatalf("Execute returned nil error after a failed leg\nlog:\n%s", buf.String())
+	}
+	// The skipped step is the one exception: it never ran, so nothing is done.
+	if want := []string{"build=ok", "fail=failed"}; !slices.Equal(seen, want) {
+		t.Errorf("OnStepDone saw %v, want %v", seen, want)
+	}
 }
 
 func TestExecuteLegWithMissingBinaryIsFailedWithASentinel(t *testing.T) {

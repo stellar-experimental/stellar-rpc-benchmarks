@@ -1,6 +1,6 @@
 // Command campaign runs config-driven benchmark campaigns for stellar-rpc's
 // full-history bench subcommands. It is the Go successor to
-// runner/campaign.sh; the subcommands below are stubs until the port lands.
+// runner/campaign.sh; publish is still a stub until its port lands.
 package main
 
 import (
@@ -9,14 +9,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/preflight"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/run"
 )
 
 // defaultBenchRoot is the benchmark machine's NVMe mount; BENCH_ROOT overrides
@@ -136,16 +135,13 @@ func planCmd(pos []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 2
 	}
-	benchRoot := os.Getenv("BENCH_ROOT")
-	if benchRoot == "" {
-		benchRoot = defaultBenchRoot
-	}
+	benchRoot := benchRootFromEnv()
 	in := plan.Inputs{
 		BenchRoot: benchRoot,
 		Stamp:     time.Now().UTC().Format(stampLayout),
 	}
 	src := filepath.Join(benchRoot, "src")
-	if sha, ok := resolveRef(src, cfg.Ref); ok {
+	if sha, err := run.ResolveRef(src, cfg.Ref); err == nil {
 		in.BuiltCommit, in.Sha8 = sha, sha[:8]
 	} else {
 		// Planning fetches nothing, so the ref may not resolve locally yet:
@@ -174,51 +170,26 @@ func preflightCmd(pos []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 2
 	}
-	benchRoot := os.Getenv("BENCH_ROOT")
-	if benchRoot == "" {
-		benchRoot = defaultBenchRoot
-	}
-	res := preflight.Run(cfg, benchRoot, "", preflight.Deps{})
-	for _, failure := range res.Failures {
-		fmt.Fprintf(stdout, "preflight: FAIL — %s\n", failure)
-	}
-	for _, warning := range res.Warnings {
-		fmt.Fprintf(stdout, "preflight: warn — %s\n", warning)
-	}
-	if len(res.Failures) > 0 {
+	if !printPreflight(preflight.Run(cfg, benchRootFromEnv(), "", preflight.Deps{}), stdout) {
 		return 1
 	}
 	fmt.Fprintln(stdout, "preflight: ok")
 	return 0
 }
 
-// resolveRef reports the commit ref names inside the build clone at src, if
-// there is one. Remote-tracking branches are tried first so a stale local ref
-// never shadows the fetched branch tip; the fallback covers tags and raw commit
-// hashes. Task 8 replaces this with the full ensure_src/resolve_ref port
-// (clone, fetch, reset) that `campaign run` needs; `plan` deliberately stays
-// offline, so it works with whatever the clone already knows.
-func resolveRef(src, ref string) (string, bool) {
-	if _, err := os.Stat(filepath.Join(src, ".git")); err != nil {
-		return "", false
+// benchRootFromEnv is the storage root every subcommand works under.
+func benchRootFromEnv() string {
+	if root := os.Getenv("BENCH_ROOT"); root != "" {
+		return root
 	}
-	for _, rev := range []string{"refs/remotes/origin/" + ref + "^{commit}", ref + "^{commit}"} {
-		out, err := exec.Command("git", "-C", src, "rev-parse", "--verify", "--quiet", rev).Output()
-		if err != nil {
-			continue
-		}
-		if sha := strings.TrimSpace(string(out)); len(sha) >= 8 {
-			return sha, true
-		}
-	}
-	return "", false
+	return defaultBenchRoot
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func dispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, topUsage)
 		return 2
@@ -237,6 +208,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		switch args[0] {
+		case "run":
+			return runCmd(pos, fs, stdout, stderr)
 		case "plan":
 			return planCmd(pos, stdout, stderr)
 		case "preflight":
