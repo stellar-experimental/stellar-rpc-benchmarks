@@ -13,7 +13,7 @@ const campaignLogName = "campaign.log"
 
 // Notef prints a bash-style note — `== [HH:MM:SS] msg`, the clock in UTC —
 // the line format every operator reading a campaign log already knows from
-// campaign.sh's note().
+// the note() of the bash campaign runner this package replaces.
 func Notef(w io.Writer, format string, args ...any) {
 	fmt.Fprintf(w, "== [%s] %s\n", time.Now().UTC().Format("15:04:05"), fmt.Sprintf(format, args...))
 }

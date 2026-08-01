@@ -1,6 +1,7 @@
 package run
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,10 @@ func AcquireLock(benchRoot string) (release func(), err error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another campaign is already running on this BENCH_ROOT (held lock: %s)", path)
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another campaign is already running on this BENCH_ROOT (held lock: %s)", path)
+		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	// The lock lives on the open file description, so the fd stays open until
 	// release; closing it anywhere earlier would drop the lock silently.

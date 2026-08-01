@@ -17,6 +17,9 @@ import (
 // modified.
 func EnsureSrc(src, repo string, out io.Writer) error {
 	if _, err := os.Stat(filepath.Join(src, ".git")); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect build clone at %s: %w", src, err)
+		}
 		if err := runCommand([]string{"git", "clone", repo, src}, nil, out); err != nil {
 			return fmt.Errorf("clone %s into %s: %w", repo, src, err)
 		}
