@@ -1,0 +1,38 @@
+name: Go runner
+
+# Vet and test the Go campaign runner. Like the shellcheck job this is a
+# static gate only — real campaigns run on the benchmark devbox, not in CI.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "runner/**"
+      - ".github/workflows/runner-go.yml"
+  pull_request:
+    paths:
+      - "runner/**"
+      - ".github/workflows/runner-go.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: runner/go.mod
+          cache-dependency-path: runner/go.sum
+
+      - name: Vet
+        working-directory: runner
+        run: go vet ./...
+
+      - name: Test
+        working-directory: runner
+        run: go test ./...
