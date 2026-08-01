@@ -12,6 +12,7 @@ import (
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/preflight"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/run"
 )
 
@@ -283,12 +284,27 @@ func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
 	} else {
 		run.Notef(out, "campaign done: %s", p.Tarball)
 	}
+	// Publishing is a separate final step, after the "campaign done" note: the
+	// data is already safe in res and the tarball, so a publish failure is not
+	// a benchmark failure — it exits 1 with the exact retry command rather than
+	// corrupting that signal.
+	var publishErr error
 	if cfg.PublishURI != "" {
-		run.Notef(out, "note: publish is not ported yet (task 9) — publish manually: campaign publish %s %s",
-			res, cfg.PublishURI)
+		if tarErr != nil {
+			// The plan's publish step needs the tarball, and bash's set -e
+			// aborted before publish whenever tar failed. Publishing here would
+			// upload a bundle the retry note cannot honestly call safe.
+			// covered by the task-10 e2e (tar-failure scenario)
+			run.Notef(out, "skipping publish: tar failed — publish manually once the bundle is intact: campaign publish %s %s",
+				res, cfg.PublishURI)
+		} else if publishErr = publish.Run(res, cfg.PublishURI, false, false, out); publishErr != nil {
+			fmt.Fprintf(out, "error: %s\n", publishErr)
+			run.Notef(out, "publish failed — data is safe in %s and %s; retry with: campaign publish %s %s",
+				res, p.Tarball, res, cfg.PublishURI)
+		}
 	}
 
-	if execErr != nil || tarErr != nil {
+	if execErr != nil || tarErr != nil || publishErr != nil {
 		return 1
 	}
 	return 0

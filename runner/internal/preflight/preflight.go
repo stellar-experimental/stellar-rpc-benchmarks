@@ -9,17 +9,15 @@
 package preflight
 
 import (
-	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
 )
 
 // The bench devbox's NVMe layout. campaign.sh only verified the mount when
@@ -36,10 +34,6 @@ const gib = 1 << 30
 // not a failure: how much a campaign really needs depends on its datasets and
 // rep count, and a small fixture campaign runs happily under it.
 const minFree = 100 * gib
-
-// listTimeout bounds the destination listing. An unreachable endpoint should
-// cost preflight seconds, not the TCP stack's idea of patience.
-const listTimeout = 30 * time.Second
 
 // Deps are the environment probes, injectable so tests can stub each check.
 type Deps struct {
@@ -180,69 +174,12 @@ func cargoBin() string { return filepath.Join(os.Getenv("HOME"), ".cargo", "bin"
 // object-storage root at uri. An empty root is a listable root; an auth,
 // network, or missing-bucket error is not.
 //
-// Both CLIs report an empty prefix through a nonzero exit, but each has its
-// own signature: aws s3 ls says nothing at all, gcloud storage ls says the URL
-// matched no objects. runner/publish.sh accepts either signature from either
-// CLI, out of shell expedience; here each tool is held to its own signature
-// only, because the false-pass direction is the dangerous one — reading a
-// credential failure as "empty bucket" would silently pass the very check this
-// exists to make. Task 9's publish step reuses this.
+// The listing itself is publish.List — one implementation shared with the
+// publish step, because both are asking the same question of the same two CLIs
+// and a listing wrongly read as "empty" fails the same way in both places.
 func ListRoot(uri string) error {
-	var name string
-	var args []string
-	// emptyRoot reports whether a nonzero exit was this tool's way of saying
-	// the prefix holds no objects.
-	var emptyRoot func(stdout, stderr string) bool
-	switch {
-	case strings.HasPrefix(uri, "gs://"):
-		name, args = "gcloud", []string{"storage", "ls", uri}
-		emptyRoot = func(_, stderr string) bool { return strings.Contains(stderr, "matched no objects") }
-	case strings.HasPrefix(uri, "s3://"):
-		// publish.sh hands the s3:// URI to aws s3 ls unchanged; so do we.
-		name, args = "aws", []string{"s3", "ls", uri}
-		emptyRoot = func(stdout, stderr string) bool { return stdout == "" && stderr == "" }
-	default:
-		return fmt.Errorf("unsupported scheme (supported: gs://, s3://)")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err == nil {
-		return nil
-	}
-	if ctx.Err() != nil {
-		return fmt.Errorf("%s took longer than %s", name, listTimeout)
-	}
-	out, errOut := strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String())
-	if emptyRoot(out, errOut) {
-		return nil
-	}
-	detail := diagnosis(errOut)
-	if detail == "" {
-		detail = diagnosis(out)
-	}
-	if detail == "" {
-		detail = "no output"
-	}
-	return fmt.Errorf("%s: %s", err, detail)
-}
-
-// diagnosis reduces a CLI's output stream to its first non-empty line. Both
-// tools put the actual error on stderr ("ERROR: (gcloud.storage.ls) …", "fatal
-// error: Unable to locate credentials") and follow it with several lines of
-// remediation prose, which would bury the failure in the preflight report.
-func diagnosis(stream string) string {
-	for _, line := range strings.Split(stream, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			return line
-		}
-	}
-	return ""
+	_, err := publish.List(uri)
+	return err
 }
 
 func mountpoint(dir string) error { return exec.Command("mountpoint", "-q", dir).Run() }

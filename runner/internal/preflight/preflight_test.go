@@ -448,10 +448,3 @@ func TestDiskFreeMeasuresTheNearestExistingParent(t *testing.T) {
 		t.Error("diskFree = 0 bytes, want the temp filesystem's free space")
 	}
 }
-
-func TestDiagnosisKeepsTheErrorNotTheRemediation(t *testing.T) {
-	stderr := "ERROR: (gcloud.storage.ls) There was a problem refreshing your current auth tokens\nPlease run:\n\n  $ gcloud auth login\n"
-	if got, want := diagnosis(stderr), "ERROR: (gcloud.storage.ls) There was a problem refreshing your current auth tokens"; got != want {
-		t.Errorf("diagnosis = %q, want %q", got, want)
-	}
-}

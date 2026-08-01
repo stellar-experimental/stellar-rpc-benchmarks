@@ -211,6 +211,77 @@ func TestPreflightCmd(t *testing.T) {
 	})
 }
 
+func TestPublishCmd(t *testing.T) {
+	// A gcloud that reports an empty prefix and accepts the upload, so the
+	// whole subcommand runs end to end without touching a bucket.
+	stubGcloud := func(t *testing.T) {
+		t.Helper()
+		dir := t.TempDir()
+		script := "#!/bin/sh\ncase \"$2\" in\nls) echo 'ERROR: One or more URLs matched no objects.' >&2; exit 1 ;;\n*) exit 0 ;;\nesac\n"
+		if err := os.WriteFile(filepath.Join(dir, "gcloud"), []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake gcloud: %v", err)
+		}
+		t.Setenv("PATH", dir)
+	}
+	bundleDir := func(t *testing.T) string {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "phase4-6f35679f-20260715T101500Z")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir bundle: %v", err)
+		}
+		return dir
+	}
+
+	t.Run("a bundle and $PUBLISH_URI are enough", func(t *testing.T) {
+		stubGcloud(t)
+		dir := bundleDir(t)
+		t.Setenv("PUBLISH_URI", "gs://bucket/results")
+		var stdout, stderr bytes.Buffer
+		if got := dispatch([]string{"publish", dir}, &stdout, &stderr); got != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr: %s)", got, stderr.String())
+		}
+		want := "published: gs://bucket/results/" + filepath.Base(dir) + "/"
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout missing %q, got:\n%s", want, stdout.String())
+		}
+	})
+
+	t.Run("no destination anywhere exits 2", func(t *testing.T) {
+		t.Setenv("PUBLISH_URI", "")
+		var stdout, stderr bytes.Buffer
+		if got := dispatch([]string{"publish", bundleDir(t)}, &stdout, &stderr); got != 2 {
+			t.Errorf("exit code = %d, want 2", got)
+		}
+		if !strings.Contains(stderr.String(), "no destination: pass <dest-root-uri> or set PUBLISH_URI") {
+			t.Errorf("stderr = %q, want the no-destination error", stderr.String())
+		}
+	})
+
+	t.Run("a missing bundle is an operational failure, exit 1", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		if got := dispatch([]string{"publish", filepath.Join(t.TempDir(), "nope"), "gs://bucket/results"}, &stdout, &stderr); got != 1 {
+			t.Errorf("exit code = %d, want 1", got)
+		}
+		if !strings.Contains(stderr.String(), "error: results dir not found: ") {
+			t.Errorf("stderr = %q, want the missing-bundle error", stderr.String())
+		}
+	})
+
+	t.Run("--dry-run prints the commands and runs none", func(t *testing.T) {
+		stubPATH(t) // an empty PATH: a dry run must not need the CLI at all
+		dir := bundleDir(t)
+		var stdout, stderr bytes.Buffer
+		if got := dispatch([]string{"publish", dir, "gs://bucket/results", "--dry-run"}, &stdout, &stderr); got != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr: %s)", got, stderr.String())
+		}
+		for _, want := range []string{"  $ gcloud storage ls ", "  $ gcloud storage rsync -r ", "dry run complete"} {
+			if !strings.Contains(stdout.String(), want) {
+				t.Errorf("stdout missing %q, got:\n%s", want, stdout.String())
+			}
+		}
+	})
+}
+
 func TestRunDispatch(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -278,10 +349,16 @@ func TestRunDispatch(t *testing.T) {
 			stderr: []string{"usage: campaign preflight <config.toml>", "error: preflight needs exactly one config path"},
 		},
 		{
-			name:   "publish stub",
+			name:   "publish without a bundle names what is missing",
 			args:   []string{"publish"},
 			exit:   2,
-			stderr: []string{"usage: campaign publish <results-dir>", "--force", "error: publish is not implemented yet"},
+			stderr: []string{"usage: campaign publish <results-dir>", "--force", "error: publish needs a results directory"},
+		},
+		{
+			name:   "publish with a third positional names it",
+			args:   []string{"publish", "results", "gs://bucket", "extra"},
+			exit:   2,
+			stderr: []string{"error: unexpected extra argument: extra"},
 		},
 	}
 

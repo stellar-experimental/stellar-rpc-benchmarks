@@ -1,6 +1,6 @@
 // Command campaign runs config-driven benchmark campaigns for stellar-rpc's
 // full-history bench subcommands. It is the Go successor to
-// runner/campaign.sh; publish is still a stub until its port lands.
+// runner/campaign.sh and runner/publish.sh.
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/preflight"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/run"
 )
 
@@ -177,6 +178,34 @@ func preflightCmd(pos []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// publishCmd uploads a finished bundle to <dest-root>/<run_id>/. The
+// destination is the argument or $PUBLISH_URI — the same default the campaign
+// config's publish_uri feeds the end of a run.
+func publishCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
+	if len(pos) == 0 {
+		fmt.Fprint(stderr, subUsage["publish"])
+		fmt.Fprint(stderr, "error: publish needs a results directory\n")
+		return 2
+	}
+	if len(pos) > 2 {
+		fmt.Fprintf(stderr, "error: unexpected extra argument: %s\n", pos[2])
+		return 2
+	}
+	destRoot := os.Getenv("PUBLISH_URI")
+	if len(pos) == 2 {
+		destRoot = pos[1]
+	}
+	if destRoot == "" {
+		fmt.Fprint(stderr, "error: no destination: pass <dest-root-uri> or set PUBLISH_URI\n")
+		return 2
+	}
+	if err := publish.Run(pos[0], destRoot, boolFlag(fs, "dry-run"), boolFlag(fs, "force"), stdout); err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	return 0
+}
+
 // benchRootFromEnv is the storage root every subcommand works under.
 func benchRootFromEnv() string {
 	if root := os.Getenv("BENCH_ROOT"); root != "" {
@@ -214,6 +243,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 			return planCmd(pos, stdout, stderr)
 		case "preflight":
 			return preflightCmd(pos, stdout, stderr)
+		case "publish":
+			return publishCmd(pos, fs, stdout, stderr)
 		}
 		fmt.Fprint(stderr, subUsage[args[0]])
 		fmt.Fprintf(stderr, "error: %s is not implemented yet\n", args[0])
