@@ -147,6 +147,70 @@ func TestPlanCmd(t *testing.T) {
 	})
 }
 
+// stubPATH points PATH at a directory of no-op executables, so preflight's
+// tool checks see exactly the named tools and nothing else.
+func stubPATH(t *testing.T, tools ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range tools {
+		if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write %s: %v", tool, err)
+		}
+	}
+	t.Setenv("PATH", dir)
+}
+
+func TestPreflightCmd(t *testing.T) {
+	t.Run("unreadable config exits 2 with the config error", func(t *testing.T) {
+		t.Setenv("BENCH_ROOT", t.TempDir())
+		var stdout, stderr bytes.Buffer
+		if got := run([]string{"preflight", filepath.Join(t.TempDir(), "nope.toml")}, &stdout, &stderr); got != 2 {
+			t.Errorf("exit code = %d, want 2", got)
+		}
+		if !strings.Contains(stderr.String(), "config:") {
+			t.Errorf("stderr = %q, want the config error", stderr.String())
+		}
+	})
+
+	// planConfig publishes nowhere and uses a local pack root, so the only
+	// tools it needs are the clone-and-build set. binPath is empty here, so a
+	// build is always assumed — hence go and cargo.
+	t.Run("a config needing only the build tools passes", func(t *testing.T) {
+		t.Setenv("BENCH_ROOT", t.TempDir())
+		stubPATH(t, "git", "make", "go", "cargo")
+		cfg := filepath.Join(t.TempDir(), "campaign.toml")
+		if err := os.WriteFile(cfg, []byte(planConfig), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		var stdout, stderr bytes.Buffer
+		if got := run([]string{"preflight", cfg}, &stdout, &stderr); got != 0 {
+			t.Errorf("exit code = %d, want 0 (stdout: %s)", got, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "preflight: ok") {
+			t.Errorf("stdout = %q, want 'preflight: ok'", stdout.String())
+		}
+		if strings.Contains(stdout.String(), "FAIL") {
+			t.Errorf("stdout = %q, want no failures", stdout.String())
+		}
+	})
+
+	t.Run("a missing tool fails, exit 1", func(t *testing.T) {
+		t.Setenv("BENCH_ROOT", t.TempDir())
+		stubPATH(t, "make", "go", "cargo")
+		cfg := filepath.Join(t.TempDir(), "campaign.toml")
+		if err := os.WriteFile(cfg, []byte(planConfig), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		var stdout, stderr bytes.Buffer
+		if got := run([]string{"preflight", cfg}, &stdout, &stderr); got != 1 {
+			t.Errorf("exit code = %d, want 1 (stdout: %s)", got, stdout.String())
+		}
+		if !strings.Contains(stdout.String(), "preflight: FAIL — git not found in PATH") {
+			t.Errorf("stdout = %q, want the git failure line", stdout.String())
+		}
+	})
+}
+
 func TestRunDispatch(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -208,10 +272,10 @@ func TestRunDispatch(t *testing.T) {
 			stderr: []string{"usage: campaign plan <config.toml>", "error: plan needs exactly one config path"},
 		},
 		{
-			name:   "preflight stub",
+			name:   "preflight without a config names what is missing",
 			args:   []string{"preflight"},
 			exit:   2,
-			stderr: []string{"usage: campaign preflight <config.toml>", "error: preflight is not implemented yet"},
+			stderr: []string{"usage: campaign preflight <config.toml>", "error: preflight needs exactly one config path"},
 		},
 		{
 			name:   "publish stub",

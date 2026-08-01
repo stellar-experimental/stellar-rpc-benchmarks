@@ -16,6 +16,7 @@ import (
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/preflight"
 )
 
 // defaultBenchRoot is the benchmark machine's NVMe mount; BENCH_ROOT overrides
@@ -157,6 +158,40 @@ func planCmd(pos []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// preflightCmd checks the tools, credentials, mount, and free disk this config
+// needs, before a campaign spends hours discovering otherwise. It resolves no
+// ref and touches no clone: binPath is empty, so the toolchain checks assume a
+// build will happen. `campaign run` passes the real versioned binary path,
+// which lets an already-built ref skip them.
+func preflightCmd(pos []string, stdout, stderr io.Writer) int {
+	if len(pos) != 1 {
+		fmt.Fprint(stderr, subUsage["preflight"])
+		fmt.Fprint(stderr, "error: preflight needs exactly one config path\n")
+		return 2
+	}
+	cfg, err := config.Load(pos[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 2
+	}
+	benchRoot := os.Getenv("BENCH_ROOT")
+	if benchRoot == "" {
+		benchRoot = defaultBenchRoot
+	}
+	res := preflight.Run(cfg, benchRoot, "", preflight.Deps{})
+	for _, failure := range res.Failures {
+		fmt.Fprintf(stdout, "preflight: FAIL — %s\n", failure)
+	}
+	for _, warning := range res.Warnings {
+		fmt.Fprintf(stdout, "preflight: warn — %s\n", warning)
+	}
+	if len(res.Failures) > 0 {
+		return 1
+	}
+	fmt.Fprintln(stdout, "preflight: ok")
+	return 0
+}
+
 // resolveRef reports the commit ref names inside the build clone at src, if
 // there is one. Remote-tracking branches are tried first so a stale local ref
 // never shadows the fetched branch tip; the fallback covers tags and raw commit
@@ -201,8 +236,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}
 			return 2
 		}
-		if args[0] == "plan" {
+		switch args[0] {
+		case "plan":
 			return planCmd(pos, stdout, stderr)
+		case "preflight":
+			return preflightCmd(pos, stdout, stderr)
 		}
 		fmt.Fprint(stderr, subUsage[args[0]])
 		fmt.Fprintf(stderr, "error: %s is not implemented yet\n", args[0])
