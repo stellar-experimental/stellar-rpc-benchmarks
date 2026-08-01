@@ -20,9 +20,10 @@ import (
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
 )
 
-// The bench devbox's NVMe layout. campaign.sh only verified the mount when
-// BENCH_ROOT was left at its default, on the reasoning that an operator who
-// pointed BENCH_ROOT elsewhere knows what they mounted; this keeps that.
+// The bench devbox's NVMe layout. The bash campaign runner this package
+// replaces only verified the mount when BENCH_ROOT was left at its default, on
+// the reasoning that an operator who pointed BENCH_ROOT elsewhere knows what
+// they mounted; this keeps that.
 const (
 	defaultBenchRoot = "/mnt/nvme/bench"
 	nvmeMount        = "/mnt/nvme"
@@ -61,11 +62,13 @@ func (r *Result) warnf(format string, a ...any) {
 }
 
 // requireTool records a failure when tool is not on PATH, saying which part of
-// this config wants it.
-func (r *Result) requireTool(d Deps, tool, why string) {
+// this config wants it. It reports whether the tool is there.
+func (r *Result) requireTool(d Deps, tool, why string) bool {
 	if _, err := d.LookPath(tool); err != nil {
 		r.failf("%s not found in PATH — %s", tool, why)
+		return false
 	}
+	return true
 }
 
 // Run performs every check cfg needs. benchRoot is the storage root the
@@ -86,7 +89,8 @@ func Run(cfg *config.Config, benchRoot, binPath string, d Deps) Result {
 		res.requireTool(d, "go", fmt.Sprintf("building ref '%s' needs the Go toolchain", cfg.Ref))
 		// rustup installs outside PATH on the devbox, so a cargo that
 		// LookPath cannot see may still be the one the build uses — the same
-		// fallback campaign.sh does when recording the rustc version.
+		// fallback the bash campaign runner does when recording the rustc
+		// version.
 		if _, err := d.LookPath("cargo"); err != nil && !isExecutable(cargoBin()) {
 			res.failf("cargo not found in PATH or %s — building ref '%s' needs the Rust toolchain", cargoBin(), cfg.Ref)
 		}
@@ -101,25 +105,33 @@ func Run(cfg *config.Config, benchRoot, binPath string, d Deps) Result {
 	if strings.HasPrefix(cfg.PublishURI, "gs://") {
 		wantsGcloud = append(wantsGcloud, fmt.Sprintf("publish_uri '%s'", cfg.PublishURI))
 	}
+	havePublishCLI := true
 	if len(wantsGcloud) > 0 {
-		res.requireTool(d, "gcloud", "needed by "+strings.Join(wantsGcloud, ", "))
+		ok := res.requireTool(d, "gcloud", "needed by "+strings.Join(wantsGcloud, ", "))
+		// wantsGcloud also collects packs-gs datasets, and a gcloud needed only
+		// by a dataset must not suppress an s3:// listing.
+		if strings.HasPrefix(cfg.PublishURI, "gs://") {
+			havePublishCLI = ok
+		}
 	}
 
 	// Only publishing needs the aws CLI. bsb-s3 datasets deliberately do not
 	// appear here: the bench binary's own SDK reads that public bucket, with
 	// no CLI and no credentials.
 	if strings.HasPrefix(cfg.PublishURI, "s3://") {
-		res.requireTool(d, "aws", fmt.Sprintf("needed by publish_uri '%s'", cfg.PublishURI))
+		havePublishCLI = res.requireTool(d, "aws", fmt.Sprintf("needed by publish_uri '%s'", cfg.PublishURI))
 	}
 
-	if cfg.PublishURI != "" {
+	// A listing cannot succeed without its CLI, and a missing CLI is already a
+	// failure above; running it anyway reports one root cause twice.
+	if cfg.PublishURI != "" && havePublishCLI {
 		if err := d.ListRoot(cfg.PublishURI); err != nil {
 			res.failf("cannot list publish_uri '%s': %s — the campaign would only discover this at its publish step, hours from now", cfg.PublishURI, err)
 		}
 	}
 
-	// Port of campaign.sh: the mount is only checked for the default root, and
-	// only where a mountpoint command exists (macOS has none).
+	// Ported from the bash campaign runner: the mount is only checked for the
+	// default root, and only where a mountpoint command exists (macOS has none).
 	if benchRoot == defaultBenchRoot {
 		if _, err := d.LookPath("mountpoint"); err == nil {
 			if err := d.Mountpoint(nvmeMount); err != nil {

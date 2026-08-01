@@ -118,7 +118,14 @@ func List(uri string) (State, error) {
 	if ctx.Err() != nil {
 		return Empty, fmt.Errorf("%s took longer than %s", t.name, listTimeout)
 	}
-	if t.empty(out, errOut) {
+	// The empty-prefix signature only means anything when the CLI actually ran
+	// and exited on its own: a binary that never started, or one killed by a
+	// signal, is silent for reasons that are not emptiness.
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		return Empty, &ListError{ExitCode: -1, Detail: runErr.Error()}
+	}
+	if exitErr.Exited() && t.empty(out, errOut) {
 		return Empty, nil
 	}
 	detail := diagnosis(errOut)

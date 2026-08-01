@@ -356,6 +356,18 @@ func TestListStates(t *testing.T) {
 	}
 }
 
+func TestAMissingCLIIsNotAnEmptyPrefix(t *testing.T) {
+	// Silence is aws's empty signature only when aws actually ran. A CLI that
+	// never started is silent too, and reading that as "empty" would skip the
+	// immutability check and pass a credential check that never happened.
+	t.Setenv("PATH", t.TempDir())
+	for _, uri := range []string{"s3://bucket/results/", "gs://bucket/results/"} {
+		if _, err := List(uri); err == nil {
+			t.Errorf("List(%s) = nil error with no CLI on PATH", uri)
+		}
+	}
+}
+
 func TestDiagnosisKeepsTheErrorNotTheRemediation(t *testing.T) {
 	stderr := "ERROR: (gcloud.storage.ls) There was a problem refreshing your current auth tokens\nPlease run:\n\n  $ gcloud auth login\n"
 	if got, want := diagnosis(stderr), "ERROR: (gcloud.storage.ls) There was a problem refreshing your current auth tokens"; got != want {

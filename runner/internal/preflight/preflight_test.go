@@ -243,6 +243,22 @@ func TestPublishRootListable(t *testing.T) {
 			t.Errorf("failures = %q, want none", res.Failures)
 		}
 	})
+
+	t.Run("a missing CLI is reported once, not twice", func(t *testing.T) {
+		called := false
+		d := okDeps()
+		d.LookPath = missing("gcloud")
+		d.ListRoot = func(string) error { called = true; return os.ErrPermission }
+		cfg := testConfig(func(c *config.Config) { c.PublishURI = "gs://bucket/results" })
+		res := Run(cfg, t.TempDir(), "", d)
+		if called {
+			t.Error("ListRoot was called although gcloud is not installed")
+		}
+		if len(res.Failures) != 1 {
+			t.Fatalf("failures = %q, want the missing gcloud only", res.Failures)
+		}
+		has(t, res.Failures, "gcloud not found in PATH")
+	})
 }
 
 func TestMountCheck(t *testing.T) {
