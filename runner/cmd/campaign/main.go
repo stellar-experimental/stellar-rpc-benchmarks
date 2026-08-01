@@ -1,6 +1,6 @@
 // Command campaign runs config-driven benchmark campaigns for stellar-rpc's
-// full-history bench subcommands. It is the Go successor to
-// runner/campaign.sh and runner/publish.sh.
+// full-history bench subcommands. It is the Go successor to the bash campaign
+// runner it replaces, and to runner/publish.sh.
 package main
 
 import (

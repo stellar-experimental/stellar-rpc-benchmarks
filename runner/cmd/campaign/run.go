@@ -21,7 +21,8 @@ const startedAtLayout = "2006-01-02T15:04:05Z"
 
 // runCmd runs a campaign: converge the build clone, resolve the ref, preflight
 // the machine, then walk the plan into a results bundle. It is the successor to
-// campaign.sh's main sequence, in the same order, for the same reasons.
+// the main sequence of the bash campaign runner, in the same order, for the
+// same reasons.
 func runCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	if len(pos) != 1 {
 		fmt.Fprint(stderr, subUsage["run"])
@@ -50,8 +51,9 @@ func runCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 }
 
 // dryRun prints the plan and executes nothing — no clone, no lock, no
-// directory, exactly as `campaign.sh --dry-run` did. Whatever the clone already
-// knows is used; what it does not know is planned with a placeholder sha.
+// directory, exactly as the bash campaign runner's --dry-run did. Whatever the
+// clone already knows is used; what it does not know is planned with a
+// placeholder sha.
 func dryRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string, stdout, stderr io.Writer) int {
 	run.Notef(stdout, "dry run: printing commands only — nothing is built, downloaded, or executed")
 	run.Notef(stdout, "source: %s @ %s → %s (the build clone is not touched)", cfg.Repo, cfg.Ref, src)
