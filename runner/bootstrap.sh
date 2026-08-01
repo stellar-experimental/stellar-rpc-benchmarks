@@ -54,7 +54,7 @@ esac
 # --- system packages ---------------------------------------------------------
 note "apt packages"
 sudo apt-get update -qq
-sudo apt-get install -y -qq build-essential git jq pkg-config cmake ninja-build \
+sudo apt-get install -y -qq build-essential curl git jq pkg-config cmake ninja-build \
   tmux libsnappy-dev liblz4-dev zlib1g-dev
 
 # --- cloud CLIs: only some campaigns need them, so warn rather than fail -----

@@ -1,9 +1,10 @@
 // Package config loads and validates campaign configs: TOML in, a validated
 // Config out, with unknown keys and out-of-range values rejected up front.
 //
-// The rules here are ported from runner/campaign.sh's validation block; its
-// error messages are operator UX, so they are reproduced with the same
-// specificity, naming the TOML key instead of the bash variable.
+// The rules here are ported from the validation block of the bash campaign
+// runner this package replaces; its error messages are operator UX, so they are
+// reproduced with the same specificity, naming the TOML key instead of the bash
+// variable.
 package config
 
 import (
@@ -19,7 +20,8 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Defaults for the keys that have one, matching campaign.sh.
+// Defaults for the keys that have one, matching the bash campaign runner this
+// package replaces.
 const (
 	DefaultRepo          = "https://github.com/stellar/stellar-rpc.git"
 	DefaultRef           = "feature/full-history"
