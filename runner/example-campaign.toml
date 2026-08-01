@@ -1,0 +1,110 @@
+# Example campaign config. Copy this file, adjust the keys, and run it from
+# runner/:
+#
+#   cd runner
+#   BENCH_ROOT=/mnt/nvme/bench go run ./cmd/campaign run my-campaign.toml
+#
+# Swap `run` for `plan` to print the command plan without touching anything, or
+# add --dry-run to `run` for the same plan with the resume and bundle paths
+# resolved. Both work on any machine — nothing is built, downloaded, or
+# benchmarked. The one exception is `run --dry-run --resume`, which needs the
+# build clone on the box: a resume is only valid against the commit its bundle
+# was benchmarked with, so the ref has to resolve for real.
+#
+# Every key is listed below with its default. Unknown keys are rejected rather
+# than ignored, so a typo fails in the first second instead of an hour in.
+# runner/README.md § Config reference is the authoritative description of each.
+
+# Campaign name (required; [A-Za-z0-9._-]+). Results land in
+# $BENCH_ROOT/results/<name>-<sha>-<stamp>/ and the bundle tarball carries the
+# same run id.
+name = "example"
+
+# Where stellar-rpc comes from: a git URL or an absolute local path. The runner
+# maintains a persistent build clone of it at $BENCH_ROOT/src; the source itself
+# is never modified. To benchmark local work-in-progress, point this at a local
+# stellar-rpc checkout — only committed state reachable from repo is
+# benchmarkable.
+#repo = "https://github.com/stellar/stellar-rpc.git"
+
+# Git ref to benchmark, resolved in the build clone after fetching repo's
+# branches and tags. Default: feature/full-history, the branch this whole suite
+# benchmarks. The ref is built into a versioned binary
+# ($BENCH_ROOT/bin/stellar-rpc-<sha>).
+#ref = "feature/full-history"
+
+# Which ingest benchmarks to run per (dataset, chunk): cold | hot | both | none
+# (required).
+ingest = "both"
+
+# Whether to run the query benchmark suites after ingest: true | false
+# (required — there is no default). Query-hot additionally needs the hot DB a
+# hot ingest leaves behind, so it only runs when ingest is hot or both.
+query = false
+
+# Pace the hot ingest at a fixed ledger close interval — a Go duration, e.g.
+# "2s", "1s", "600ms". Default "0" = unpaced catch-up ingestion.
+#close_interval = "2s"
+
+# Repetitions per (dataset, chunk) cell. Default 5, which is what the
+# converter's median/min-max aggregation assumes.
+#runs = 5
+
+# Query tuning, used only when query = true: the concurrency sweep and the
+# per-benchmark iteration counts. Defaults shown.
+#query_concurrency = [1, 4, 16]
+#cold_iters = 100
+#hot_iters = 200
+
+# bench-ingest cold --workers. Default 1.
+#workers = 1
+
+# Cap the hot ingest at this many ledgers. Default 0 = the whole range.
+#hot_num_ledgers = 0
+
+# Publish the finished bundle to object storage (gs:// or s3://) at the end of
+# the campaign. Default "" = keep results local; publish later by hand with
+# `campaign publish <bundle> <dest-root>`.
+#publish_uri = "gs://rpc-full-history/benchmarks"
+
+# Datasets to benchmark: one [[dataset]] table each, with a unique name and the
+# chunk IDs this campaign runs. Every kind converges on a local cold pack root
+# (the directory holding ledgers/, events/, txhash/) that the legs then read;
+# they differ only in how that root is materialized. Uncomment the kind you
+# want — a copy-paste of this file starts with the fetched-packs one.
+
+# packs-gs: location is a gs:// prefix of a cold pack tree, fetched once into
+# $BENCH_ROOT/golden/<name>/ and reused by every later campaign (rm -rf that
+# directory to force a re-fetch).
+[[dataset]]
+name = "mydata"
+kind = "packs-gs"
+location = "gs://my-bucket/ledgers/mydata/packs/cold"
+chunks = [1, 2]
+
+# packs-local: location is a cold pack root you already have on this machine.
+# It is used in place and never written to.
+#[[dataset]]
+#name = "mylocal"
+#kind = "packs-local"
+#location = "/mnt/nvme/packs/mydata"
+#chunks = [1]
+
+# bsb-s3: location is an S3 bucket path; an untimed cold backfill materializes
+# $BENCH_ROOT/golden/<name>/ one chunk at a time.
+#[[dataset]]
+#name = "frompubnet"
+#kind = "bsb-s3"
+#location = "my-bucket/ledgers/pubnet"
+#chunks = [1]
+
+# fixture: generated data, no network and no pack tree of your own. It takes
+# `ledgers` instead of a location — the per-chunk ledger count, 0 for the whole
+# 10,000-ledger chunk or at least 10000, because the untimed cold freeze that
+# turns the generated pack into golden packs streams a whole chunk and cannot
+# freeze a partial one.
+#[[dataset]]
+#name = "myfixture"
+#kind = "fixture"
+#ledgers = 10000
+#chunks = [1]
