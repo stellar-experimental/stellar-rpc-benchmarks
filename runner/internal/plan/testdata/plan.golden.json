@@ -1,0 +1,1013 @@
+{
+  "schema_version": 1,
+  "run_id": "golden-deadbeef-20260101T000000Z",
+  "bench_root": "/bench",
+  "src": "/bench/src",
+  "bin": "/bench/bin/stellar-rpc-deadbeef",
+  "results_dir": "/bench/results/golden-deadbeef-20260101T000000Z",
+  "tarball": "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",
+  "steps": [
+    {
+      "id": "build",
+      "kind": "build",
+      "timed": false,
+      "argv": [
+        [
+          "git",
+          "-C",
+          "/bench/src",
+          "-c",
+          "advice.detachedHead=false",
+          "checkout",
+          "-q",
+          "--detach",
+          "deadbeefcafebabefeedface1234567890abcdef"
+        ],
+        [
+          "make",
+          "-C",
+          "/bench/src",
+          "build-libs"
+        ],
+        [
+          "make",
+          "-C",
+          "/bench/src",
+          "build-rpc-v2"
+        ],
+        [
+          "mv",
+          "/bench/src/stellar-rpc-v2",
+          "/bench/bin/stellar-rpc-deadbeef"
+        ]
+      ]
+    },
+    {
+      "id": "dataset-packs",
+      "kind": "dataset",
+      "timed": false,
+      "argv": [
+        [
+          "gcloud",
+          "storage",
+          "rsync",
+          "-r",
+          "gs://bucket/cold",
+          "/bench/golden/packs.partial"
+        ]
+      ],
+      "pre_clean": [
+        "/bench/golden/packs"
+      ],
+      "dataset": {
+        "name": "packs",
+        "kind": "packs-gs",
+        "location": "gs://bucket/cold",
+        "root": "/bench/golden/packs"
+      }
+    },
+    {
+      "id": "dataset-fix",
+      "kind": "dataset",
+      "timed": false,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "fixture",
+          "--pack-dir=/bench/fixture/fix/ledgers",
+          "--chunk=1",
+          "--num-ledgers=10000",
+          "--seed=1"
+        ],
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "fixture",
+          "--pack-dir=/bench/fixture/fix/ledgers",
+          "--chunk=2",
+          "--num-ledgers=10000",
+          "--seed=1"
+        ],
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/fixture/fix/ledgers",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--cold-out-dir=/bench/golden/fix.partial",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/golden-fix-c1"
+        ],
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/fixture/fix/ledgers",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--cold-out-dir=/bench/golden/fix.partial",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/golden-fix-c2"
+        ]
+      ],
+      "pre_clean": [
+        "/bench/fixture/fix",
+        "/bench/golden/fix",
+        "/bench/golden/fix.partial"
+      ],
+      "needs": [
+        "build"
+      ],
+      "dataset": {
+        "name": "fix",
+        "kind": "fixture",
+        "ledgers": 10000,
+        "root": "/bench/golden/fix",
+        "stage": "/bench/fixture/fix/ledgers"
+      }
+    },
+    {
+      "id": "ingest-cold-packs-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/packs/1",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c1-run1",
+      "pre_clean": [
+        "/bench/scratch/packs/1"
+      ],
+      "post_clean": [
+        "/bench/scratch/packs/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-cold-packs-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/packs/1",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c1-run2",
+      "pre_clean": [
+        "/bench/scratch/packs/1"
+      ],
+      "post_clean": [
+        "/bench/scratch/packs/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-cold-packs-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/packs/2",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c2-run1",
+      "pre_clean": [
+        "/bench/scratch/packs/2"
+      ],
+      "post_clean": [
+        "/bench/scratch/packs/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-cold-packs-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/packs/2",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-packs-c2-run2",
+      "pre_clean": [
+        "/bench/scratch/packs/2"
+      ],
+      "post_clean": [
+        "/bench/scratch/packs/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-cold-fix-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/fix/1",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c1-run1",
+      "pre_clean": [
+        "/bench/scratch/fix/1"
+      ],
+      "post_clean": [
+        "/bench/scratch/fix/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-cold-fix-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/fix/1",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c1-run2",
+      "pre_clean": [
+        "/bench/scratch/fix/1"
+      ],
+      "post_clean": [
+        "/bench/scratch/fix/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-cold-fix-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/fix/2",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c2-run1",
+      "pre_clean": [
+        "/bench/scratch/fix/2"
+      ],
+      "post_clean": [
+        "/bench/scratch/fix/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-cold-fix-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "cold",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--workers=1",
+          "--cold-out-dir=/bench/scratch/fix/2",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-fix-c2-run2",
+      "pre_clean": [
+        "/bench/scratch/fix/2"
+      ],
+      "post_clean": [
+        "/bench/scratch/fix/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-hot-packs-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=1",
+          "--hot-dir=/bench/hot/packs/1",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c1-run1",
+      "pre_clean": [
+        "/bench/hot/packs/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-hot-packs-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=1",
+          "--hot-dir=/bench/hot/packs/1",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c1-run2",
+      "pre_clean": [
+        "/bench/hot/packs/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-hot-packs-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=2",
+          "--hot-dir=/bench/hot/packs/2",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c2-run1",
+      "pre_clean": [
+        "/bench/hot/packs/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-hot-packs-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/packs/ledgers",
+          "--start-chunk=2",
+          "--hot-dir=/bench/hot/packs/2",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-packs-c2-run2",
+      "pre_clean": [
+        "/bench/hot/packs/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "ingest-hot-fix-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=1",
+          "--hot-dir=/bench/hot/fix/1",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c1-run1",
+      "pre_clean": [
+        "/bench/hot/fix/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-hot-fix-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=1",
+          "--hot-dir=/bench/hot/fix/1",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c1-run2",
+      "pre_clean": [
+        "/bench/hot/fix/1"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-hot-fix-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=2",
+          "--hot-dir=/bench/hot/fix/2",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c2-run1",
+      "pre_clean": [
+        "/bench/hot/fix/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "ingest-hot-fix-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-ingest",
+          "hot",
+          "--source=pack",
+          "--pack-dir=/bench/golden/fix/ledgers",
+          "--start-chunk=2",
+          "--hot-dir=/bench/hot/fix/2",
+          "--close-interval=2s",
+          "--num-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-fix-c2-run2",
+      "pre_clean": [
+        "/bench/hot/fix/2"
+      ],
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "query-cold-packs-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/packs",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c1-run1",
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "query-cold-packs-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/packs",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c1-run2",
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "query-cold-packs-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/packs",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c2-run1",
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "query-cold-packs-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/packs",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-packs-c2-run2",
+      "needs": [
+        "build",
+        "dataset-packs"
+      ]
+    },
+    {
+      "id": "query-cold-fix-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/fix",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c1-run1",
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "query-cold-fix-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/fix",
+          "--start-chunk=1",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c1-run2",
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "query-cold-fix-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/fix",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c2-run1",
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "query-cold-fix-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "cold",
+          "--cold-dir=/bench/golden/fix",
+          "--start-chunk=2",
+          "--num-chunks=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=100",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-fix-c2-run2",
+      "needs": [
+        "build",
+        "dataset-fix"
+      ]
+    },
+    {
+      "id": "query-hot-packs-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/packs/1",
+          "--chunk=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c1-run1",
+      "needs": [
+        "build",
+        "dataset-packs",
+        "ingest-hot-packs-c1-run2"
+      ]
+    },
+    {
+      "id": "query-hot-packs-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/packs/1",
+          "--chunk=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c1-run2",
+      "needs": [
+        "build",
+        "dataset-packs",
+        "ingest-hot-packs-c1-run2"
+      ]
+    },
+    {
+      "id": "query-hot-packs-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/packs/2",
+          "--chunk=2",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c2-run1",
+      "needs": [
+        "build",
+        "dataset-packs",
+        "ingest-hot-packs-c2-run2"
+      ]
+    },
+    {
+      "id": "query-hot-packs-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/packs/2",
+          "--chunk=2",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-packs-c2-run2",
+      "needs": [
+        "build",
+        "dataset-packs",
+        "ingest-hot-packs-c2-run2"
+      ]
+    },
+    {
+      "id": "query-hot-fix-c1-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/fix/1",
+          "--chunk=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c1-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c1-run1",
+      "needs": [
+        "build",
+        "dataset-fix",
+        "ingest-hot-fix-c1-run2"
+      ]
+    },
+    {
+      "id": "query-hot-fix-c1-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/fix/1",
+          "--chunk=1",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c1-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c1-run2",
+      "needs": [
+        "build",
+        "dataset-fix",
+        "ingest-hot-fix-c1-run2"
+      ]
+    },
+    {
+      "id": "query-hot-fix-c2-run1",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/fix/2",
+          "--chunk=2",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c2-run1"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c2-run1",
+      "needs": [
+        "build",
+        "dataset-fix",
+        "ingest-hot-fix-c2-run2"
+      ]
+    },
+    {
+      "id": "query-hot-fix-c2-run2",
+      "kind": "leg",
+      "timed": true,
+      "argv": [
+        [
+          "/bench/bin/stellar-rpc-deadbeef",
+          "bench-query",
+          "hot",
+          "--hot-dir=/bench/hot/fix/2",
+          "--chunk=2",
+          "--types=ledgers,txpage,txhash,events",
+          "--query-concurrency=1,4,16",
+          "--iters=200",
+          "--warmup=20",
+          "--sample-ledgers=50000",
+          "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c2-run2"
+        ]
+      ],
+      "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-hot-fix-c2-run2",
+      "needs": [
+        "build",
+        "dataset-fix",
+        "ingest-hot-fix-c2-run2"
+      ]
+    },
+    {
+      "id": "tarball",
+      "kind": "tarball",
+      "timed": false,
+      "argv": [
+        [
+          "tar",
+          "-C",
+          "/bench/results",
+          "-czf",
+          "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",
+          "golden-deadbeef-20260101T000000Z"
+        ]
+      ]
+    },
+    {
+      "id": "publish",
+      "kind": "publish",
+      "timed": false,
+      "argv": [],
+      "needs": [
+        "tarball"
+      ],
+      "publish_uri": "gs://bucket/results"
+    }
+  ]
+}
