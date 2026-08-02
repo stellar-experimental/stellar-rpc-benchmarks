@@ -1,0 +1,38 @@
+name: Shellcheck runner
+
+# Lint the shell that is left: the devbox bootstrap, the results-side ingest
+# script, and the stub binary the campaign runner's e2e suite drives. This is a
+# static gate only — the runner itself is exercised for real on the benchmark
+# devbox, not in CI (its Go side is gated by runner-go.yml).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "runner/**"
+      - "scripts/**"
+      - ".github/workflows/shellcheck.yml"
+  pull_request:
+    paths:
+      - "runner/**"
+      - "scripts/**"
+      - ".github/workflows/shellcheck.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Syntax-check (bash -n)
+        run: |
+          for f in runner/*.sh scripts/*.sh runner/cmd/campaign/testdata/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: Shellcheck
+        run: shellcheck runner/*.sh scripts/*.sh runner/cmd/campaign/testdata/*.sh
