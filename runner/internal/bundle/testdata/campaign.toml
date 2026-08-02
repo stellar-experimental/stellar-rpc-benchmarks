@@ -1,0 +1,22 @@
+# Golden-test campaign for the metadata.json contract: one fetched pack tree
+# and one generated fixture, so the manifest exercises both a real location and
+# the fixture quirk (ledger count recorded in the location field).
+name = "golden"
+ref = "feature/full-history"
+ingest = "both"
+query = true
+runs = 5
+close_interval = "2s"
+hot_num_ledgers = 50000
+
+[[dataset]]
+name = "packs"
+kind = "packs-gs"
+location = "gs://bucket/cold"
+chunks = [1, 2]
+
+[[dataset]]
+name = "fix"
+kind = "fixture"
+ledgers = 10000
+chunks = [1]

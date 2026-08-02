@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "run_id": "golden-deadbeef-20260101T000000Z",
+  "campaign": {
+    "name": "golden",
+    "config_file": "campaign.toml",
+    "ref": "feature/full-history",
+    "built_commit": "deadbeefcafebabefeedface1234567890abcdef",
+    "ingest": "both",
+    "query": "yes",
+    "close_interval": "2s",
+    "runs": 5,
+    "query_concurrency": "1,4,16",
+    "cold_iters": 100,
+    "hot_iters": 200,
+    "workers": 1,
+    "hot_num_ledgers": 50000
+  },
+  "datasets": [
+    {
+      "name": "packs",
+      "kind": "packs-gs",
+      "location": "gs://bucket/cold",
+      "chunks": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "fix",
+      "kind": "fixture",
+      "location": "10000",
+      "chunks": [
+        1
+      ]
+    }
+  ],
+  "hardware": {
+    "instance_type": "i4i.4xlarge",
+    "instance_id": "i-0123456789abcdef0",
+    "uname": "Linux 6.8.0-1029-aws x86_64",
+    "cpus": 16,
+    "mem_total_kb": 131033600
+  },
+  "hostname": "bench-devbox",
+  "started_at": "2026-01-01T00:00:00Z",
+  "finished_at": "2026-01-01T04:30:00Z",
+  "status": "finished"
+}
