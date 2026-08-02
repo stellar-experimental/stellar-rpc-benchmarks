@@ -184,11 +184,58 @@ class BinaryMismatchTests(unittest.TestCase):
         inv_path = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")
         with open(inv_path) as f:
             inv = json.load(f)
-        inv["binary"]["commit_hash"] = "f" * 40
+        inv["binary"]["commitHash"] = "f" * 40
         with open(inv_path, "w") as f:
             json.dump(inv, f)
         _, warnings, _ = run_convert(root)
         self.assertTrue(any("binary commit mismatch" in w for w in warnings))
+
+
+class InvocationSchemaTests(unittest.TestCase):
+    def _rewrite_invocations(self, root, mutate):
+        for name in os.listdir(root):
+            p = os.path.join(root, name, "invocation.json")
+            if not os.path.isfile(p):
+                continue
+            with open(p) as f:
+                inv = json.load(f)
+            mutate(inv)
+            with open(p, "w") as f:
+                json.dump(inv, f)
+
+    def test_legacy_snake_case_binary_still_resolves(self):
+        # Pre-#907 drafts of invocation.json used snake_case keys; the
+        # converter accepts both spellings of the binary identity.
+        tmp = tempfile.mkdtemp()
+        root = os.path.join(tmp, "snake")
+        fixtures.build_campaign_bundle(root, paced=True)
+
+        def to_snake(inv):
+            b = inv["binary"]
+            b["commit_hash"] = b.pop("commitHash")
+            b["build_timestamp"] = b.pop("buildTimestamp")
+
+        self._rewrite_invocations(root, to_snake)
+        data, warnings, _ = run_convert(root)
+        self.assertEqual(data["build"]["commit"], fixtures.COMMIT)
+        self.assertEqual(data["build"]["version"], fixtures.VERSION)
+        self.assertFalse(any("binary commit mismatch" in w for w in warnings))
+
+    def test_failed_run_invocation_warns(self):
+        # A failed run writes invocation.json too, with an `error` field
+        # (stellar-rpc#907) — its CSVs are partial, so conversion must warn.
+        tmp = tempfile.mkdtemp()
+        root = os.path.join(tmp, "failed")
+        fixtures.build_campaign_bundle(root, paced=True)
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")
+        with open(p) as f:
+            inv = json.load(f)
+        inv["error"] = "context deadline exceeded"
+        with open(p, "w") as f:
+            json.dump(inv, f)
+        _, warnings, _ = run_convert(root)
+        self.assertTrue(any("FAILED run" in w and "ingest-hot-sac-6000-c1-run1" in w
+                            for w in warnings))
 
 
 class LegacyBundleTests(unittest.TestCase):
