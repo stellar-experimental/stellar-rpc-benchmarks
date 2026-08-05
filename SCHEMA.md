@@ -255,7 +255,7 @@ additive, so manifest-less bundles convert unchanged:
   Source of truth for run identity (`run_id` → default `run_id`; `started_at` → default
   `run_date`), the `campaign` config (incl. `close_interval` → `campaign.close_interval_ns`),
   the structured `hardware` object, and `hostname`. `datasets[].kind` is the dataset
-  **transport** (`packs-local|packs-gs|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
+  **transport** (`packs-local|packs-gs|packs-s3|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
   campaign display order. `finished_at` is absent until the campaign finishes (the runner
   writes the manifest up front), and `campaign.resumed` appears only on a bundle built
   across more than one `--resume` session. `status` (`running|finished|failed`) is

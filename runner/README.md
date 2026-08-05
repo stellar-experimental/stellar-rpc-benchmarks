@@ -75,9 +75,9 @@ and says so. This is the same data the runner writes to `plan.json` in the bundl
 
 Answer, in seconds, whether this machine has what this config needs: `git` and `make`,
 the Go and Rust toolchains when a build is going to happen, `gcloud` for `packs-gs`
-datasets and `gs://` publishing, `aws` for `s3://` publishing, a listable `publish_uri`
-with today's credentials, the NVMe mount when `BENCH_ROOT` is left at its default, and
-free disk. Failures name both the missing thing and the config key that wants it.
+datasets and `gs://` publishing, `aws` for `packs-s3` datasets and `s3://` publishing, a
+listable `publish_uri` with today's credentials, the NVMe mount when `BENCH_ROOT` is left
+at its default, and free disk. Failures name both the missing thing and the config key that wants it.
 `campaign run` does this automatically unless `--no-preflight` is passed.
 
 ### `campaign publish <results-dir> [dest-root] [flags]`
@@ -128,7 +128,7 @@ Each `[[dataset]]` table:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `name` | string | `[A-Za-z0-9._-]+`, unique across the config. Names the golden directory, the leg ids, and the converter's unit ids. |
-| `kind` | string | `packs-local` \| `packs-gs` \| `bsb-s3` \| `fixture`. |
+| `kind` | string | `packs-local` \| `packs-gs` \| `packs-s3` \| `bsb-s3` \| `fixture`. |
 | `location` | string | Meaning depends on the kind (below). Invalid for `fixture`. |
 | `chunks` | int array | Chunk IDs to benchmark; at least one, non-negative, no duplicates. |
 | `ledgers` | int | **`fixture` only** (and required there): the per-chunk ledger count. `0` = the whole chunk; otherwise ≥ 10000, because the untimed cold freeze streams a whole 10,000-ledger chunk and cannot freeze a partial one. |
@@ -141,6 +141,9 @@ that root is materialized:
   written to.
 - **`packs-gs`** — `location` is a `gs://` prefix of the same tree; fetched once into
   `$BENCH_ROOT/golden/<name>/` and reused by later campaigns.
+- **`packs-s3`** — the same fetch from an `s3://` prefix, with `aws s3 sync`. On EC2 the
+  CLI signs with the box's instance role, which is what reads the private bucket the
+  synthetic-ledger packs live in.
 - **`bsb-s3`** — `location` is an S3 bucket path; an untimed cold backfill materializes
   `$BENCH_ROOT/golden/<name>/`, one chunk at a time.
 - **`fixture`** — no location and no network: each chunk in `chunks` is generated with
