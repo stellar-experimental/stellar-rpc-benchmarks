@@ -200,6 +200,17 @@ kind = "fixture"
 ledgers = 0
 chunks = [0]
 `},
+		{"packs-s3 dataset", `
+name = "p"
+ingest = "cold"
+query = true
+
+[[dataset]]
+name = "packs"
+kind = "packs-s3"
+location = "s3://bucket/cold"
+chunks = [1]
+`},
 		{"bsb-s3 dataset", `
 name = "b"
 ingest = "cold"
@@ -376,7 +387,7 @@ chunks = [8]
 		{
 			name: "unknown dataset kind",
 			src:  strings.Replace(minimal, `kind = "packs-local"`, `kind = "packs-http"`, 1),
-			want: []string{"dataset 'local'", "kind must be packs-local|packs-gs|bsb-s3|fixture", "packs-http"},
+			want: []string{"dataset 'local'", "kind must be packs-local|packs-gs|packs-s3|bsb-s3|fixture", "packs-http"},
 		},
 		{
 			name: "packs-local without location",
@@ -390,6 +401,22 @@ chunks = [8]
 				`location = "/data/packs"`, `location = "s3://bucket/cold"`,
 			).Replace(minimal),
 			want: []string{"dataset 'local'", "packs-gs location must start with gs://", "s3://bucket/cold"},
+		},
+		{
+			name: "packs-s3 location is not s3://",
+			src: strings.NewReplacer(
+				`kind = "packs-local"`, `kind = "packs-s3"`,
+				`location = "/data/packs"`, `location = "gs://bucket/cold"`,
+			).Replace(minimal),
+			want: []string{"dataset 'local'", "packs-s3 location must start with s3://", "gs://bucket/cold"},
+		},
+		{
+			name: "packs-s3 without location",
+			src: strings.NewReplacer(
+				`kind = "packs-local"`, `kind = "packs-s3"`,
+				`location = "/data/packs"`, "",
+			).Replace(minimal),
+			want: []string{"dataset 'local'", "packs-s3 location must start with s3://"},
 		},
 		{
 			name: "bsb-s3 without location",

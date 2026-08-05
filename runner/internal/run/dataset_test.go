@@ -9,8 +9,8 @@ import (
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
-// dsStep is a dataset step whose commands are shell scripts standing in for
-// gcloud rsync and the bench binary: they write into <root>.partial exactly
+// dsStep is a dataset step whose commands are shell scripts standing in for the
+// fetch CLIs and the bench binary: they write into <root>.partial exactly
 // where the real tools do, which is all the choreography under test cares
 // about. PreClean mirrors what plan.Build populates for the kind, since that
 // list — not the executor — is what decides which directories get wiped.
@@ -26,6 +26,9 @@ func dsStep(name, kind, root string, argv ...[]string) plan.Step {
 	}
 	switch kind {
 	case config.KindPacksGS:
+		s.PreClean = []string{root}
+	case config.KindPacksS3:
+		s.Dataset.Location = "s3://bucket/cold"
 		s.PreClean = []string{root}
 	case config.KindBSBS3:
 		s.PreClean = []string{root, root + ".partial"}
@@ -135,6 +138,39 @@ func TestPrepareDatasetPacksGS(t *testing.T) {
 		got.assertStatuses(t, StatusFailed)
 		assertGone(t, root)
 		assertExists(t, root+".partial")
+	})
+}
+
+// packs-s3 shares the fetch path with packs-gs, so these two cases pin that it
+// really is that path: the partial is staged and renamed, and packs already
+// there are left alone.
+func TestPrepareDatasetPacksS3(t *testing.T) {
+	t.Run("the partial is staged and renamed onto the root", func(t *testing.T) {
+		tmp := t.TempDir()
+		root := filepath.Join(tmp, "golden", "pubnet")
+		mustWrite(t, root+".partial/half.pack", "resumable")
+
+		got := prepare(t, dsStep("pubnet", config.KindPacksS3, root, materialize(root+".partial")))
+		got.assertStatuses(t, StatusOK)
+		got.assertLogHas(t, "dataset pubnet: fetch s3://bucket/cold")
+		got.assertLogHas(t, "  $ mkdir -p "+root+".partial")
+		got.assertLogHas(t, "  $ mv "+root+".partial "+root)
+
+		assertExists(t, filepath.Join(root, "ledgers", "chunk-1.pack"))
+		assertExists(t, filepath.Join(root, "half.pack")) // the resumed bytes
+		assertGone(t, root+".partial")
+	})
+
+	t.Run("golden packs already there short-circuit the fetch", func(t *testing.T) {
+		tmp := t.TempDir()
+		root := filepath.Join(tmp, "golden", "pubnet")
+		mustWrite(t, filepath.Join(root, "ledgers", "chunk-1.pack"), "packs")
+		ran := filepath.Join(tmp, "ran.txt")
+
+		got := prepare(t, dsStep("pubnet", config.KindPacksS3, root, marker(ran)))
+		got.assertStatuses(t, StatusOK)
+		got.assertLogHas(t, "dataset pubnet: golden packs already at "+root+" — skipping fetch")
+		assertGone(t, ran)
 	})
 }
 

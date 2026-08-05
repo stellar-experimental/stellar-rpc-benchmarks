@@ -37,6 +37,7 @@ const (
 const (
 	KindPacksLocal = "packs-local"
 	KindPacksGS    = "packs-gs"
+	KindPacksS3    = "packs-s3"
 	KindBSBS3      = "bsb-s3"
 	KindFixture    = "fixture"
 )
@@ -260,6 +261,10 @@ func (d *Dataset) validate(seen map[string]bool) error {
 		if !strings.HasPrefix(d.Location, "gs://") {
 			return fmt.Errorf("config: dataset '%s': packs-gs location must start with gs:// (got '%s')", d.Name, d.Location)
 		}
+	case KindPacksS3:
+		if !strings.HasPrefix(d.Location, "s3://") {
+			return fmt.Errorf("config: dataset '%s': packs-s3 location must start with s3:// (got '%s')", d.Name, d.Location)
+		}
 	case KindBSBS3:
 		if d.Location == "" {
 			return fmt.Errorf("config: dataset '%s': bsb-s3 location must be an S3 bucket path", d.Name)
@@ -275,7 +280,7 @@ func (d *Dataset) validate(seen map[string]bool) error {
 			return fmt.Errorf("config: dataset '%s': fixture ledger count must be 0 or >= %d — the cold freeze streams the whole 10,000-ledger chunk (got '%d')", d.Name, minFixtureLedgers, n)
 		}
 	default:
-		return fmt.Errorf("config: dataset '%s': kind must be packs-local|packs-gs|bsb-s3|fixture (got '%s')", d.Name, d.Kind)
+		return fmt.Errorf("config: dataset '%s': kind must be packs-local|packs-gs|packs-s3|bsb-s3|fixture (got '%s')", d.Name, d.Kind)
 	}
 	if d.Kind != KindFixture && d.Ledgers != nil {
 		return fmt.Errorf("config: dataset '%s': ledgers is only valid for fixture datasets (kind is %s)", d.Name, d.Kind)

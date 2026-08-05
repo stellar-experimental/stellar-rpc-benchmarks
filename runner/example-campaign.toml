@@ -73,14 +73,23 @@ query = false
 # they differ only in how that root is materialized. Uncomment the kind you
 # want — a copy-paste of this file starts with the fetched-packs one.
 
-# packs-gs: location is a gs:// prefix of a cold pack tree, fetched once into
-# $BENCH_ROOT/golden/<name>/ and reused by every later campaign (rm -rf that
-# directory to force a re-fetch).
+# packs-s3: location is an s3:// prefix of a cold pack tree, fetched once with
+# `aws s3 sync` into $BENCH_ROOT/golden/<name>/ and reused by every later
+# campaign (rm -rf that directory to force a re-fetch). On EC2 the CLI signs
+# with the box's instance role, so a private bucket needs no credentials of its
+# own.
 [[dataset]]
 name = "mydata"
-kind = "packs-gs"
-location = "gs://my-bucket/ledgers/mydata/packs/cold"
+kind = "packs-s3"
+location = "s3://my-bucket/ledgers/mydata/packs/cold"
 chunks = [1, 2]
+
+# packs-gs: the same fetch from a gs:// prefix, with `gcloud storage rsync`.
+#[[dataset]]
+#name = "mydata"
+#kind = "packs-gs"
+#location = "gs://my-bucket/ledgers/mydata/packs/cold"
+#chunks = [1, 2]
 
 # packs-local: location is a cold pack root you already have on this machine.
 # It is used in place and never written to.

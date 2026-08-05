@@ -40,7 +40,7 @@ func prepareDataset(s plan.Step, out io.Writer) error {
 			return fmt.Errorf("dataset '%s': %s/ledgers not found — location must be a cold pack root", d.Name, d.Root)
 		}
 
-	case config.KindPacksGS:
+	case config.KindPacksGS, config.KindPacksS3:
 		if goldenPresent(d.Root) {
 			Notef(out, "dataset %s: golden packs already at %s — skipping fetch", d.Name, d.Root)
 			break
@@ -48,7 +48,7 @@ func prepareDataset(s plan.Step, out io.Writer) error {
 		Notef(out, "dataset %s: fetch %s", d.Name, d.Location)
 		// golden_present was false, so root is absent or an empty leftover, and
 		// the plan's pre_clean says to clear it — but not the partial, which
-		// rsync resumes into.
+		// the fetch resumes into.
 		if err := preClean(s, out); err != nil {
 			return err
 		}
@@ -118,9 +118,9 @@ func prepareDataset(s plan.Step, out io.Writer) error {
 }
 
 // preClean wipes what the plan says to wipe before a dataset materializes.
-// Which directories a kind clears — and, for packs-gs, which it deliberately
-// keeps — is a property of the kind, so the plan owns the list and a dry run
-// prints exactly the wipes the run performs.
+// Which directories a kind clears — and, for the fetching kinds, which it
+// deliberately keeps — is a property of the kind, so the plan owns the list and
+// a dry run prints exactly the wipes the run performs.
 func preClean(s plan.Step, out io.Writer) error {
 	if len(s.PreClean) == 0 {
 		return nil
