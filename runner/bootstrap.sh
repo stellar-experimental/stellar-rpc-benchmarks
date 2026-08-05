@@ -2,8 +2,9 @@
 #
 # Idempotent bootstrap for a full-history benchmark machine: an EC2 instance
 # with a local NVMe instance store (e.g. m6id.2xlarge) running Ubuntu 24.04.
-# It only provisions — NVMe mount, apt packages, Go, Rust, native libs, env;
-# the campaign CLI does all cloning-current and building. Safe to re-run any time —
+# It only provisions — NVMe mount, apt packages, the AWS CLI, Go, Rust, native
+# libs, env; the campaign CLI does all cloning-current and building. Safe to
+# re-run any time —
 # in particular after an instance stop/start, which wipes the NVMe instance
 # store (golden packs are re-downloaded and the build clone re-created by the
 # next bootstrap/campaign run).
@@ -11,13 +12,15 @@
 # Usage (on the machine):
 #   ./runner/bootstrap.sh
 #
-# Overridable: NVME_DEV (default /dev/nvme1n1), BENCH_ROOT (default
-# /mnt/nvme/bench), REPO (git URL or local path of stellar-rpc, default
-# https://github.com/stellar/stellar-rpc.git).
+# Overridable: NVME_DEV (default: the one disk whose lsblk model says "Instance
+# Storage"), BENCH_ROOT (default /mnt/nvme/bench), REPO (git URL or local path
+# of stellar-rpc, default https://github.com/stellar/stellar-rpc.git),
+# FSYNC_PROBE_WARN_ONLY=1 (downgrade the fsync-probe failure below to a warning,
+# for a dev machine that is not an EC2 box with a real instance store).
 #
 set -euo pipefail
 
-NVME_DEV="${NVME_DEV:-/dev/nvme1n1}"
+NVME_DEV="${NVME_DEV:-}"
 MOUNT=/mnt/nvme
 BENCH_ROOT="${BENCH_ROOT:-$MOUNT/bench}"
 REPO="${REPO:-https://github.com/stellar/stellar-rpc.git}"
@@ -25,7 +28,20 @@ SRC=$BENCH_ROOT/src
 
 note() { echo "== $*"; }
 
-# --- NVMe instance store: format if raw, mount if unmounted -----------------
+# --- NVMe instance store: discover, format if raw, mount if unmounted -------
+# Which nvme node the instance store gets depends on the instance type — nvme1n1
+# where an EBS root comes first, nvme0n1 on m6id — so find it by model instead of
+# assuming a number.
+if [ -z "$NVME_DEV" ]; then
+  found=()
+  while read -r dev; do found+=("$dev"); done \
+    < <(lsblk -dno NAME,MODEL | awk '/Instance Storage/ { print "/dev/" $1 }')
+  case ${#found[@]} in
+    1) NVME_DEV=${found[0]}; note "instance store: $NVME_DEV" ;;
+    0) echo "error: no disk whose model says 'Instance Storage' — this instance type may have none; set NVME_DEV to the device to use" >&2; exit 1 ;;
+    *) echo "error: ${#found[@]} instance-store disks (${found[*]}) — set NVME_DEV to the one to use" >&2; exit 1 ;;
+  esac
+fi
 [ -b "$NVME_DEV" ] || { echo "error: $NVME_DEV is not a block device" >&2; exit 1; }
 model=$(lsblk -no MODEL "$NVME_DEV" | head -1)
 case "$model" in
@@ -47,23 +63,44 @@ mkdir -p "$BENCH_ROOT"/{golden,scratch,hot,results}
 probe=$(dd if=/dev/zero of="$MOUNT/.fsync-probe" bs=4k count=2000 oflag=dsync 2>&1 | tail -1)
 rm -f "$MOUNT/.fsync-probe"
 note "fsync probe: $probe"
+# A box that absorbs fsync cannot produce a hot-commit number worth reading, and
+# nobody watches these logs when the campaign runs unattended — so it fails here
+# rather than an hour into fiction. FSYNC_PROBE_WARN_ONLY=1 is the way to
+# bootstrap a dev machine that was never going to be honest about durability.
 case "$probe" in
-  *GB/s*) echo "WARNING: GB/s-scale dsync writes — fsync is being absorbed; hot-commit numbers would be fiction" >&2 ;;
+  *GB/s*)
+    absorbed="GB/s-scale dsync writes — fsync is being absorbed; hot-commit numbers would be fiction"
+    if [ "${FSYNC_PROBE_WARN_ONLY:-}" = 1 ]; then
+      echo "WARNING: $absorbed" >&2
+    else
+      echo "error: $absorbed; set FSYNC_PROBE_WARN_ONLY=1 to bootstrap anyway" >&2
+      exit 1
+    fi
+    ;;
 esac
 
 # --- system packages ---------------------------------------------------------
 note "apt packages"
 sudo apt-get update -qq
 sudo apt-get install -y -qq build-essential curl git jq pkg-config cmake ninja-build \
-  tmux libsnappy-dev liblz4-dev zlib1g-dev
+  tmux unzip libsnappy-dev liblz4-dev zlib1g-dev
 
-# --- cloud CLIs: only some campaigns need them, so warn rather than fail -----
-# gcloud: packs-gs datasets and gs:// publishing. aws: bsb-s3 datasets and
-# s3:// publishing. Neither ships in apt in a form worth installing here.
+# --- cloud CLIs ---------------------------------------------------------------
+# aws: packs-s3 datasets and s3:// publishing, both of which every unattended
+# campaign uses, so it is installed rather than warned about. It has no apt
+# package; the official zip is the documented install.
+if ! command -v aws >/dev/null 2>&1; then
+  note "installing the AWS CLI"
+  curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+  unzip -q -o /tmp/awscliv2.zip -d /tmp
+  sudo /tmp/aws/install
+fi
+
+# gcloud: packs-gs datasets and gs:// publishing, which the S3 migration left as
+# the exception — warn rather than install, and let the operator who wants one
+# say so.
 command -v gcloud >/dev/null 2>&1 ||
   echo "WARNING: gcloud not found — packs-gs datasets and gs:// publish_uri will fail; install it: https://cloud.google.com/sdk/docs/install" >&2
-command -v aws >/dev/null 2>&1 ||
-  echo "WARNING: aws not found — bsb-s3 datasets and s3:// publish_uri will fail; install it: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html" >&2
 
 # --- Go (pinned; Noble's apt Go is too old) ----------------------------------
 # Pinned so every box benchmarks with the same compiler — a toolchain bump moves
