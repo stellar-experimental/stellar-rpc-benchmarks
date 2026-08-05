@@ -151,6 +151,9 @@ func TestCloudToolChecks(t *testing.T) {
 	packsGS := func(c *config.Config) {
 		c.Datasets = []config.Dataset{{Name: "packs", Kind: config.KindPacksGS, Location: "gs://bucket/cold", Chunks: []int{1}}}
 	}
+	packsS3 := func(c *config.Config) {
+		c.Datasets = []config.Dataset{{Name: "packs", Kind: config.KindPacksS3, Location: "s3://bucket/cold", Chunks: []int{1}}}
+	}
 	bsbS3 := func(c *config.Config) {
 		c.Datasets = []config.Dataset{{Name: "bsb", Kind: config.KindBSBS3, Location: "s3://bucket/ledgers", Chunks: []int{1}}}
 	}
@@ -181,6 +184,12 @@ func TestCloudToolChecks(t *testing.T) {
 			name:    "no gs:// anywhere needs no gcloud",
 			absent:  []string{"gcloud"},
 			noFails: true,
+		},
+		{
+			name:   "packs-s3 dataset needs aws",
+			mods:   []func(*config.Config){packsS3},
+			absent: []string{"aws"},
+			want:   []string{"aws not found in PATH", "dataset 'packs' fetches its packs from 's3://bucket/cold'"},
 		},
 		{
 			name:   "s3:// publish_uri needs aws",

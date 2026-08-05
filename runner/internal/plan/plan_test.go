@@ -340,6 +340,40 @@ chunks = [1]
 	stepByID(t, p, "query-cold-ds-c1-run1")
 }
 
+// packsS3Config is a datasets-only campaign over one fetched s3:// pack tree.
+const packsS3Config = `
+name = "n"
+ingest = "none"
+query = false
+runs = 1
+
+[[dataset]]
+name = "packs"
+kind = "packs-s3"
+location = "s3://bucket/cold"
+chunks = [1]
+`
+
+func TestPacksS3Step(t *testing.T) {
+	p := Build(load(t, packsS3Config), goldenInputs())
+	ds := stepByID(t, p, "dataset-packs")
+	want := []string{"aws", "s3", "sync", "s3://bucket/cold", "/bench/golden/packs.partial"}
+	if len(ds.Argv) != 1 || !slices.Equal(ds.Argv[0], want) {
+		t.Errorf("argv = %v, want one command %v", ds.Argv, want)
+	}
+	if len(ds.Needs) != 0 {
+		t.Errorf("needs = %v, want none — a fetch does not run the binary under test", ds.Needs)
+	}
+	// The instance role is what reads this private bucket, so unlike bsb-s3 the
+	// metadata endpoint must stay reachable.
+	if len(ds.Env) != 0 {
+		t.Errorf("env = %v, want none — the fetch signs with the machine's instance role", ds.Env)
+	}
+	if ds.Dataset.Root != "/bench/golden/packs" {
+		t.Errorf("root = %q, want the campaign-owned golden directory", ds.Dataset.Root)
+	}
+}
+
 func TestBSBS3Step(t *testing.T) {
 	p := Build(load(t, `
 name = "n"
@@ -401,6 +435,12 @@ func TestDatasetPreClean(t *testing.T) {
 	want := []string{"/bench/fixture/fix", "/bench/golden/fix", "/bench/golden/fix.partial"}
 	if got := stepByID(t, p, "dataset-fix").PreClean; !slices.Equal(got, want) {
 		t.Errorf("fixture pre_clean = %v, want %v", got, want)
+	}
+
+	// packs-s3 fetches, so it keeps its partial for the same reason packs-gs does.
+	s3 := Build(load(t, packsS3Config), goldenInputs())
+	if got, want := stepByID(t, s3, "dataset-packs").PreClean, []string{"/bench/golden/packs"}; !slices.Equal(got, want) {
+		t.Errorf("packs-s3 pre_clean = %v, want %v — the .partial is resumable", got, want)
 	}
 
 	bsb := Build(load(t, `
@@ -544,5 +584,17 @@ func TestPrintDatasetChoreography(t *testing.T) {
 	// A fixture freezes straight into --cold-out-dir, so it gets no mkdir.
 	if strings.Contains(got, "mkdir -p /bench/golden/fix.partial") {
 		t.Errorf("Print output has a mkdir for the fixture partial, got:\n%s", got)
+	}
+
+	// The other fetching kind prints the same choreography around the other CLI.
+	var s3Out bytes.Buffer
+	Build(load(t, packsS3Config), goldenInputs()).Print(&s3Out)
+	want := "== dataset-packs\n" +
+		"  $ rm -rf /bench/golden/packs\n" +
+		"  $ mkdir -p /bench/golden/packs.partial\n" +
+		"  $ aws s3 sync s3://bucket/cold /bench/golden/packs.partial\n" +
+		"  $ mv /bench/golden/packs.partial /bench/golden/packs\n"
+	if !strings.Contains(s3Out.String(), want) {
+		t.Errorf("Print output missing %q, got:\n%s", want, s3Out.String())
 	}
 }

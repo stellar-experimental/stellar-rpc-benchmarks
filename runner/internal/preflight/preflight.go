@@ -96,30 +96,39 @@ func Run(cfg *config.Config, benchRoot, binPath string, d Deps) Result {
 		}
 	}
 
-	var wantsGcloud []string
+	// Each cloud CLI is wanted by the datasets that fetch through it and by a
+	// publish_uri in its scheme. bsb-s3 datasets deliberately want neither: the
+	// bench binary's own SDK reads that public bucket, with no CLI and no
+	// credentials.
+	var wantsGcloud, wantsAWS []string
 	for _, ds := range cfg.Datasets {
-		if ds.Kind == config.KindPacksGS {
+		switch ds.Kind {
+		case config.KindPacksGS:
 			wantsGcloud = append(wantsGcloud, fmt.Sprintf("dataset '%s' fetches its packs from '%s'", ds.Name, ds.Location))
+		case config.KindPacksS3:
+			wantsAWS = append(wantsAWS, fmt.Sprintf("dataset '%s' fetches its packs from '%s'", ds.Name, ds.Location))
 		}
 	}
 	if strings.HasPrefix(cfg.PublishURI, "gs://") {
 		wantsGcloud = append(wantsGcloud, fmt.Sprintf("publish_uri '%s'", cfg.PublishURI))
 	}
+	if strings.HasPrefix(cfg.PublishURI, "s3://") {
+		wantsAWS = append(wantsAWS, fmt.Sprintf("publish_uri '%s'", cfg.PublishURI))
+	}
 	havePublishCLI := true
 	if len(wantsGcloud) > 0 {
 		ok := res.requireTool(d, "gcloud", "needed by "+strings.Join(wantsGcloud, ", "))
-		// wantsGcloud also collects packs-gs datasets, and a gcloud needed only
-		// by a dataset must not suppress an s3:// listing.
+		// The lists also collect datasets, and a CLI needed only by a dataset
+		// must not suppress a listing in the other scheme.
 		if strings.HasPrefix(cfg.PublishURI, "gs://") {
 			havePublishCLI = ok
 		}
 	}
-
-	// Only publishing needs the aws CLI. bsb-s3 datasets deliberately do not
-	// appear here: the bench binary's own SDK reads that public bucket, with
-	// no CLI and no credentials.
-	if strings.HasPrefix(cfg.PublishURI, "s3://") {
-		havePublishCLI = res.requireTool(d, "aws", fmt.Sprintf("needed by publish_uri '%s'", cfg.PublishURI))
+	if len(wantsAWS) > 0 {
+		ok := res.requireTool(d, "aws", "needed by "+strings.Join(wantsAWS, ", "))
+		if strings.HasPrefix(cfg.PublishURI, "s3://") {
+			havePublishCLI = ok
+		}
 	}
 
 	// A listing cannot succeed without its CLI, and a missing CLI is already a

@@ -239,6 +239,14 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		// deliberately not listed: rsync resumes into a half-fetched tree.
 		step.PreClean = []string{root}
 		step.Argv = [][]string{{"gcloud", "storage", "rsync", "-r", d.Location, root + ".partial"}}
+	case config.KindPacksS3:
+		step.Dataset.Location = d.Location
+		// Same fetch as packs-gs, with the other CLI: `aws s3 sync` copies the
+		// prefix's contents into the destination, as gcloud rsync does, and
+		// re-copies only what is missing or changed — so the .partial is kept
+		// out of pre_clean here too.
+		step.PreClean = []string{root}
+		step.Argv = [][]string{{"aws", "s3", "sync", d.Location, root + ".partial"}}
 	case config.KindBSBS3:
 		step.Dataset.Location = d.Location
 		step.Needs = []string{"build"}
@@ -454,7 +462,7 @@ func (p *Plan) Print(w io.Writer) {
 		// dataset preparation does. These lines are derived from the same
 		// DatasetSpec the executor keys off, so a dry run and campaign.log read
 		// identically.
-		if s.Dataset != nil && s.Dataset.Kind == config.KindPacksGS {
+		if s.Dataset != nil && fetches(s.Dataset.Kind) {
 			fmt.Fprintf(w, "  $ mkdir -p %s.partial\n", s.Dataset.Root)
 		}
 		prefix := envPrefix(s.Env)
@@ -475,7 +483,18 @@ func (p *Plan) Print(w io.Writer) {
 // kind that does not: the operator already has the packs.
 func materializes(kind string) bool {
 	switch kind {
-	case config.KindPacksGS, config.KindBSBS3, config.KindFixture:
+	case config.KindPacksGS, config.KindPacksS3, config.KindBSBS3, config.KindFixture:
+		return true
+	}
+	return false
+}
+
+// fetches reports whether a dataset kind copies an existing pack tree down from
+// object storage. Both fetching CLIs need the destination directory to exist;
+// the kinds that write their own pack tree create it themselves.
+func fetches(kind string) bool {
+	switch kind {
+	case config.KindPacksGS, config.KindPacksS3:
 		return true
 	}
 	return false
