@@ -141,6 +141,15 @@ if [ ! -d "$SRC/.git" ]; then
   git clone "$REPO" "$SRC"
 fi
 
+# The native-lib install scripts (and their version pins, which must match the
+# benchmarked ref's grocksdb) live on feature/full-history, not main, so a
+# fresh clone needs the checkout. SRC_REF lets a caller pin the exact ref its
+# campaign will build.
+SRC_REF="${SRC_REF:-feature/full-history}"
+note "checking out $SRC_REF in $SRC for the native-lib install scripts"
+git -C "$SRC" fetch --quiet origin "$SRC_REF"
+git -C "$SRC" checkout --quiet FETCH_HEAD
+
 # --- native libs, mirroring CI's setup-go action ------------------------------
 [ -e "$HOME/.zstd/lib/libzstd.so" ] ||
   (cd "$SRC" && PREFIX="$HOME/.zstd" ./scripts/install-zstd.sh)
