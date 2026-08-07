@@ -199,7 +199,12 @@ func cargoBin() string { return filepath.Join(os.Getenv("HOME"), ".cargo", "bin"
 // publish step, because both are asking the same question of the same two CLIs
 // and a listing wrongly read as "empty" fails the same way in both places.
 func ListRoot(uri string) error {
-	_, err := publish.List(uri)
+	// Ask for the directory-style prefix: `aws s3 ls s3://bucket/results` sends
+	// prefix "results", which a bucket policy conditioned on s3:prefix
+	// "results/*" rejects even though "results/" is allowed. The publish step
+	// already lists with the trailing slash; match it so preflight exercises
+	// the same permission.
+	_, err := publish.List(strings.TrimSuffix(uri, "/") + "/")
 	return err
 }
 
