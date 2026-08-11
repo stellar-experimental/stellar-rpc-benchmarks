@@ -1070,7 +1070,10 @@
       if (id && !(CURRENT && CURRENT.meta && CURRENT.meta.id === id)) selectRun(id, false);
     });
     const initial = new URL(location.href).searchParams.get("run");
-    selectRun(initial || (MANIFEST.runs[0] && MANIFEST.runs[0].id), false);
+    // A summary is always of one specific run — a bare URL has none to show,
+    // so it lands on the run index instead of silently picking one.
+    if (!initial) { location.replace("index.html"); return; }
+    selectRun(initial, false);
   }
 
   window.addEventListener("resize", () => { clearTimeout(redrawTimer); redrawTimer = setTimeout(draw, 160); });
