@@ -1861,9 +1861,9 @@
       Open a run for its summary; commit and branch link to GitHub.</p>
     </header>`;
     const bar = `<div class="idx-bar">
-      <div class="idx-toggle" role="tablist" aria-label="Listing view">
-        <button type="button" data-view="facets" class="${view === "facets" ? "on" : ""}">Facets</button>
-        <button type="button" data-view="table" class="${view === "table" ? "on" : ""}">Table</button>
+      <div class="idx-toggle" role="group" aria-label="Listing view">
+        <button type="button" data-view="facets" class="${view === "facets" ? "on" : ""}" aria-pressed="${view === "facets"}">Facets</button>
+        <button type="button" data-view="table" class="${view === "table" ? "on" : ""}" aria-pressed="${view === "table"}">Table</button>
       </div>
       <span class="idx-count">${rows.length === all.length ? `${all.length} runs` : `${rows.length} of ${all.length} runs`}</span>
     </div>`;
