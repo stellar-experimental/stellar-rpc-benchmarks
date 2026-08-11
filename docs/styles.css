@@ -314,3 +314,83 @@ pre.metadata {
 /* generic fallback tables (unknown section/stage) */
 .generic-block { margin: 18px 0; }
 .generic-block h3 { font-size: 15px; margin: 20px 0 6px; }
+
+/* ---------- run index (landing listing) ---------- */
+.idx-bar { display: flex; align-items: center; gap: 14px; margin: 0 0 18px; }
+.idx-toggle {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; background: var(--surface);
+}
+.idx-toggle button {
+  font: 500 13px/1 -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--ink-2); background: none; border: none; padding: 8px 16px; cursor: pointer;
+}
+.idx-toggle button + button { border-left: 1px solid var(--border); }
+.idx-toggle button.on { background: var(--accent); color: #fff; }
+.idx-count { font-size: 12.5px; color: var(--muted); margin-left: auto; }
+.idx-badge {
+  display: inline-block; font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+  border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; color: var(--ink-2);
+}
+.idx-badge.idx-synthetic { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.idx-badge.idx-pubnet { color: var(--good-text); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.idx-gh { color: var(--accent); text-decoration: none; }
+.idx-gh:hover { text-decoration: underline; }
+.idx-gh::after { content: " ↗"; font-size: 9px; }
+
+/* facets view */
+.idx-layout { display: grid; grid-template-columns: 200px 1fr; gap: 26px; align-items: start; }
+@media (max-width: 720px) { .idx-layout { grid-template-columns: 1fr; } .idx-facets { position: static; } }
+.idx-facets { position: sticky; top: 64px; }
+.idx-facet { margin-bottom: 18px; }
+.idx-facet-h {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px;
+}
+.idx-opt {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  font: 13px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif; text-align: left;
+  color: var(--ink-2); background: none; border: none; border-radius: 8px;
+  padding: 5px 8px; cursor: pointer;
+}
+.idx-opt:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.idx-opt.on { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-weight: 600; }
+.idx-opt .idx-n { margin-left: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--muted); }
+.idx-clear { font-size: 12.5px; color: var(--accent); background: none; border: none; padding: 5px 8px; cursor: pointer; }
+.idx-row {
+  display: flex; align-items: center; gap: 13px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 17px; margin-bottom: 10px; cursor: pointer;
+}
+.idx-row:hover { border-color: var(--accent); }
+.idx-name { font-weight: 650; font-size: 15.5px; color: var(--ink); text-decoration: none; min-width: 130px; }
+.idx-meta {
+  display: flex; gap: 13px; flex-wrap: wrap; align-items: baseline;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--ink-2);
+}
+.idx-k { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 4px; }
+.idx-date { margin-left: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); }
+
+/* table view */
+.idx-tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.idx-table { width: 100%; border-collapse: collapse; }
+.idx-table thead th {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+  text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--grid);
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.idx-table thead th:hover { color: var(--accent); }
+.idx-table tbody td { padding: 10px 10px; border-bottom: 1px solid var(--grid); font-size: 13px; white-space: nowrap; }
+.idx-table tbody td.mono { font-size: 12.5px; color: var(--ink-2); }
+.idx-table tbody tr:last-child td { border-bottom: none; }
+.idx-table tbody tr { cursor: pointer; }
+.idx-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.idx-table td:first-child, .idx-table th:first-child { padding-left: 16px; }
+.idx-table td:last-child, .idx-table th:last-child { padding-right: 16px; }
+.idx-name-cell a { font-weight: 600; color: var(--ink); text-decoration: none; }
+
+/* Toolbar state switch (listing vs run report): hidden must always win, even
+   if a class on the element sets its own display. */
+.toolbar [hidden] { display: none !important; }

@@ -8,14 +8,18 @@
 </head>
 <body>
 
+<!-- The toolbar serves two states, toggled by app.js: the run-index listing
+     shows only the global pages (latency model, tx submission); a run report
+     shows the run navigation (all runs, selector, summary) instead. -->
 <div class="toolbar">
   <span class="brand">Stellar RPC v2 · Full-History Storage Engine</span>
   <span class="spacer"></span>
-  <label for="run-select">Run</label>
-  <select id="run-select" class="run-select" aria-label="Select benchmark run"></select>
-  <a id="summary-link" href="summary.html" class="theme-toggle" aria-label="Open the stakeholder summary">Summary →</a>
-  <a href="latency-model.html" class="theme-toggle" aria-label="Open the end-to-end latency model">Latency model →</a>
-  <a href="tx-submission.html" class="theme-toggle" aria-label="Open the transaction-submission results">Tx submission →</a>
+  <a id="all-runs-link" href="index.html" class="theme-toggle" hidden aria-label="Back to the run index">← All runs</a>
+  <label for="run-select" id="run-select-label" hidden>Run</label>
+  <select id="run-select" class="run-select" hidden aria-label="Select benchmark run"></select>
+  <a id="summary-link" href="summary.html" class="theme-toggle" hidden aria-label="Open this run's summary">Summary →</a>
+  <a id="latency-link" href="latency-model.html" class="theme-toggle" aria-label="Open the end-to-end latency model">Latency model →</a>
+  <a id="txsub-link" href="tx-submission.html" class="theme-toggle" aria-label="Open the transaction-submission results">Tx submission →</a>
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">◐ Theme</button>
 </div>
 

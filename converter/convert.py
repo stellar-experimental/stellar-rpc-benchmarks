@@ -717,6 +717,33 @@ def validate_run(data, reps=None):
 
 
 # ----------------------------------------------------------------- manifest
+def manifest_entry(data):
+    """Manifest entry for a converted run JSON. Identity fields are always
+    present; the listing metadata (phase, machine, hostname, commit, branch)
+    is additive and omitted when the run doesn't carry it, so the viewer must
+    tolerate entries without it."""
+    entry = {
+        "id": data["run_id"],
+        "name": data["run_name"],
+        "date": data["run_date"],
+        "kind": data["dataset"]["kind"],
+        "path": f"runs/{data['run_id']}.json",
+    }
+    build = data.get("build") or {}
+    extras = {
+        "phase": (data.get("campaign") or {}).get("phase"),
+        "machine": ((data.get("hardware") or {}).get("instance_type")
+                    or (data.get("machine") or {}).get("instance")),
+        "hostname": data.get("hostname"),
+        "commit": build.get("commit"),
+        "branch": build.get("branch"),
+    }
+    # Omit only unknown values: None (field absent) and empty strings (parsed
+    # from blank metadata). A numeric 0 would be a real value and must survive.
+    entry.update({k: v for k, v in extras.items() if v is not None and v != ""})
+    return entry
+
+
 def update_manifest(out_dir, entry):
     path = os.path.join(out_dir, "index.json")
     data = {"schema_version": 1, "runs": []}
@@ -940,10 +967,7 @@ def convert(args):
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
-    manifest_path = update_manifest(args.out_dir, {
-        "id": run_id, "name": run_name, "date": run_date,
-        "kind": args.dataset_kind, "path": f"runs/{run_id}.json",
-    })
+    manifest_path = update_manifest(args.out_dir, manifest_entry(data))
 
     print(f"wrote {out_path} ({os.path.getsize(out_path) / 1024:.0f} KiB)")
     print(f"updated {manifest_path}")

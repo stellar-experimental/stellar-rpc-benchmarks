@@ -173,6 +173,45 @@ class ValidatorTests(unittest.TestCase):
         self.assertTrue(any("n_items is not an int" in e for e in convert.validate_run(d, reps=3)))
 
 
+class ManifestEntryTests(unittest.TestCase):
+    BASE = {"run_id": "r1", "run_name": "phase1-m6id2xl", "run_date": "2026-07-22",
+            "dataset": {"kind": "synthetic"}}
+
+    def test_identity_only_when_no_metadata(self):
+        entry = convert.manifest_entry(dict(self.BASE))
+        self.assertEqual(entry, {"id": "r1", "name": "phase1-m6id2xl",
+                                 "date": "2026-07-22", "kind": "synthetic",
+                                 "path": "runs/r1.json"})
+
+    def test_listing_metadata_carried_when_present(self):
+        data = dict(self.BASE)
+        data["campaign"] = {"phase": 2}
+        data["hardware"] = {"instance_type": "m6id.2xlarge"}
+        data["hostname"] = "user-dev-063a"
+        data["build"] = {"commit": "c48a55c6b6011b2c8ceb8784adecc2712dc69b3b",
+                         "branch": "bench-devbox-campaigns"}
+        entry = convert.manifest_entry(data)
+        self.assertEqual(entry["phase"], 2)
+        self.assertEqual(entry["machine"], "m6id.2xlarge")
+        self.assertEqual(entry["hostname"], "user-dev-063a")
+        self.assertEqual(entry["commit"], "c48a55c6b6011b2c8ceb8784adecc2712dc69b3b")
+        self.assertEqual(entry["branch"], "bench-devbox-campaigns")
+
+    def test_machine_falls_back_to_parsed_metadata(self):
+        data = dict(self.BASE)
+        data["machine"] = {"raw": "…", "instance": "c6id.8xlarge"}
+        self.assertEqual(convert.manifest_entry(data)["machine"], "c6id.8xlarge")
+
+    def test_falsy_but_real_values_survive_and_empty_strings_do_not(self):
+        data = dict(self.BASE)
+        data["campaign"] = {"phase": 0}          # a real (if hypothetical) value
+        data["build"] = {"commit": "abc123", "branch": ""}  # parsed from blank metadata
+        entry = convert.manifest_entry(data)
+        self.assertEqual(entry["phase"], 0)
+        self.assertEqual(entry["commit"], "abc123")
+        self.assertNotIn("branch", entry)
+
+
 class ManifestTests(unittest.TestCase):
     def test_insert_replace_and_sort(self):
         with tempfile.TemporaryDirectory() as d:

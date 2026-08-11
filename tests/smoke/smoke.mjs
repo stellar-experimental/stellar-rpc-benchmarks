@@ -196,8 +196,66 @@ for (const run of manifest.runs) {
   check(group, "run name rendered as h1", h1.includes(run.name.slice(0, 20)), h1);
   const options = [...doc.querySelectorAll("#run-select option")].map((o) => o.value);
   check(group, "dropdown lists every manifest run", manifest.runs.every((r) => options.includes(r.id)), options.join(","));
+  // Report toolbar: run navigation shown, global pages tucked away on the listing.
+  check(group, "run navigation visible on a report", !doc.getElementById("run-select").hidden
+    && !doc.getElementById("all-runs-link").hidden && !doc.getElementById("summary-link").hidden, "hidden");
+  check(group, "summary link carries the run id",
+    doc.getElementById("summary-link").getAttribute("href") === `summary.html?run=${encodeURIComponent(run.id)}`,
+    doc.getElementById("summary-link").getAttribute("href"));
   checkKind(run.kind, doc, group, runJSON(run.id).campaign.reps);
   checkSanity(run.kind, doc, group, runJSON(run.id));
+  window.close();
+}
+
+/* ---------------- run index (bare index.html, no ?run=) ---------------- */
+/* The landing page lists every manifest run: facets view by default, table
+   view behind the toggle (?view=table). Listing metadata (phase/machine/
+   hostname/commit/branch) is optional per entry, so assert per-entry. */
+{
+  const group = "run-index";
+  console.log(`\n=== index.html (run-index listing, facets default) ===`);
+  const { window, errors } = await loadViewer("");
+  const doc = window.document;
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "no ?run injected on the landing page", window.location.search === "", window.location.search);
+  check(group, "facets view is the default", !!doc.querySelector(".idx-layout"), "missing .idx-layout");
+  const rows = doc.querySelectorAll(".idx-row").length;
+  check(group, "one row per manifest run", rows === manifest.runs.length, rows + " rows");
+  const toggles = [...doc.querySelectorAll(".idx-toggle button")].map(txt);
+  check(group, "view toggle offers Facets + Table", toggles.join(",") === "Facets,Table", toggles.join(","));
+  check(group, "Facets toggle marked active", doc.querySelector(".idx-toggle button.on")?.getAttribute("data-view") === "facets", "not facets");
+  const facetHeads = [...doc.querySelectorAll(".idx-facet-h")].map(txt);
+  check(group, "phase + machine facet groups present", facetHeads.includes("Phase") && facetHeads.includes("Machine"), facetHeads.join(","));
+  const enriched = manifest.runs.filter((r) => r.commit);
+  const ghLinks = [...doc.querySelectorAll(".idx-row a.idx-gh")].map((a) => a.href);
+  check(group, "commit links target the stellar-rpc repo", enriched.length === 0
+    || ghLinks.some((h) => h.includes("github.com/stellar/stellar-rpc/commit/")), ghLinks.slice(0, 2).join(","));
+  const nameHrefs = [...doc.querySelectorAll("a.idx-name")].map((a) => a.getAttribute("href"));
+  check(group, "run links land on the summary", nameHrefs.length > 0 && nameHrefs.every((h) => h.startsWith("summary.html?run=")), nameHrefs.slice(0, 2).join(","));
+  // Listing toolbar: global pages only — the run navigation stays hidden.
+  check(group, "run selector hidden on the listing", doc.getElementById("run-select").hidden, "visible");
+  check(group, "all-runs + summary links hidden on the listing",
+    doc.getElementById("all-runs-link").hidden && doc.getElementById("summary-link").hidden, "visible");
+  check(group, "latency + tx-submission links visible on the listing",
+    !doc.getElementById("latency-link").hidden && !doc.getElementById("txsub-link").hidden, "hidden");
+  window.close();
+}
+{
+  const group = "run-index table";
+  console.log(`\n=== index.html?view=table (run-index listing, table view) ===`);
+  const { window, errors } = await loadViewer("?view=table");
+  const doc = window.document;
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  const tbl = doc.querySelector(".idx-table");
+  check(group, "table view rendered", !!tbl, "missing .idx-table");
+  const trs = doc.querySelectorAll(".idx-table tbody tr").length;
+  check(group, "one table row per manifest run", trs === manifest.runs.length, trs + " rows");
+  const dates = [...doc.querySelectorAll(".idx-table tbody tr td:last-child")].map(txt);
+  const sortedDesc = dates.every((d, i) => i === 0 || dates[i - 1] >= d);
+  check(group, "default sort is date descending", sortedDesc, dates.join(","));
+  const headers = [...doc.querySelectorAll(".idx-table thead th")].map(txt);
+  check(group, "all listing columns present",
+    ["Run", "Phase", "Kind", "Machine", "Host", "Commit", "Branch"].every((h) => headers.some((x) => x.startsWith(h))), headers.join(","));
   window.close();
 }
 
@@ -308,6 +366,8 @@ for (const run of manifest.runs) {
   check(group, "deep link kept in URL", window.location.search === `?run=${run.id}`, window.location.search);
   const full = doc.getElementById("full-report");
   check(group, "full-report link targets internal viewer", !!full && full.getAttribute("href") === `index.html?run=${run.id}`, full ? full.getAttribute("href") : "missing");
+  const allRuns = doc.getElementById("all-runs-link");
+  check(group, "all-runs link back to the run index", !!allRuns && allRuns.getAttribute("href") === "index.html", allRuns ? allRuns.getAttribute("href") : "missing");
   // Audience vocabulary: the page never uses the internal tier/org words.
   const text = txt(report);
   const banned = text.match(/\b(h[o]t|pod|platform|team)\b/i);
