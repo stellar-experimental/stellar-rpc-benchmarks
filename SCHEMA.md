@@ -239,9 +239,11 @@ converter warns.
 ```
 
 The converter inserts/replaces its run's entry keyed by `id` and re-sorts by date
-ascending, so both viewers list the earliest run first. The report viewer's landing
-page (bare `index.html`) renders this manifest as the run-index listing — a faceted
-browser by default, a sortable table behind `?view=table`.
+ascending, so the manifest is stored oldest-first and both viewers' run selectors
+list the earliest run first. The report viewer's landing page (bare `index.html`)
+renders this manifest as the run-index listing — a faceted browser by default, a
+sortable table behind `?view=table` — which presents runs newest-first (the table
+defaults to date descending).
 
 ## Inputs — result-bundle layouts & manifests
 

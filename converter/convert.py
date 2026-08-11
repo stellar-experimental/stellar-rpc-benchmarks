@@ -738,7 +738,9 @@ def manifest_entry(data):
         "commit": build.get("commit"),
         "branch": build.get("branch"),
     }
-    entry.update({k: v for k, v in extras.items() if v})
+    # Omit only unknown values: None (field absent) and empty strings (parsed
+    # from blank metadata). A numeric 0 would be a real value and must survive.
+    entry.update({k: v for k, v in extras.items() if v is not None and v != ""})
     return entry
 
 

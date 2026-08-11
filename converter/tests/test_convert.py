@@ -202,6 +202,15 @@ class ManifestEntryTests(unittest.TestCase):
         data["machine"] = {"raw": "…", "instance": "c6id.8xlarge"}
         self.assertEqual(convert.manifest_entry(data)["machine"], "c6id.8xlarge")
 
+    def test_falsy_but_real_values_survive_and_empty_strings_do_not(self):
+        data = dict(self.BASE)
+        data["campaign"] = {"phase": 0}          # a real (if hypothetical) value
+        data["build"] = {"commit": "abc123", "branch": ""}  # parsed from blank metadata
+        entry = convert.manifest_entry(data)
+        self.assertEqual(entry["phase"], 0)
+        self.assertEqual(entry["commit"], "abc123")
+        self.assertNotIn("branch", entry)
+
 
 class ManifestTests(unittest.TestCase):
     def test_insert_replace_and_sort(self):
