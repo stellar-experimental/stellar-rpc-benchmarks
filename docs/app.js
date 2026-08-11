@@ -1,6 +1,7 @@
 /* Stellar RPC full-history benchmark viewer.
-   Vanilla JS, no frameworks, no CDNs. Fetches runs/index.json, renders a run
-   selector with ?run=<id> deep-linking, and draws the selected schema-v1 run.
+   Vanilla JS, no frameworks, no CDNs. Fetches runs/index.json; the bare page
+   renders the run-index listing (facets view by default, table view behind a
+   toggle / ?view=table), while ?run=<id> deep-links a schema-v1 run report.
    Named renderers are keyed off dataset.kind + campaign.vocabulary; anything
    unrecognised degrades to a generic collapsible table. */
 (function () {
@@ -1746,6 +1747,195 @@
 
   const RENDERERS = { pubnet: renderPubnet, synthetic: renderSynthetic };
 
+  /* ============================ run index (landing) ============================ */
+  // Bare index.html (no ?run=) lists every manifest run in two lightweight
+  // views over the same entries: a faceted browser (default) and a sortable
+  // table (?view=table). The listing metadata (phase, machine, hostname,
+  // commit, branch) is optional per manifest entry — entries without it render
+  // with the identity fields only, and empty facet groups are omitted.
+  const GH_REPO = "https://github.com/stellar/stellar-rpc";
+  const IDX_FACETS = [
+    { key: "phase", label: "Phase", fmt: v => "Phase " + v },
+    { key: "kind", label: "Kind" },
+    { key: "machine", label: "Machine" },
+    { key: "branch", label: "Branch" },
+    { key: "hostname", label: "Host" },
+  ];
+  const IDX_COLS = [
+    { k: "name", label: "Run" }, { k: "phase", label: "Phase" },
+    { k: "kind", label: "Kind" }, { k: "machine", label: "Machine" },
+    { k: "hostname", label: "Host" }, { k: "commit", label: "Commit" },
+    { k: "branch", label: "Branch" }, { k: "date", label: "Date" },
+  ];
+  const idxSel = {};                      // facet key -> selected value
+  let idxSort = { k: "date", dir: -1 };   // table-view column sort
+
+  function indexViewMode() {
+    const q = new URL(location.href).searchParams.get("view");
+    if (q === "table" || q === "facets") return q;
+    try { if (localStorage.getItem("runIndexView") === "table") return "table"; } catch (e) { /* private mode */ }
+    return "facets";
+  }
+  function setIndexViewMode(v) {
+    try { localStorage.setItem("runIndexView", v); } catch (e) { /* private mode */ }
+    const url = new URL(location.href);
+    if (v === "facets") url.searchParams.delete("view"); else url.searchParams.set("view", v);
+    history.replaceState({}, "", url);
+  }
+
+  const idxRuns = () => ((MANIFEST && MANIFEST.runs) || []).slice();
+  const idxMatch = (r, except) => IDX_FACETS.every(f =>
+    f.key === except || !(f.key in idxSel) || r[f.key] === idxSel[f.key]);
+
+  const ghCommit = c => `<a class="idx-gh" target="_blank" rel="noopener" href="${GH_REPO}/commit/${esc(c)}">${esc(String(c).slice(0, 8))}</a>`;
+  const ghBranch = b => `<a class="idx-gh" target="_blank" rel="noopener" href="${GH_REPO}/tree/${encodeURIComponent(b)}">${esc(b)}</a>`;
+  const idxBadge = r => `<span class="idx-badge idx-${esc(r.kind)}">${esc(r.kind)}</span>`;
+  // A run's landing page is its stakeholder summary; the full report stays a
+  // click away from there.
+  const runHref = r => `summary.html?run=${encodeURIComponent(r.id)}`;
+
+  function idxFacetsHTML(rows) {
+    const groups = IDX_FACETS.map(f => {
+      const pool = idxRuns().filter(r => idxMatch(r, f.key));
+      const counts = new Map();
+      pool.forEach(r => { const v = r[f.key]; if (v != null) counts.set(v, (counts.get(v) || 0) + 1); });
+      if (!counts.size) return "";
+      const opts = [...counts.entries()]
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }))
+        .map(([v, n]) => `<button type="button" class="idx-opt ${idxSel[f.key] === v ? "on" : ""}"
+            data-f="${esc(f.key)}" data-v="${esc(String(v))}">
+          <span>${esc((f.fmt || String)(v))}</span><span class="idx-n">${n}</span></button>`).join("");
+      return `<div class="idx-facet"><div class="idx-facet-h">${esc(f.label)}</div>${opts}</div>`;
+    }).join("");
+    const clear = Object.keys(idxSel).length
+      ? `<button type="button" class="idx-clear" id="idx-clear">✕ clear filters</button>` : "";
+    const list = rows.map(r => `
+      <div class="idx-row" data-run="${esc(r.id)}">
+        <a class="idx-name" href="${runHref(r)}">${esc(r.name)}</a>
+        ${idxBadge(r)}
+        <span class="idx-meta">
+          ${r.phase != null ? `<span><span class="idx-k">phase</span>${esc(String(r.phase))}</span>` : ""}
+          ${r.machine ? `<span><span class="idx-k">mach</span>${esc(r.machine)}</span>` : ""}
+          ${r.hostname ? `<span><span class="idx-k">host</span>${esc(r.hostname)}</span>` : ""}
+          ${r.commit ? `<span><span class="idx-k">commit</span>${ghCommit(r.commit)}</span>` : ""}
+          ${r.branch ? `<span><span class="idx-k">branch</span>${ghBranch(r.branch)}</span>` : ""}
+        </span>
+        <span class="idx-date">${esc(r.date)}</span>
+      </div>`).join("") || `<p class="sec-intro">No runs match the current filters.</p>`;
+    return `<div class="idx-layout"><aside class="idx-facets">${groups}${clear}</aside><div class="idx-list">${list}</div></div>`;
+  }
+
+  function idxTableHTML(rows) {
+    const ths = IDX_COLS.map(c => `<th data-k="${c.k}">${esc(c.label)}${idxSort.k === c.k ? (idxSort.dir === 1 ? " ▲" : " ▼") : ""}</th>`).join("");
+    const trs = rows.map(r => `<tr data-run="${esc(r.id)}">
+      <td class="idx-name-cell"><a href="${runHref(r)}">${esc(r.name)}</a></td>
+      <td>${r.phase != null ? esc(String(r.phase)) : "—"}</td>
+      <td>${idxBadge(r)}</td>
+      <td class="mono">${r.machine ? esc(r.machine) : "—"}</td>
+      <td class="mono">${r.hostname ? esc(r.hostname) : "—"}</td>
+      <td>${r.commit ? ghCommit(r.commit) : "—"}</td>
+      <td>${r.branch ? ghBranch(r.branch) : "—"}</td>
+      <td class="mono">${esc(r.date)}</td>
+    </tr>`).join("");
+    return `<div class="idx-tablewrap"><table class="idx-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
+  }
+
+  function renderIndexInner() {
+    const view = indexViewMode();
+    const all = idxRuns();
+    // Facet filters belong to the facets view; the table always shows every
+    // run and disambiguates by sorting instead.
+    const rows = view === "facets" ? all.filter(r => idxMatch(r, null)) : all;
+    if (view === "table") {
+      rows.sort((a, b) => {
+        const av = a[idxSort.k] != null ? a[idxSort.k] : "", bv = b[idxSort.k] != null ? b[idxSort.k] : "";
+        return (av < bv ? -1 : av > bv ? 1 : 0) * idxSort.dir || String(a.id).localeCompare(String(b.id));
+      });
+    } else {
+      rows.sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(a.id).localeCompare(String(b.id)));
+    }
+    const head = `<header class="masthead">
+      <div class="mast-eyebrow"><span>Stellar RPC v2 · Full-history storage engine</span><span>Benchmark runs</span></div>
+      <h1>Benchmark runs</h1>
+      <p class="mast-sub">Every published run of the full-history benchmark campaigns, newest first.
+      Open a run for its summary; commit and branch link to GitHub.</p>
+    </header>`;
+    const bar = `<div class="idx-bar">
+      <div class="idx-toggle" role="tablist" aria-label="Listing view">
+        <button type="button" data-view="facets" class="${view === "facets" ? "on" : ""}">Facets</button>
+        <button type="button" data-view="table" class="${view === "table" ? "on" : ""}">Table</button>
+      </div>
+      <span class="idx-count">${rows.length === all.length ? `${all.length} runs` : `${rows.length} of ${all.length} runs`}</span>
+    </div>`;
+    const body = view === "table" ? idxTableHTML(rows) : idxFacetsHTML(rows);
+    reportEl.innerHTML = `<div class="run-index">${head}${bar}${body}</div>`;
+    bindIndexEvents();
+  }
+
+  function bindIndexEvents() {
+    reportEl.querySelectorAll(".idx-toggle button").forEach(b => b.addEventListener("click", () => {
+      setIndexViewMode(b.getAttribute("data-view"));
+      renderIndex();
+    }));
+    reportEl.querySelectorAll(".idx-opt").forEach(b => b.addEventListener("click", () => {
+      const f = b.getAttribute("data-f"), raw = b.getAttribute("data-v");
+      const v = f === "phase" ? Number(raw) : raw;
+      if (f in idxSel && idxSel[f] === v) delete idxSel[f]; else idxSel[f] = v;
+      renderIndex();
+    }));
+    const clear = document.getElementById("idx-clear");
+    if (clear) clear.addEventListener("click", () => {
+      for (const k of Object.keys(idxSel)) delete idxSel[k];
+      renderIndex();
+    });
+    reportEl.querySelectorAll(".idx-table thead th").forEach(th => th.addEventListener("click", () => {
+      const k = th.getAttribute("data-k");
+      if (idxSort.k === k) idxSort.dir *= -1; else idxSort = { k, dir: k === "date" ? -1 : 1 };
+      renderIndex();
+    }));
+    // A row click follows the run's summary link; real links on the row
+    // (the run name, GitHub) keep their native behaviour.
+    reportEl.querySelectorAll("[data-run]").forEach(el => el.addEventListener("click", ev => {
+      if (ev.target.closest("a")) return;
+      location.href = `summary.html?run=${encodeURIComponent(el.getAttribute("data-run"))}`;
+    }));
+  }
+
+  function renderIndex() {
+    try { renderIndexInner(); }
+    catch (err) {
+      console.error("run index render failed", err);
+      const items = idxRuns().map(r =>
+        `<li><a href="${runHref(r)}">${esc(r.name)} · ${esc(r.date)}</a></li>`).join("");
+      reportEl.innerHTML = `<div class="error-box">Failed to render the run index: ${esc(err.message)}. Falling back to a plain list.</div><ul>${items}</ul>`;
+    }
+  }
+
+  // Two toolbar states: the listing carries only the global pages; a run
+  // report swaps them for the run navigation (all runs / selector / summary).
+  function updateToolbar(mode) {
+    const onRun = mode === "run";
+    for (const id of ["all-runs-link", "run-select-label", "run-select", "summary-link"]) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = !onRun;
+    }
+    for (const id of ["latency-link", "txsub-link"]) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = onRun;
+    }
+  }
+
+  function showIndex(push) {
+    CURRENT = null;
+    selectEl.value = "";
+    updateToolbar("index");
+    const url = new URL(location.href);
+    url.searchParams.delete("run");
+    url.searchParams.delete("phase");
+    if (push) history.pushState({}, "", url); else history.replaceState({}, "", url);
+    renderIndex();
+  }
+
   /* ============================ shell / boot ============================ */
   function draw() {
     if (!CURRENT || !CURRENT.data) return;
@@ -1786,6 +1976,7 @@
   function selectRun(id, push) {
     const entry = MANIFEST.runs.find(r => r.id === id) || MANIFEST.runs[0];
     if (!entry) return;
+    updateToolbar("run");
     selectEl.value = entry.id;
     if (summaryLink) summaryLink.href = `summary.html?run=${encodeURIComponent(entry.id)}`;
     const url = new URL(location.href);
@@ -1835,12 +2026,14 @@
       selectEl.appendChild(o);
     });
     selectEl.addEventListener("change", () => selectRun(selectEl.value, true));
+    const allRunsLink = document.getElementById("all-runs-link");
+    if (allRunsLink) allRunsLink.addEventListener("click", ev => { ev.preventDefault(); showIndex(true); });
     window.addEventListener("popstate", () => {
       const id = new URL(location.href).searchParams.get("run");
-      if (id) selectRun(id, false);
+      if (id) selectRun(id, false); else showIndex(false);
     });
     const initial = new URL(location.href).searchParams.get("run");
-    selectRun(initial || (MANIFEST.runs[0] && MANIFEST.runs[0].id), false);
+    if (initial) selectRun(initial, false); else showIndex(false);
   }
 
   window.addEventListener("resize", () => { clearTimeout(redrawTimer); redrawTimer = setTimeout(draw, 160); });

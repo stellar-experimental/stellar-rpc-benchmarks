@@ -226,11 +226,22 @@ converter warns.
     { "id": "pubnet-2026-07-13", "name": "…", "date": "2026-07-13",
       "kind": "pubnet", "path": "runs/pubnet-2026-07-13.json" },
     { "id": "synthetic-2026-07-15", "name": "…", "date": "2026-07-15",
-      "kind": "synthetic", "path": "runs/synthetic-2026-07-15.json" } ] }
+      "kind": "synthetic", "path": "runs/synthetic-2026-07-15.json",
+      // Listing metadata — optional, additive (copied out of the run JSON by
+      // manifest_entry so the run-index listing can filter/sort without
+      // fetching every run file). Omitted when the run doesn't carry it; the
+      // viewer must tolerate entries without any of these.
+      "phase": 1,                          // campaign.phase
+      "machine": "m6id.2xlarge",           // hardware.instance_type (fallback: parsed machine.instance)
+      "hostname": "user-dev-063a",         // hostname
+      "commit": "0f90d331…",               // build.commit (full sha)
+      "branch": "bench-ci-775" } ] }       // build.branch
 ```
 
 The converter inserts/replaces its run's entry keyed by `id` and re-sorts by date
-ascending, so both viewers list and open the earliest run first.
+ascending, so both viewers list the earliest run first. The report viewer's landing
+page (bare `index.html`) renders this manifest as the run-index listing — a faceted
+browser by default, a sortable table behind `?view=table`.
 
 ## Inputs — result-bundle layouts & manifests
 
