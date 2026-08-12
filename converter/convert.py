@@ -741,6 +741,22 @@ def manifest_entry(data):
     # Omit only unknown values: None (field absent) and empty strings (parsed
     # from blank metadata). A numeric 0 would be a real value and must survive.
     entry.update({k: v for k, v in extras.items() if v is not None and v != ""})
+    # Per-profile hot ingest p99 (the aggregated median, ns), in unit order.
+    # The run-index listing computes each row's pass/miss verdict from these
+    # against the live phase goals in targets.json, so it never fetches run
+    # files. Units without the stat (old vocabulary) are skipped; the field is
+    # omitted when no unit carries it.
+    ds = data.get("dataset") or {}
+    hot = data.get("ingest_hot") or {}
+    p99s = []
+    for unit in ds.get("unit_order") or list(ds.get("unit_meta") or {}):
+        try:
+            v = hot[unit]["driver"]["ingest_total"]["p99"]["m"]
+        except (KeyError, TypeError):
+            continue
+        p99s.append({"unit": unit, "p99_ns": v})
+    if p99s:
+        entry["ingest_p99"] = p99s
     return entry
 
 

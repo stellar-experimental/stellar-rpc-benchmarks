@@ -232,6 +232,15 @@ for (const run of manifest.runs) {
     || ghLinks.some((h) => h.includes("github.com/stellar/stellar-rpc/commit/")), ghLinks.slice(0, 2).join(","));
   const nameHrefs = [...doc.querySelectorAll("a.idx-name")].map((a) => a.getAttribute("href"));
   check(group, "run links land on the summary", nameHrefs.length > 0 && nameHrefs.every((h) => h.startsWith("summary.html?run=")), nameHrefs.slice(0, 2).join(","));
+  // Verdict line: one per entry that carries phase + ingest_p99 (optional
+  // metadata — entries without it must render without one).
+  const withVerdict = manifest.runs.filter((r) => r.phase != null && Array.isArray(r.ingest_p99) && r.ingest_p99.length);
+  const vlines = [...doc.querySelectorAll(".idx-row .idx-verdict")];
+  check(group, "verdict line on phase-aware rows only", vlines.length === withVerdict.length, `${vlines.length} lines, ${withVerdict.length} eligible`);
+  check(group, "verdict reads count · goal · worst", withVerdict.length === 0
+    || vlines.every((el) => /[✓▲✕] \d+\/\d+ pass · goal .+ · worst: .+ p99 .+ \(.+\)/.test(txt(el))), txt(vlines[0]));
+  const striped = doc.querySelectorAll(".idx-row.idx-v-pass, .idx-row.idx-v-miss, .idx-row.idx-v-fail").length;
+  check(group, "verdict stripe class on the same rows", striped === withVerdict.length, striped + " striped");
   // Listing toolbar: global pages only — the run navigation stays hidden.
   check(group, "run selector hidden on the listing", doc.getElementById("run-select").hidden, "visible");
   check(group, "all-runs + summary links hidden on the listing",
