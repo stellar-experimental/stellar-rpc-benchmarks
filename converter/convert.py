@@ -138,17 +138,19 @@ def detect_layout(names):
 
 
 def discover_units_reps(names, layout):
-    """Discover unit ids and rep numbers from the cold ingest dir names.
+    """Discover unit ids and rep numbers from the ingest dir names — cold and
+    hot both count, so a hot-only campaign (ingest = "hot") still yields its
+    unit set.
 
     A campaign unit id is the composite "<dataset>-c<chunk>" (e.g. sac-6000-c1);
     pubnet/synthetic unit ids are the bare token between family and run.
     """
     if layout == "synthetic":
-        pat = re.compile(r"^synth-cold-(.+)-run(\d+)$")
+        pat = re.compile(r"^synth-(?:cold|hot)-(.+)-run(\d+)$")
     elif layout == "campaign":
-        pat = re.compile(r"^ingest-cold-(.+-c\d+)-run(\d+)$")
+        pat = re.compile(r"^ingest-(?:cold|hot)-(.+-c\d+)-run(\d+)$")
     else:
-        pat = re.compile(r"^ingest-cold-(.+)-run(\d+)$")
+        pat = re.compile(r"^ingest-(?:cold|hot)-(.+)-run(\d+)$")
     units, reps = set(), set()
     for n in names:
         m = pat.match(n)
@@ -201,10 +203,14 @@ def read_all(dirs, filename):
 
 def detect_vocabulary(results_dir, layout, unit, reps):
     d = cold_dir(results_dir, layout, unit, reps[0])
+    if not os.path.isfile(os.path.join(d, "driver.csv")):
+        # Hot-only campaign: the hot driver names the wall run_wall (new) or
+        # chunk_wall (old).
+        d = hot_dir(results_dir, layout, unit, reps[0])
     rows = read_csv(os.path.join(d, "driver.csv"))
     if "chunk_wall" in rows:
         return "old"
-    if "backfill_wall" in rows:
+    if "backfill_wall" in rows or "run_wall" in rows:
         return "new"
     warn(f"could not detect vocabulary from {os.path.basename(d)}/driver.csv; defaulting to new")
     return "new"
@@ -441,7 +447,9 @@ def format_interval(ns):
 
 # ----------------------------------------------------------------- unit facts
 def unit_counts(results_dir, layout, unit, reps):
-    """Ledger / tx / event counts from the cold driver run-1 n_items."""
+    """Ledger / tx / event counts from the first available cold driver's
+    n_items; a hot-only campaign carries the same counts as the hot leg's
+    per-ledger stage n_items in hot.csv."""
     for r in reps:
         p = os.path.join(cold_dir(results_dir, layout, unit, r), "driver.csv")
         if os.path.isfile(p):
@@ -451,7 +459,17 @@ def unit_counts(results_dir, layout, unit, reps):
                 "txs": d["txhash_total"]["n_items"],
                 "events": d["events_total"]["n_items"],
             }
-    warn(f"no cold driver.csv found for unit {unit}; counts unavailable")
+    for r in reps:
+        p = os.path.join(hot_dir(results_dir, layout, unit, r), "hot.csv")
+        if os.path.isfile(p):
+            d = read_csv(p)
+            if all(k in d for k in ("ledgers", "txhash", "events")):
+                return {
+                    "ledgers": d["ledgers"]["n_items"],
+                    "txs": d["txhash"]["n_items"],
+                    "events": d["events"]["n_items"],
+                }
+    warn(f"no cold driver.csv or hot hot.csv found for unit {unit}; counts unavailable")
     return {"ledgers": 0, "txs": 0, "events": 0}
 
 

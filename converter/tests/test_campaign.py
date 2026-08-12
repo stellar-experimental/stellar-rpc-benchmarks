@@ -4,6 +4,7 @@ fixtures.py so the whole convert() pipeline runs, stdlib only."""
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -143,6 +144,38 @@ class CampaignPacedTests(unittest.TestCase):
                                  source_uri="s3://bucket/results/run-x")
         self.assertEqual(data["campaign"]["source_uri"], "s3://bucket/results/run-x")
         self.assertNotIn("source_gcs", data["campaign"])
+
+
+class CampaignHotOnlyTests(unittest.TestCase):
+    """A campaign run with ingest = "hot" has no ingest-cold-* dirs at all:
+    units, reps, vocabulary, and counts must all come from the hot legs."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        root = os.path.join(self.tmp, "b")
+        fixtures.build_campaign_bundle(root)
+        for name in os.listdir(root):
+            if name.startswith("ingest-cold-"):
+                shutil.rmtree(os.path.join(root, name))
+        self.data, self.warnings, _ = run_convert(root)
+
+    def test_units_and_hot_section(self):
+        self.assertEqual(set(self.data["dataset"]["unit_order"]),
+                         set(fixtures.CAMPAIGN_UNITS))
+        self.assertEqual(set(self.data["ingest_hot"]), set(fixtures.CAMPAIGN_UNITS))
+        self.assertFalse(self.data.get("ingest_cold"))
+
+    def test_counts_from_hot_csv(self):
+        u = next(iter(fixtures.CAMPAIGN_UNITS))
+        want = fixtures.CAMPAIGN_UNITS[u]
+        meta = self.data["dataset"]["unit_meta"][u]
+        self.assertEqual(meta["ledgers"], want["ledgers"])
+        self.assertEqual(meta["txs"], want["txs"])
+        self.assertEqual(meta["events"], want["events"])
+
+    def test_hot_derived_rate_nonzero(self):
+        u = next(iter(fixtures.CAMPAIGN_UNITS))
+        rate = self.data["ingest_hot"][u]["derived"]["ledgers_per_s"]["m"]
+        self.assertGreater(rate, 0)
 
 
 class CampaignUnpacedTests(unittest.TestCase):
