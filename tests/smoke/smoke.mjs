@@ -88,13 +88,17 @@ const EXPECT = {
   synthetic: { sections: 7, requiredIds: ["target"], minFigures: 7, minSvgs: 7 },
 };
 
-function checkKind(kind, doc, group, reps) {
+function checkKind(kind, doc, group, data) {
+  const reps = data.campaign.reps;
   const base = EXPECT[kind];
   if (!base) { check(group, `known kind (${kind})`, false, "no expectations defined"); return; }
   const exp = { ...base };
   // Single-rep runs hide the run-to-run variance section (one section, one
   // figure, one SVG fewer).
   if (kind === "synthetic" && reps === 1) { exp.sections -= 1; exp.minFigures -= 1; exp.minSvgs -= 1; }
+  // Hot-only runs (ingest = "hot") hide the cold section and its three
+  // figures, plus the cold-vs-hot rate figure in the hot section.
+  if (kind === "synthetic" && !data.ingest_cold) { exp.sections -= 1; exp.minFigures -= 4; exp.minSvgs -= 4; }
   const report = doc.getElementById("report");
   const sections = report.querySelectorAll("section").length;
   check(group, `${exp.sections} sections rendered`, sections === exp.sections, sections);
@@ -202,7 +206,7 @@ for (const run of manifest.runs) {
   check(group, "summary link carries the run id",
     doc.getElementById("summary-link").getAttribute("href") === `summary.html?run=${encodeURIComponent(run.id)}`,
     doc.getElementById("summary-link").getAttribute("href"));
-  checkKind(run.kind, doc, group, runJSON(run.id).campaign.reps);
+  checkKind(run.kind, doc, group, runJSON(run.id));
   checkSanity(run.kind, doc, group, runJSON(run.id));
   window.close();
 }
