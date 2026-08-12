@@ -372,6 +372,18 @@ pre.metadata {
 .idx-k { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 4px; }
 .idx-date { margin-left: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); }
 
+/* row verdict (facets view): colored left stripe + one-line result */
+.idx-row.idx-v-pass { border-left: 3px solid color-mix(in srgb, var(--good) 55%, transparent); }
+.idx-row.idx-v-miss { border-left: 3px solid color-mix(in srgb, var(--warn) 65%, transparent); }
+.idx-row.idx-v-fail { border-left: 3px solid color-mix(in srgb, var(--hot) 65%, transparent); }
+.idx-verdict {
+  flex-basis: 100%; margin-top: 2px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted);
+}
+.idx-verdict .v-pass { color: var(--good-text); font-weight: 600; }
+.idx-verdict .v-miss { color: var(--warn); font-weight: 600; }
+.idx-verdict .v-fail { color: var(--hot); font-weight: 600; }
+
 /* table view */
 .idx-tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .idx-table { width: 100%; border-collapse: collapse; }
