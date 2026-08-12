@@ -758,15 +758,19 @@
     // Test data = the generated synthetic-ledger datasets (dataset-sizes.json);
     // the run's own bundle URI is the RAW RESULTS dir, linked from §05 instead.
     // s3:// links to the S3 console, legacy gs:// to the GCS console.
+    // Percent-encode a bucket path, keeping the "/" separators literal: without
+    // it a key containing #, ?, & or a space would change what the link points at.
+    const encPath = s => s.split("/").map(encodeURIComponent).join("/");
     const bucketLink = (uri) => {
       const u = String(uri);
       let href = "";
       if (u.startsWith("gs://")) {
-        href = "https://console.cloud.google.com/storage/browser/" + u.slice(5);
+        href = "https://console.cloud.google.com/storage/browser/" + encPath(u.slice(5));
       } else if (u.startsWith("s3://")) {
         const [bucket, ...rest] = u.slice(5).split("/");
-        const prefix = rest.join("/");
-        href = `https://console.aws.amazon.com/s3/buckets/${bucket}?prefix=${prefix}${prefix && !prefix.endsWith("/") ? "/" : ""}`;
+        let prefix = rest.join("/");
+        if (prefix && !prefix.endsWith("/")) prefix += "/";
+        href = `https://console.aws.amazon.com/s3/buckets/${encodeURIComponent(bucket)}?prefix=${encPath(prefix)}`;
       }
       return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
     };
