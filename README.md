@@ -95,15 +95,15 @@ JSON — closing the loop: campaign config → run → publish → ingest → vi
 ## Add a run
 
 `scripts/ingest.sh` is the one path from a published bundle to a committed run: it
-fetches the bundle, converts it, and stages the result as a `run/<run_id>` branch. The
-same script backs `make ingest` and the GitHub Action below, so a run ingested from a
-laptop and one ingested from CI are byte-identical, commit message included.
+fetches the bundle, converts it, and commits the site update. The same script backs
+`make ingest` and the automated flow below, so a run ingested from a laptop and one
+ingested from CI are byte-identical, commit message included.
 
 ```bash
-# On a laptop authenticated to GCS (gcloud auth login). That gs:// path is the
-# one recorded as campaign.source_gcs in docs/runs/phase3-c6id8xl-c48a55c6-20260724T214257Z.json.
+# On a laptop with AWS credentials for the results bucket. The s3:// path is
+# recorded as campaign.source_uri in the run JSON (the viewer's "Source data" link).
 make ingest \
-  BUNDLE=gs://rpc-full-history/results/phase3-c6id8xl-c48a55c6-20260724T214257Z \
+  BUNDLE=s3://stellar-rpc-bench/results/<run-id> \
   KIND=synthetic
 ```
 
@@ -121,16 +121,16 @@ Everything else is derived from the bundle's own `metadata.json`
 | Run id, and so the file | `run_id` → `docs/runs/<run_id>.json`             |
 | Run date                | `started_at`                                     |
 | Run name                | `campaign.name`                                  |
-| `campaign.source_gcs`   | the `gs://` URI you passed (recorded as provenance) |
-| Commit / PR body        | campaign config, close interval, datasets, hardware |
+| `campaign.source_uri`   | the `s3://` (or `gs://`) URI you passed (recorded as provenance) |
+| Commit body             | campaign config, close interval, datasets, hardware |
 
 Three modes, least to most committal:
 
-| Mode        | Effect                                                                     |
-|-------------|-----------------------------------------------------------------------------|
-| `--dry-run` | Converts into a **temp** directory — never `docs/runs/` — and prints the converter output, the derived run id, the would-be commit body, the would-be branch, and the exact git/gh commands full mode would run. Executes none of them. A remote bundle isn't fetched either; the fetch command is printed instead, so a dry run works offline. |
-| `--local`   | Converts into `docs/runs/`, creates `run/<run_id>` off HEAD, commits the two changed files. No push, no PR. |
-| (default)   | `--local`, then `git push -u origin run/<run_id>` and `gh pr create`.        |
+| Mode          | Effect                                                                     |
+|---------------|-----------------------------------------------------------------------------|
+| `--dry-run`   | Converts into a **temp** directory — never `docs/runs/` — and prints the converter output, the derived run id, the would-be commit body, the would-be branch, and the exact commands `--push-main` would run. Executes none of them. A remote bundle isn't fetched either; the fetch command is printed instead, so a dry run works offline. |
+| `--local`     | (default) Converts into `docs/runs/`, creates `run/<run_id>` off HEAD, commits the two changed files. No push. |
+| `--push-main` | Converts into `docs/runs/`, runs `make test` + `make smoke` as a push gate, commits on HEAD (which must be at `origin/main`), and pushes it to `origin main`. Prints `viewer: <url>`. Pushing to main is the deploy (`deploy-pages.yml`). |
 
 `make ingest` passes `--local` on purpose: it stops at the commit, so you can read the
 diff and `make serve` the result before anything leaves the machine. Call the script
@@ -138,16 +138,11 @@ directly for the other two modes:
 
 ```bash
 # Look before you leap — converts to a temp dir, touches nothing:
-scripts/ingest.sh gs://rpc-full-history/results/<run-id> --dataset-kind synthetic --dry-run
+scripts/ingest.sh s3://stellar-rpc-bench/results/<run-id> --dataset-kind synthetic --dry-run
 
-# Full: convert, branch, commit, push, open the PR (needs gh authenticated):
-scripts/ingest.sh gs://rpc-full-history/results/<run-id> --dataset-kind synthetic
+# Publish: convert, gate on the tests, commit on main, push (the deploy):
+scripts/ingest.sh s3://stellar-rpc-bench/results/<run-id> --dataset-kind synthetic --push-main
 ```
-
-The PR targets the default branch and carries the campaign one-liners, any converter
-warnings, and a note pointing the reviewer at the preview: `pr-preview.yml` publishes
-that PR's `docs/`, so the new run can be read in the viewer before anyone merges it.
-Merging is the deploy.
 
 Two rails keep the flow from surprising you. The script refuses to run against a working
 tree with uncommitted tracked changes, and refuses to overwrite an already-ingested run —
@@ -204,7 +199,8 @@ git commit -m "Add run pubnet-2026-07-13"
 | `KIND`     | yes      | `pubnet` or `synthetic`                                        |
 | `RUN_DATE` | yes      | `YYYY-MM-DD`                                                   |
 | `FACTS`    | no       | Path to a `--unit-facts` sidecar JSON (synthetic dataset meta) |
-| `GCS`      | no       | Source `gs://…` path, recorded in the run for provenance       |
+| `URI`      | no       | Source `s3://…` (or `gs://…`) path, recorded in the run for provenance |
+| `GCS`      | no       | Legacy: source `gs://…` path as `campaign.source_gcs`; prefer `URI` |
 
 Omitting any required variable fails with a message naming the missing one. `results-in/`
 is git-ignored.
@@ -225,41 +221,29 @@ byte-identical into `docs/txsub/<bundle-id>/`, and add an entry to
 `docs/txsub/index.json` (network, role, date, rps × duration, rpc_version, instance,
 GCS path, summary paths).
 
-## GitHub Action flow (`.github/workflows/ingest.yml`)
+## Automated ingest (stellar-rpc's `bench-campaign.yml`)
 
-`workflow_dispatch` running `scripts/ingest.sh` in full mode — the same script as the
-local flow above, which is the point: CI is not a second implementation that can drift.
-Three inputs, two of them required:
+Campaigns dispatched from stellar-rpc's `bench-campaign.yml` workflow ingest their own
+results: after a passing campaign, its notify job downloads the results tarball the
+benchmark box uploaded, clones this repo, and runs
 
-| Input          | Required | Meaning                                                       |
-|----------------|----------|---------------------------------------------------------------|
-| `gcs_path`     | yes      | `gs://` path to the campaign result bundle                     |
-| `dataset_kind` | yes      | `pubnet` or `synthetic`                                        |
-| `extra_args`   | no       | Passed to `convert.py` after `--` (e.g. `--unit-facts …`)      |
+```bash
+scripts/ingest.sh bench-results-<run_id>.tgz --dataset-kind synthetic --push-main \
+  -- --source-uri s3://stellar-rpc-bench/results/<run_id>
+```
 
-Run id, date, and name are not asked for — they come from the bundle's `metadata.json`.
-`extra_args` is one freeform string word-split on whitespace, so a value containing spaces
-can't be expressed there; use the local flow for those.
+— the same script as the local flow above, which is the point: CI is not a second
+implementation that can drift. `--push-main` gates the push on `make test` +
+`make smoke`, commits on `main`, and pushes; `deploy-pages.yml` then publishes the site,
+and the campaign's summary and Slack message carry the
+`https://stellar-experimental.github.io/stellar-rpc-benchmarks/?run=<run_id>` link.
 
-The job checks out the repo, authenticates to GCP via Workload Identity Federation, then
-hands the `gs://` path to the script, which fetches, converts, commits on `run/<run_id>`,
-pushes, and opens the PR against the default branch. Runs therefore arrive as reviewable
-PRs with a `pr-preview.yml` render attached, exactly like the local flow — not as a push
-straight to `main`. Permissions: `contents: write` and `pull-requests: write` (push the
-branch, open the PR) plus `id-token: write` (the OIDC token WIF exchanges).
-
-**This workflow does not run yet — the GCP-side setup is pending.** It fails early with a
-clear message until two repository variables exist
-(Settings → Secrets and variables → Actions → Variables):
-
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`
-- `GCP_SERVICE_ACCOUNT`
-
-Creating them requires, in GCP project **`dev-hubble`**, a workload identity pool + provider
-(federating this GitHub repo) and a service account with `roles/storage.objectViewer` on
-`gs://rpc-full-history`. That GCP setup is out of this repo's hands; until it lands,
-`make ingest` from a laptop is the way runs get in — and it runs the same script, so
-nothing about a run changes when the dispatch starts working.
+The push authenticates with a write deploy key on this repo (stored as the
+`BENCHMARKS_DEPLOY_KEY` secret on stellar/stellar-rpc). No AWS credentials live in this
+repo: the tarball travels through the campaign's own S3 prefix, which stellar-rpc's
+existing CI role can read. A failed ingest never fails the campaign — the notification
+falls back to the raw `s3://` results URI, and the run can be ingested later from a
+laptop with the same command.
 
 ## Data model
 

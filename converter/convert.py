@@ -898,6 +898,8 @@ def convert(args):
     campaign = {"reps": len(reps), "vocabulary": vocab}
     if args.source_gcs:
         campaign["source_gcs"] = args.source_gcs
+    if args.source_uri:
+        campaign["source_uri"] = args.source_uri
     if args.notes:
         campaign["notes"] = args.notes
     if close_interval_ns is not None:
@@ -1002,7 +1004,8 @@ def main(argv=None):
     ap.add_argument("--run-date")
     ap.add_argument("--dataset-kind", required=True, choices=["pubnet", "synthetic"])
     ap.add_argument("--unit-facts")
-    ap.add_argument("--source-gcs")
+    ap.add_argument("--source-gcs")   # legacy GCS-only provenance; prefer --source-uri
+    ap.add_argument("--source-uri")   # bundle provenance, s3:// or gs://
     ap.add_argument("--notes")
     ap.add_argument("--description")
     ap.add_argument("--out-dir", required=True)

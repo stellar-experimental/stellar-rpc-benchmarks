@@ -579,9 +579,22 @@
     const machineLine = [mac.instance, mac.vcpus ? mac.vcpus + " vCPU" : "", mac.mem, "local NVMe instance store"].filter(Boolean).join(" · ");
     const osLine = [mac.os, mac.instance_id].filter(Boolean).join(" · ");
     const dsLine = `${units.length} ${(ds.unit_label || "unit").toLowerCase()}${units.length === 1 ? "" : "s"} · ${fmtInt(L)} ledgers · ${fmtK(Ev)} events · ${fmtK(T)} txs`;
-    const src = camp.source_gcs
-      ? `<a href="https://console.cloud.google.com/storage/browser/${esc(camp.source_gcs.replace("gs://", ""))}">${esc(camp.source_gcs)} ↗</a>`
-      : "—";
+    // Console link for the bundle the run was converted from: s3:// runs link
+    // to the S3 console, legacy gs:// runs to the GCS console.
+    const bucketLink = (uri) => {
+      const u = String(uri);
+      let href = "";
+      if (u.startsWith("gs://")) {
+        href = "https://console.cloud.google.com/storage/browser/" + u.slice(5);
+      } else if (u.startsWith("s3://")) {
+        const [bucket, ...rest] = u.slice(5).split("/");
+        const prefix = rest.join("/");
+        href = `https://console.aws.amazon.com/s3/buckets/${bucket}?prefix=${prefix}${prefix && !prefix.endsWith("/") ? "/" : ""}`;
+      }
+      return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
+    };
+    const srcUri = camp.source_uri || camp.source_gcs;
+    const src = srcUri ? bucketLink(srcUri) : "—";
     // Campaign-manifest provenance cells — appear only when the run carries them
     // (old runs render the six original cells unchanged).
     const metaCell = (k, v) => `<div class="meta-cell"><div class="meta-k">${esc(k)}</div><div class="meta-v">${esc(v)}</div></div>`;
