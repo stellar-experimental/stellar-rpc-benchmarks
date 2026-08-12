@@ -211,6 +211,26 @@ class ManifestEntryTests(unittest.TestCase):
         self.assertEqual(entry["commit"], "abc123")
         self.assertNotIn("branch", entry)
 
+    def test_ingest_p99_carried_in_unit_order(self):
+        stat = lambda m: {"driver": {"ingest_total": {"p99": {"m": m}}}}
+        data = dict(self.BASE)
+        data["dataset"] = {"kind": "synthetic", "unit_order": ["b", "a"],
+                           "unit_meta": {"a": {}, "b": {}}}
+        data["ingest_hot"] = {"a": stat(7), "b": stat(9)}
+        self.assertEqual(convert.manifest_entry(data)["ingest_p99"],
+                         [{"unit": "b", "p99_ns": 9}, {"unit": "a", "p99_ns": 7}])
+
+    def test_ingest_p99_skips_units_without_the_stat_and_omits_when_empty(self):
+        data = dict(self.BASE)
+        data["dataset"] = {"kind": "synthetic", "unit_order": ["a", "b"]}
+        # old vocabulary: driver rows exist, ingest_total does not
+        data["ingest_hot"] = {"a": {"driver": {"chunk_wall": {}}},
+                              "b": {"driver": {"ingest_total": {"p99": {"m": 5}}}}}
+        self.assertEqual(convert.manifest_entry(data)["ingest_p99"],
+                         [{"unit": "b", "p99_ns": 5}])
+        data["ingest_hot"] = {"a": {"driver": {"chunk_wall": {}}}}
+        self.assertNotIn("ingest_p99", convert.manifest_entry(data))
+
 
 class ManifestTests(unittest.TestCase):
     def test_insert_replace_and_sort(self):

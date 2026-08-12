@@ -235,7 +235,14 @@ converter warns.
       "machine": "m6id.2xlarge",           // hardware.instance_type (fallback: parsed machine.instance)
       "hostname": "user-dev-063a",         // hostname
       "commit": "0f90d331…",               // build.commit (full sha)
-      "branch": "bench-ci-775" } ] }       // build.branch
+      "branch": "bench-ci-775",            // build.branch
+      // Per-profile hot ingest p99 (aggregated median, ns) in unit order —
+      // copied from ingest_hot.<unit>.driver.ingest_total.p99.m. The listing's
+      // facets view computes each row's pass/miss verdict from these against
+      // the live phase goals in targets.json (the goal itself is never baked
+      // here). Units without the stat are skipped; the field is omitted when
+      // no unit carries it.
+      "ingest_p99": [ { "unit": "sac-6000-c1", "p99_ns": 802546407 } ] } ] }
 ```
 
 The converter inserts/replaces its run's entry keyed by `id` and re-sorts by date

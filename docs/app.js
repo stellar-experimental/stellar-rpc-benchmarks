@@ -1751,8 +1751,10 @@
   // Bare index.html (no ?run=) lists every manifest run in two lightweight
   // views over the same entries: a faceted browser (default) and a sortable
   // table (?view=table). The listing metadata (phase, machine, hostname,
-  // commit, branch) is optional per manifest entry — entries without it render
-  // with the identity fields only, and empty facet groups are omitted.
+  // commit, branch, ingest_p99) is optional per manifest entry — entries
+  // without it render with the identity fields only, and empty facet groups
+  // are omitted. Facets rows with phase + ingest_p99 additionally carry a
+  // pass/miss verdict line (idxVerdict).
   const GH_REPO = "https://github.com/stellar/stellar-rpc";
   const IDX_FACETS = [
     { key: "phase", label: "Phase", fmt: v => "Phase " + v },
@@ -1787,6 +1789,44 @@
   const idxMatch = (r, except) => IDX_FACETS.every(f =>
     f.key === except || !(f.key in idxSel) || r[f.key] === idxSel[f.key]);
 
+  // Verdict for a facets-view row: the entry's baked per-profile hot ingest
+  // p99 vs its phase's goal from live targets.json (the goal is never baked
+  // into the manifest, so a targets.json fix propagates without reconverting).
+  // Null — row renders without a verdict — when the entry lacks the data or
+  // the phase, or the phase has no ingest goal.
+  function idxVerdict(r) {
+    if (r.phase == null || !Array.isArray(r.ingest_p99) || !r.ingest_p99.length) return null;
+    const ph = (LIVE_TARGETS || []).find(p => p && p.phase === r.phase);
+    const goal = ph && ph.ingest_p99_target_ns > 0 ? ph.ingest_p99_target_ns : null;
+    if (!goal) return null;
+    const units = r.ingest_p99.filter(e => e && e.p99_ns > 0 && e.unit != null);
+    if (!units.length) return null;
+    let pass = 0, worst = units[0];
+    units.forEach(e => {
+      if (e.p99_ns <= goal) pass++;
+      if (e.p99_ns > worst.p99_ns) worst = e;
+    });
+    // Same unit → workload-name matching as the summary page; the raw unit id
+    // is the fallback.
+    const ws = ph.workloads || [];
+    const u = String(worst.unit).toLowerCase();
+    const wl = u.startsWith("sac") ? ws.find(w => /^sac/i.test(w.name))
+      : u.includes("token") ? ws.find(w => /token/i.test(w.name))
+        : u.includes("soroswap") ? ws.find(w => /soroswap/i.test(w.name)) : null;
+    const name = wl ? wl.name : String(worst.unit);
+    const ratio = worst.p99_ns / goal;
+    const delta = pass === units.length ? `${Math.round((1 - ratio) * 100)}% headroom`
+      : ratio >= 2 ? `${ratio.toFixed(1)}× over`
+        : `+${Math.round((ratio - 1) * 100)}%`;
+    const cls = pass === units.length ? "pass" : pass > 0 ? "miss" : "fail";
+    const mark = { pass: "✓", miss: "▲", fail: "✕" }[cls];
+    return {
+      cls,
+      html: `<span class="v-${cls}">${mark} ${pass}/${units.length} pass</span>`
+        + ` · goal ${esc(fmtNsAxis(goal))} · worst: ${esc(name)} p99 ${esc(fmtNs(worst.p99_ns))} (${esc(delta)})`,
+    };
+  }
+
   const ghCommit = c => `<a class="idx-gh" target="_blank" rel="noopener" href="${GH_REPO}/commit/${esc(c)}">${esc(String(c).slice(0, 8))}</a>`;
   const ghBranch = b => `<a class="idx-gh" target="_blank" rel="noopener" href="${GH_REPO}/tree/${encodeURIComponent(b)}">${esc(b)}</a>`;
   const idxBadge = r => `<span class="idx-badge idx-${esc(r.kind)}">${esc(r.kind)}</span>`;
@@ -1809,8 +1849,10 @@
     }).join("");
     const clear = Object.keys(idxSel).length
       ? `<button type="button" class="idx-clear" id="idx-clear">✕ clear filters</button>` : "";
-    const list = rows.map(r => `
-      <div class="idx-row" data-run="${esc(r.id)}">
+    const list = rows.map(r => {
+      const v = idxVerdict(r);
+      return `
+      <div class="idx-row${v ? ` idx-v-${v.cls}` : ""}" data-run="${esc(r.id)}">
         <a class="idx-name" href="${runHref(r)}">${esc(r.name)}</a>
         ${idxBadge(r)}
         <span class="idx-meta">
@@ -1821,7 +1863,9 @@
           ${r.branch ? `<span><span class="idx-k">branch</span>${ghBranch(r.branch)}</span>` : ""}
         </span>
         <span class="idx-date">${esc(r.date)}</span>
-      </div>`).join("") || `<p class="sec-intro">No runs match the current filters.</p>`;
+        ${v ? `<span class="idx-verdict">${v.html}</span>` : ""}
+      </div>`;
+    }).join("") || `<p class="sec-intro">No runs match the current filters.</p>`;
     return `<div class="idx-layout"><aside class="idx-facets">${groups}${clear}</aside><div class="idx-list">${list}</div></div>`;
   }
 
