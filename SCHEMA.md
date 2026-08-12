@@ -65,7 +65,9 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
   "campaign": {
     "reps": 5,
     "vocabulary": "old" | "new",           // auto-detected: chunk_wall ⇒ old, backfill_wall ⇒ new
-    "source_gcs": "gs://…",                // optional
+    "source_gcs": "gs://…",                // optional; legacy — new runs carry source_uri
+    "source_uri": "s3://…" | "gs://…",     // optional; the published bundle this run was
+                                           //   converted from (the viewer's "Source data" link)
     "notes": "…",                          // optional
     "close_interval_ns": 2000000000,       // optional; ledger close schedule in ns, 0 = unpaced.
                                            //   From metadata.json campaign.close_interval (a Go

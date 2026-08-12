@@ -417,11 +417,12 @@ for (const run of manifest.runs) {
   check(group, "dataset table has no empty or — cells", dsCells.length > 0 && !dsCells.some(badCell), dsCells.filter(badCell).length + " bad of " + dsCells.length);
   check(group, "dataset table names the workloads", /SAC transfers/.test(txt(doc.getElementById("dataset-table"))), "missing");
   // Test-data provenance: sizes + source come from dataset-sizes.json; the
-  // run's own source_gcs is the raw-results dir, linked from §05.
+  // run's own bundle URI (source_uri, legacy source_gcs) is the raw-results
+  // dir, linked from §05.
   const dsTblTxt = txt(doc.getElementById("dataset-table"));
   check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
   check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
-  check(group, "raw-results link in §05", /results\//.test(txt(doc.getElementById("raw-results"))), "missing");
+  check(group, "raw-results link in §05", /(gs|s3):\/\/\S*results\//.test(txt(doc.getElementById("raw-results"))), "missing");
   check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
   // Headline figure: bars plus two visually separate reference lines.
   const f31 = doc.querySelector("#fig31-body svg");

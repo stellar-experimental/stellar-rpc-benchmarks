@@ -3,12 +3,13 @@
 # ingest.sh — consumer half of the benchmark publish pipeline.
 #
 # Fetch a campaign result bundle, convert it into a run JSON with
-# converter/convert.py, and stage the site update as a PR branch.
+# converter/convert.py, and commit the site update.
 # This is the counterpart to the producer that uploads bundles to a bucket.
 #
 # USAGE
 #   scripts/ingest.sh <bundle> --dataset-kind <pubnet|synthetic> \
-#                     [--dry-run|--local] [--force] [-- <extra convert.py args>]
+#                     [--dry-run|--local|--push-main] [--force] \
+#                     [-- <extra convert.py args>]
 #
 #   <bundle> is auto-detected and may be:
 #     - a gs://.../<run_id>/ or s3://.../<run_id>/ URI (fetched into a temp dir),
@@ -19,19 +20,22 @@
 #   (e.g. -- --run-name "..." --notes "...").
 #
 # MODES
-#   --dry-run  Fetch (local sources only; remote URIs just print the fetch
-#              command so the dry-run works offline), convert into a TEMP
-#              out-dir (never docs/runs), and print the converter output, the
-#              would-be branch name, and the git/gh commands full mode would
-#              run. Executes none of them.
-#   --local    Convert into docs/runs/, create branch run/<run_id> from HEAD,
-#              git add the two changed files and commit. NO push, NO PR.
-#   (default)  Full mode: --local plus `git push -u origin run/<run_id>` and
-#              `gh pr create` with a generated body.
+#   --dry-run    Fetch (local sources only; remote URIs just print the fetch
+#                command so the dry-run works offline), convert into a TEMP
+#                out-dir (never docs/runs), and print the converter output,
+#                the would-be branch name, and the commands --push-main would
+#                run. Executes none of them.
+#   --local      (default) Convert into docs/runs/, create branch run/<run_id>
+#                from HEAD, git add the two changed files and commit. NO push.
+#   --push-main  Convert into docs/runs/, run the converter tests + viewer
+#                smoke test as a push gate, commit on HEAD (which must be at
+#                origin/main), and `git push origin HEAD:main`. Prints a
+#                `viewer: <url>` line for the caller to surface. Pushing to
+#                main IS the deploy (deploy-pages.yml syncs docs/ to Pages).
 #
 # EXAMPLES
 #   # Inspect a remote bundle without touching anything (prints the fetch cmd):
-#   scripts/ingest.sh gs://rpc-full-history/benchmarks/phase1-... \
+#   scripts/ingest.sh s3://stellar-rpc-bench/results/phase1-... \
 #     --dataset-kind synthetic --dry-run
 #
 #   # Ingest a local tarball and stage a commit on a run/ branch (no push):
@@ -39,19 +43,18 @@
 #     --dataset-kind synthetic --local
 #
 # CI NOTE
-#   .github/workflows/ingest.yml calls this script in full mode — it passes the
-#   dispatched gs:// path and --dataset-kind and does nothing else itself. So
-#   this script is the single source of truth for the fetch → convert → PR flow
-#   on both sides, and a CI-ingested run is identical to a locally ingested one.
-#   That workflow still can't run until bucket credentials / OIDC (the
-#   dev-hubble WIF setup) exist; it fails early and loudly until then.
+#   stellar-rpc's bench-campaign.yml notify job calls this script with
+#   --push-main after a passing campaign: it downloads the bundle tarball the
+#   box uploaded, clones this repo, and runs the script — which is the single
+#   source of truth for the fetch → convert → commit flow on both sides, so a
+#   CI-ingested run is byte-identical to a locally ingested one.
 
 set -euo pipefail
 
 # ------------------------------------------------------------------ helpers
 PROG="$(basename "$0")"
 die()   { echo "$PROG: error: $*" >&2; exit 1; }
-usage() { sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,50p' "$0" | sed 's/^# \{0,1\}//'; }
 
 TMPDIRS=()
 cleanup() {
@@ -65,7 +68,7 @@ trap cleanup EXIT
 # ------------------------------------------------------------------ arguments
 BUNDLE=""
 DATASET_KIND=""
-MODE="full"
+MODE="local"
 MODE_SET=0
 FORCE=0
 EXTRA=()
@@ -75,8 +78,9 @@ while [ $# -gt 0 ]; do
     --) shift; EXTRA=("$@"); break ;;
     --dataset-kind) DATASET_KIND="${2:-}"; shift 2 ;;
     --dataset-kind=*) DATASET_KIND="${1#*=}"; shift ;;
-    --dry-run) [ "$MODE_SET" -eq 1 ] && die "pick only one of --dry-run/--local"; MODE="dry-run"; MODE_SET=1; shift ;;
-    --local)   [ "$MODE_SET" -eq 1 ] && die "pick only one of --dry-run/--local"; MODE="local";   MODE_SET=1; shift ;;
+    --dry-run)   [ "$MODE_SET" -eq 1 ] && die "pick only one of --dry-run/--local/--push-main"; MODE="dry-run";   MODE_SET=1; shift ;;
+    --local)     [ "$MODE_SET" -eq 1 ] && die "pick only one of --dry-run/--local/--push-main"; MODE="local";     MODE_SET=1; shift ;;
+    --push-main) [ "$MODE_SET" -eq 1 ] && die "pick only one of --dry-run/--local/--push-main"; MODE="push-main"; MODE_SET=1; shift ;;
     --force)   FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option: $1 (use -- to pass args to convert.py)" ;;
@@ -203,6 +207,8 @@ fi
 BRANCH="run/$RUN_ID"
 RUN_JSON="docs/runs/$RUN_ID.json"
 INDEX_JSON="docs/runs/index.json"
+SITE_BASE="https://stellar-experimental.github.io/stellar-rpc-benchmarks"
+VIEWER_URL="$SITE_BASE/?run=$RUN_ID"
 
 # ------------------------------------------------------------------ body builders
 # Shared PR/commit body: metadata one-liners (or run_id only when absent),
@@ -247,7 +253,7 @@ PY
     echo "${warnings//WARN: /- }"
     echo
   fi
-  echo "Reviewer: open the PR preview, select \"$RUN_ID\" in the run selector, then append ?view=hot (or use the hot toggle)."
+  echo "View: $VIEWER_URL (append &view=hot for the hot-only view)."
 }
 
 # ------------------------------------------------------------------ convert
@@ -255,13 +261,15 @@ CONVERT_WARNINGS=""
 run_convert() {
   local out_dir="$1" so se rc
   so="$WORK/convert.out"; se="$WORK/convert.err"
-  # A gs:// bundle IS the run's provenance — forward it as --source-gcs so the
-  # run JSON carries campaign.source_gcs (the viewer's "Source data" link).
-  # s3:// is left out on purpose: the viewer builds a GCS console URL, so an
-  # s3 URI would render a broken link (wire it up when the S3 move lands).
-  # An explicit --source-gcs after `--` still wins (argparse takes the last).
+  # A remote bundle URI IS the run's provenance — forward it as --source-uri so
+  # the run JSON carries campaign.source_uri (the viewer's "Source data" link;
+  # it renders an S3 or GCS console URL by scheme). An explicit --source-uri
+  # after `--` still wins (argparse takes the last), which is how a tarball
+  # ingest names the bundle it was published from.
   local prov=()
-  [ "$SRC_TYPE" = "remote-gs" ] && prov=(--source-gcs "$BUNDLE")
+  case "$SRC_TYPE" in
+    remote-gs | remote-s3) prov=(--source-uri "$BUNDLE") ;;
+  esac
   echo "== convert =="
   set +e
   python3 converter/convert.py "$BUNDLE_DIR" \
@@ -284,26 +292,26 @@ if [ "$MODE" = "dry-run" ]; then
     run_convert "$dry_out"
   else
     echo "== convert =="
-    echo "(skipped: remote bundle not fetched in --dry-run; runs after fetch in full mode)"
+    echo "(skipped: remote bundle not fetched in --dry-run; runs after fetch in --local/--push-main)"
   fi
   echo
-  echo "== would-be commit/PR body =="
+  echo "== would-be commit body =="
   BODY="$(build_body "$CONVERT_WARNINGS")"
   echo "$BODY"
   echo
-  echo "== would-be branch =="
+  echo "== would-be branch (--local) =="
   echo "$BRANCH"
   echo
-  echo "== commands full mode would run (none executed) =="
-  echo "git checkout -b $BRANCH"
+  echo "== commands --push-main would run (none executed) =="
+  echo "make test && make smoke"
   echo "git add $RUN_JSON $INDEX_JSON"
   echo "git commit -F <message>   # subject: runs: add $RUN_ID"
-  echo "git push -u origin $BRANCH"
-  echo "gh pr create --title \"runs: add $RUN_ID\" --body-file <body>"
+  echo "git push origin HEAD:main"
+  echo "viewer: $VIEWER_URL"
   exit 0
 fi
 
-# ------------------------------------------------------------------ safety rails (local/full)
+# ------------------------------------------------------------------ safety rails (local/push-main)
 if ! git diff --quiet || ! git diff --cached --quiet; then
   die "working tree has uncommitted tracked changes; commit or stash before ingesting"
 fi
@@ -312,8 +320,27 @@ if [ -f "$RUN_JSON" ] && [ "$FORCE" -ne 1 ]; then
 fi
 [ -n "$BUNDLE_DIR" ] || die "no bundle directory to convert"
 
-# Convert on the current branch, then branch off HEAD and commit there.
+# push-main builds the commit that becomes origin/main, so HEAD must already BE
+# origin/main: converting on a stale or divergent base would push unrelated
+# docs/ state along with the run, or be rejected as non-fast-forward only
+# after the whole convert.
+if [ "$MODE" = "push-main" ]; then
+  git fetch origin main --quiet
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
+    || die "--push-main requires HEAD at origin/main (use a fresh clone, or git fetch && git checkout origin/main)"
+fi
+
+# Convert on the current HEAD; the mode decides where the commit lands below.
 run_convert "docs/runs"
+
+# The direct push has no PR to catch a bad run, so the converter tests and the
+# viewer smoke test (which loads every committed run, this one included) gate
+# the push instead.
+if [ "$MODE" = "push-main" ]; then
+  echo "== test gate =="
+  make test
+  make smoke
+fi
 
 SUBJECT="runs: add $RUN_ID"
 BODY="$(build_body "$CONVERT_WARNINGS")"
@@ -327,43 +354,41 @@ MSG_FILE="$WORK/commit-msg.txt"
   echo "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 } > "$MSG_FILE"
 
-# Idempotent branch handling: reuse run/<run_id> if it already exists (e.g. a
-# --force re-ingest), otherwise create it from the current HEAD.
-if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  git checkout "$BRANCH"
-else
-  git checkout -b "$BRANCH"
+# --local stages the run on a run/<run_id> branch for a human to inspect;
+# --push-main commits where it stands (HEAD at origin/main, checked above).
+if [ "$MODE" = "local" ]; then
+  # Idempotent branch handling: reuse run/<run_id> if it already exists (e.g. a
+  # --force re-ingest), otherwise create it from the current HEAD.
+  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git checkout "$BRANCH"
+  else
+    git checkout -b "$BRANCH"
+  fi
 fi
 
 git add "$RUN_JSON" "$INDEX_JSON"
 if git diff --cached --quiet; then
-  echo "converted run is byte-identical to the committed one on $BRANCH; nothing to commit."
+  echo "converted run is byte-identical to the committed one; nothing to commit."
+  if [ "$MODE" = "push-main" ]; then
+    echo "viewer: $VIEWER_URL"
+  fi
   exit 0
 fi
 git commit -F "$MSG_FILE"
 
 echo
-echo "Committed to branch $BRANCH:"
+echo "Committed:"
 git show --stat --oneline -s HEAD
 echo
 
 if [ "$MODE" = "local" ]; then
-  echo "Local mode: no push, no PR. Next steps:"
-  echo "  git push -u origin $BRANCH"
-  echo "  gh pr create --title \"$SUBJECT\" --body-file <(...)   # body is the commit message above"
+  echo "Local mode: committed on branch $BRANCH; nothing pushed."
+  echo "Inspect with 'make serve', then push to main (from a fresh clone or"
+  echo "after rebasing onto origin/main) via --push-main, or cherry-pick."
   exit 0
 fi
 
-# ------------------------------------------------------------------ full mode: push + PR
-PR_BODY_FILE="$WORK/pr-body.md"
-{
-  echo "$BODY"
-  echo
-  echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
-} > "$PR_BODY_FILE"
-
+# ------------------------------------------------------------------ push-main: push, then name the live run
 echo "== push =="
-git push -u origin "$BRANCH"
-
-echo "== gh pr create =="
-gh pr create --title "$SUBJECT" --body-file "$PR_BODY_FILE"
+git push origin HEAD:main
+echo "viewer: $VIEWER_URL"

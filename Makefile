@@ -16,24 +16,26 @@ help: ## Show this help
 	@echo
 	@echo "convert usage:"
 	@echo "  make convert RESULTS=<dir> RUN_ID=<slug> RUN_NAME=\"...\" \\"
-	@echo "               KIND=pubnet|synthetic RUN_DATE=YYYY-MM-DD [FACTS=<json>] [GCS=<gs://...>]"
+	@echo "               KIND=pubnet|synthetic RUN_DATE=YYYY-MM-DD [FACTS=<json>] [URI=<s3://..|gs://..>]"
 	@echo
-	@echo "ingest usage (campaign bundle -> run PR branch; --local, never pushes):"
-	@echo "  make ingest BUNDLE=<gs://..|s3://..|dir|.tgz> KIND=pubnet|synthetic"
+	@echo "ingest usage (campaign bundle -> local run/<id> branch; never pushes):"
+	@echo "  make ingest BUNDLE=<s3://..|gs://..|dir|.tgz> KIND=pubnet|synthetic"
+	@echo "  (CI pushes straight to main via scripts/ingest.sh --push-main)"
 
 convert: ## Convert a results dir into docs/runs/<id>.json and update the manifest
 	@$(foreach v,$(CONVERT_REQUIRED),$(if $(strip $($(v))),,$(error $(v) is required. \
-	Usage: make convert RESULTS=<dir> RUN_ID=<slug> RUN_NAME="..." KIND=pubnet|synthetic RUN_DATE=YYYY-MM-DD [FACTS=<json>] [GCS=<gs://...>])))
+	Usage: make convert RESULTS=<dir> RUN_ID=<slug> RUN_NAME="..." KIND=pubnet|synthetic RUN_DATE=YYYY-MM-DD [FACTS=<json>] [URI=<s3://...|gs://...>])))
 	python3 converter/convert.py "$(RESULTS)" \
 	  --run-id "$(RUN_ID)" \
 	  --run-name "$(RUN_NAME)" \
 	  --run-date "$(RUN_DATE)" \
 	  --dataset-kind "$(KIND)" \
 	  $(if $(strip $(FACTS)),--unit-facts "$(FACTS)",) \
+	  $(if $(strip $(URI)),--source-uri "$(URI)",) \
 	  $(if $(strip $(GCS)),--source-gcs "$(GCS)",) \
 	  --out-dir docs/runs
 
-ingest: ## Ingest a campaign bundle into a run/<id> PR branch (BUNDLE, KIND; --local, no push)
+ingest: ## Ingest a campaign bundle into a local run/<id> branch (BUNDLE, KIND; no push)
 	@$(if $(strip $(BUNDLE)),,$(error BUNDLE is required. \
 	Usage: make ingest BUNDLE=<gs://..|s3://..|dir|.tgz> KIND=pubnet|synthetic))
 	@$(if $(strip $(KIND)),,$(error KIND is required. \

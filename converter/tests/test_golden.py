@@ -28,7 +28,7 @@ def run_convert(results_dir, **overrides):
     out_dir = tempfile.mkdtemp()
     args = argparse.Namespace(
         results_dir=results_dir, run_id="test", run_name="Test", run_date="2026-01-01",
-        dataset_kind="pubnet", unit_facts=None, source_gcs=None, notes=None,
+        dataset_kind="pubnet", unit_facts=None, source_gcs=None, source_uri=None, notes=None,
         description=None, out_dir=out_dir)
     for k, v in overrides.items():
         setattr(args, k, v)

@@ -756,14 +756,31 @@
     const datasetTable = `<div class="tv-scroll" style="margin-top:16px"><table class="data" id="dataset-table" style="width:100%">
       <tr>${dsHead.map(h => `<th>${h}</th>`).join("")}</tr>${dsRows}</table></div>`;
     // Test data = the generated synthetic-ledger datasets (dataset-sizes.json);
-    // the run's own source_gcs is the RAW RESULTS dir, linked from §05 instead.
-    const gcsLink = gs => `<a href="https://console.cloud.google.com/storage/browser/${esc(String(gs).replace("gs://", ""))}">${esc(gs)} ↗</a>`;
+    // the run's own bundle URI is the RAW RESULTS dir, linked from §05 instead.
+    // s3:// links to the S3 console, legacy gs:// to the GCS console.
+    // Percent-encode a bucket path, keeping the "/" separators literal: without
+    // it a key containing #, ?, & or a space would change what the link points at.
+    const encPath = s => s.split("/").map(encodeURIComponent).join("/");
+    const bucketLink = (uri) => {
+      const u = String(uri);
+      let href = "";
+      if (u.startsWith("gs://")) {
+        href = "https://console.cloud.google.com/storage/browser/" + encPath(u.slice(5));
+      } else if (u.startsWith("s3://")) {
+        const [bucket, ...rest] = u.slice(5).split("/");
+        let prefix = rest.join("/");
+        if (prefix && !prefix.endsWith("/")) prefix += "/";
+        href = `https://console.aws.amazon.com/s3/buckets/${encodeURIComponent(bucket)}?prefix=${encPath(prefix)}`;
+      }
+      return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
+    };
     const testDataGcs = DATASET_SIZES && DATASET_SIZES.source_gcs;
     const sourceData = testDataGcs
-      ? `<p class="sec-intro" id="source-data">Source test data: ${gcsLink(testDataGcs)}</p>`
+      ? `<p class="sec-intro" id="source-data">Source test data: ${bucketLink(testDataGcs)}</p>`
       : "";
-    const rawResults = camp.source_gcs
-      ? `<p class="sec-intro" id="raw-results">Raw results: ${gcsLink(camp.source_gcs)}</p>`
+    const rawSrc = camp.source_uri || camp.source_gcs;
+    const rawResults = rawSrc
+      ? `<p class="sec-intro" id="raw-results">Raw results: ${bucketLink(rawSrc)}</p>`
       : "";
 
     /* ---- fig 1.1 inputs: the E2E budget composition ---- */

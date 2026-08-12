@@ -19,7 +19,7 @@ def run_convert(results_dir, **overrides):
     out_dir = tempfile.mkdtemp()
     args = argparse.Namespace(
         results_dir=results_dir, run_id=None, run_name=None, run_date=None,
-        dataset_kind="synthetic", unit_facts=None, source_gcs=None, notes=None,
+        dataset_kind="synthetic", unit_facts=None, source_gcs=None, source_uri=None, notes=None,
         description=None, out_dir=out_dir)
     for k, v in overrides.items():
         setattr(args, k, v)
@@ -137,6 +137,12 @@ class CampaignPacedTests(unittest.TestCase):
                                  run_id="explicit-id", run_date="2020-01-01")
         self.assertEqual(data["run_id"], "explicit-id")
         self.assertEqual(data["run_date"], "2020-01-01")
+
+    def test_source_uri_recorded(self):
+        data, _, _ = run_convert(os.path.join(self.tmp, "b"),
+                                 source_uri="s3://bucket/results/run-x")
+        self.assertEqual(data["campaign"]["source_uri"], "s3://bucket/results/run-x")
+        self.assertNotIn("source_gcs", data["campaign"])
 
 
 class CampaignUnpacedTests(unittest.TestCase):
