@@ -581,15 +581,19 @@
     const dsLine = `${units.length} ${(ds.unit_label || "unit").toLowerCase()}${units.length === 1 ? "" : "s"} · ${fmtInt(L)} ledgers · ${fmtK(Ev)} events · ${fmtK(T)} txs`;
     // Console link for the bundle the run was converted from: s3:// runs link
     // to the S3 console, legacy gs:// runs to the GCS console.
+    // Percent-encode a bucket path, keeping the "/" separators literal: without
+    // it a key containing #, ?, & or a space would change what the link points at.
+    const encPath = s => s.split("/").map(encodeURIComponent).join("/");
     const bucketLink = (uri) => {
       const u = String(uri);
       let href = "";
       if (u.startsWith("gs://")) {
-        href = "https://console.cloud.google.com/storage/browser/" + u.slice(5);
+        href = "https://console.cloud.google.com/storage/browser/" + encPath(u.slice(5));
       } else if (u.startsWith("s3://")) {
         const [bucket, ...rest] = u.slice(5).split("/");
-        const prefix = rest.join("/");
-        href = `https://console.aws.amazon.com/s3/buckets/${bucket}?prefix=${prefix}${prefix && !prefix.endsWith("/") ? "/" : ""}`;
+        let prefix = rest.join("/");
+        if (prefix && !prefix.endsWith("/")) prefix += "/";
+        href = `https://console.aws.amazon.com/s3/buckets/${encodeURIComponent(bucket)}?prefix=${encPath(prefix)}`;
       }
       return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
     };
