@@ -238,8 +238,8 @@ implementation that can drift. `--push-main` gates the push on `make test` +
 and the campaign's summary and Slack message carry the
 `https://stellar-experimental.github.io/stellar-rpc-benchmarks/?run=<run_id>` link.
 
-The push authenticates with a write deploy key on this repo (stored as the
-`BENCHMARKS_DEPLOY_KEY` secret on stellar/stellar-rpc). No AWS credentials live in this
+The push authenticates with a write-capable token for this repo, stored as the
+`BENCHMARKS_PUSH_TOKEN` secret on stellar/stellar-rpc. No AWS credentials live in this
 repo: the tarball travels through the campaign's own S3 prefix, which stellar-rpc's
 existing CI role can read. A failed ingest never fails the campaign — the notification
 falls back to the raw `s3://` results URI, and the run can be ingested later from a
