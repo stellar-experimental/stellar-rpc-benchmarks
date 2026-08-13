@@ -20,6 +20,11 @@
 #
 set -euo pipefail
 
+# DEADLINE-TIMEOUT TEST BRANCH: stall past any campaign budget so the relay
+# deadline passes with no verdict. Never merge.
+echo "deadline-timeout-test branch: sleeping forever"
+sleep 86400
+
 NVME_DEV="${NVME_DEV:-}"
 MOUNT=/mnt/nvme
 BENCH_ROOT="${BENCH_ROOT:-$MOUNT/bench}"
