@@ -10,6 +10,11 @@
      Kept in-page so the shared stylesheet stays the viewer's alone. */
   .lm-back { text-decoration: none; }
 
+  /* This page runs prose at the full column width: drop the shared reading
+     measure (44/46em) and the line balancing that shrinks it further. */
+  .mast-sub { max-width: none; text-wrap: wrap; }
+  .sec-intro, p { max-width: none; }
+
   /* --- formula banner (didactic) --- */
   .formula {
     display: flex; flex-wrap: wrap; align-items: center; gap: 9px 8px;
@@ -26,6 +31,7 @@
     color: var(--tp); border-color: color-mix(in srgb, var(--tp) 55%, transparent);
   }
   .term-pill.estimated { border-style: dashed; }
+  .term-pill.assumed { border-style: dotted; }
   .term-pill .x2 {
     font-size: 0.85em; color: var(--muted); font-weight: 700;
     border-left: 1px solid color-mix(in srgb, var(--tp) 40%, transparent); padding-left: 6px;
@@ -51,6 +57,9 @@
                     border: 1px solid var(--baseline); }
   .prov.network   { color: var(--hot); background: color-mix(in srgb, var(--hot) 13%, transparent); }
   .prov.network .sw   { background: var(--hot); }
+  .prov.assumed   { color: var(--ink-2); background: color-mix(in srgb, var(--ink) 6%, transparent);
+                    border: 1px dotted var(--baseline); }
+  .prov.assumed .sw   { background: var(--deemph); }
   .prov small { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted); }
 
   /* --- term definition cards --- */
@@ -68,9 +77,13 @@
   }
   .term-card .tc-entity b { color: var(--ink-2); font-weight: 600; }
   .term-card p { font-size: 13px; color: var(--ink-2); margin: 0; line-height: 1.5; max-width: none; }
+  .term-card p + p { margin-top: 6px; }
+  .term-card ul { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 6px 0; padding-left: 18px; }
+  .term-card li { margin: 3px 0; }
 
-  /* --- phase selector (segmented control) --- */
-  .phase-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+  /* --- controls: phase pills + run selector on one row --- */
+  .pick-row { display: flex; align-items: center; gap: 12px 32px; flex-wrap: wrap; margin: 4px 0 2px; }
+  .phase-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .phase-pick .plab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
                       letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
   .phase-pill {
@@ -84,36 +97,41 @@
   .phase-pill[aria-pressed="true"] small { color: rgba(255,255,255,0.8); }
   .phase-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* --- goal | current comparison panels --- */
-  .cmp { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 18px 0 6px; }
-  @media (min-width: 900px) { .cmp { grid-template-columns: 1fr 1fr; } }
+  /* --- combined goal | current panel --- */
+  .cmp { display: block; margin: 18px 0 6px; }
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
-  .panel.current { border-color: color-mix(in srgb, var(--s1) 45%, var(--border)); }
   .panel-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  /* per-bar label row: name left, derived E2E + budget verdict right */
+  .bar-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px 14px; flex-wrap: wrap; margin-top: 18px; }
+  .br-name { font-weight: 700; font-size: 14px; }
+  .br-sub { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+            color: var(--muted); font-weight: 500; margin-left: 7px; }
+  .br-val { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+            font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 650; }
+  .br-good { color: var(--good-text); } .br-warn { color: var(--warn); }
+  table.bd td.d-good { color: var(--good-text); font-weight: 650; }
+  table.bd td.d-warn { color: var(--warn); font-weight: 650; }
+  table.bd td.d-mut { color: var(--muted); }
   .panel-kicker { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
                   letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
   .panel-kicker b { color: var(--ink-2); font-weight: 700; }
   .panel-sub { color: var(--ink-2); font-size: 12.5px; margin: 2px 0 0; line-height: 1.5; }
 
-  /* run selector */
-  .run-pick { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 12px 0 2px; }
+  /* run selector — a sibling control of the phase pills, same visual weight */
+  .run-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .run-pick label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
                     letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
   .run-pick select {
-    font: 600 13px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink);
-    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
-    padding: 8px 10px; max-width: 100%; cursor: pointer;
+    font: 650 13px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 999px;
+    padding: 10px 14px; max-width: 100%; cursor: pointer;
   }
+  .run-pick select:hover { border-color: var(--accent); }
   .run-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .measured-src { font-size: 12px; color: var(--ink-2); margin: 8px 0 2px; line-height: 1.5; }
   .measured-src code { font-size: 11px; }
 
-  /* E2E headline inside a panel */
-  .e2e { margin-top: 16px; }
-  .e2e-k { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
-           letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-  .e2e-big { font-size: clamp(28px, 5vw, 40px); font-weight: 760; letter-spacing: -0.02em; line-height: 1.05; }
-  .verdict-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .verdict-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
   .verdict {
     display: inline-flex; align-items: center; gap: 7px;
     font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; letter-spacing: 0.03em;
@@ -135,6 +153,8 @@
          display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .seg.estimated { background-image: repeating-linear-gradient(45deg,
                      rgba(255,255,255,0.30) 0 5px, transparent 5px 10px); }
+  .seg.assumed { background-image: repeating-linear-gradient(-45deg,
+                     rgba(255,255,255,0.30) 0 3px, transparent 3px 6px); }
   .seg.target { background-image: repeating-linear-gradient(45deg,
                      rgba(255,255,255,0.42) 0 5px, transparent 5px 10px); }
   .seg .seg-lab { font: 650 10.5px/1 ui-monospace, Menlo, Consolas, monospace; color: #fff;
@@ -182,11 +202,8 @@
     </div>
     <h1>End-to-end latency model</h1>
     <p class="mast-sub">
-      A transaction makes a round trip: the client submits it, the network reaches consensus, RPC ingests
-      the ledger, and the client reads it back. The trip crosses several systems. This tool splits the
-      end-to-end (E2E) latency into its parts and compares two things: the <strong>fixed goal</strong> the
-      team set for a phase, and the <strong>current state</strong> measured by a benchmark run. It models
-      <strong>hot ingestion only</strong> — ledgers RPC ingests live as they close. It does not model backfill.
+      A transaction makes a round trip: the client submits it, the network reaches consensus, RPC ingests the ledger, and the client reads it back.
+      This tool splits the E2E latency into its parts and compares two things: the <strong>fixed goal</strong> the team set for a phase, and the <strong>current state</strong> measured by a benchmark run.
     </p>
   </header>
 
@@ -197,30 +214,58 @@
       <h2>The formula</h2>
     </div>
     <p class="sec-intro">
-      End-to-end latency is the sum of four slices along the transaction path. Each slice is a P99 latency
-      (the 99th percentile). A different part of the stack owns each slice.
+      End-to-end latency is the sum of six slices.
+      The network slices are hardcoded constants from an assumed 50 ms client↔RPC round trip.
+      Every other slice is a P99 latency.
     </p>
 
     <div class="formula" id="formula">
       <span class="term-pill network" style="--tp:var(--hot)">E2E</span>
       <span class="eq">=</span>
-      <span class="term-pill network" style="--tp:var(--hot)">block time<span class="x2">× N</span></span>
+      <span class="term-pill assumed" style="--tp:var(--deemph)">network<span class="x2">½ RTT</span></span>
       <span class="op">+</span>
-      <span class="term-pill estimated" style="--tp:var(--s5)" id="tx-pill">tx submission</span>
+      <span class="term-pill estimated" style="--tp:var(--s5)" id="tx-pill">sendTransaction</span>
+      <span class="op">+</span>
+      <span class="term-pill network" style="--tp:var(--hot)">block time<span class="x2">× N</span></span>
       <span class="op">+</span>
       <span class="term-pill measured" style="--tp:var(--s1)">ingestion</span>
       <span class="op">+</span>
-      <span class="term-pill estimated" style="--tp:var(--s3)">query</span>
+      <span class="term-pill assumed" style="--tp:var(--deemph)">network<span class="x2">RTT</span></span>
+      <span class="op">+</span>
+      <span class="term-pill estimated" style="--tp:var(--s3)">getTransaction</span>
     </div>
 
     <div class="prov-legend">
       <span class="prov network"><span class="sw"></span>Core team <small>— engineered by the Stellar Core team</small></span>
+      <span class="prov assumed"><span class="sw"></span>Assumed <small>— a hardcoded network constant, by design never measured</small></span>
       <span class="prov estimated"><span class="sw"></span>Estimated <small>— a placeholder until measured</small></span>
       <span class="prov target"><span class="sw"></span>Goal target <small>— the Platform team's ingestion target</small></span>
       <span class="prov measured"><span class="sw"></span>Measured <small>— from a benchmark run</small></span>
     </div>
 
     <div class="term-cards">
+      <div class="term-card" style="--tp:var(--deemph)">
+        <div class="tc-head">
+          <span class="tc-name">Network × 1.5 RTT</span>
+          <span class="prov assumed"><span class="sw"></span>Assumed</span>
+        </div>
+        <div class="tc-entity">entity · <b>assumed constant · client ↔ RPC network</b></div>
+        <p>The model assumes a 50 ms client↔RPC round trip (RTT). It uses two fixed constants:</p>
+        <ul>
+          <li><strong>½ RTT</strong> for the submission request. The response is not part of the critical
+            path as consensus starts before RPC replies.</li>
+          <li><strong>1 full RTT</strong> for the getTransaction request and response.</li>
+        </ul>
+        <p>By design, the model never measures network time.</p>
+      </div>
+      <div class="term-card" style="--tp:var(--s5)">
+        <div class="tc-head">
+          <span class="tc-name">P99 sendTransaction</span>
+          <span class="prov estimated" id="tx-card-prov"><span class="sw"></span>Estimated</span>
+        </div>
+        <div class="tc-entity">entity · <b>Platform team · in-RPC handler</b></div>
+        <p id="tx-card-text">The in-RPC duration of the <code>sendTransaction</code> endpoint — network time excluded.</p>
+      </div>
       <div class="term-card" style="--tp:var(--hot)">
         <div class="tc-head">
           <span class="tc-name">Block time × N</span>
@@ -228,19 +273,10 @@
         </div>
         <div class="tc-entity">entity · <b>Stellar Core team · consensus + execution</b></div>
         <p>The ledger close interval, counted once per ledger close on the transaction's path (<strong>N</strong>).
-          The <strong>Stellar Core team</strong> owns this slice. In phases 1–2 a transaction spans <strong>2</strong>
+          In phases 1–2 a transaction spans <strong>2</strong>
           closes — it waits for the <em>next</em> ledger, not the one in the current vote. In phase 3, Core's
           consensus + execution pipelining requires <strong>3</strong> closes for a transaction to complete. The
           calculator below shows the value for the selected phase.</p>
-      </div>
-      <div class="term-card" style="--tp:var(--s5)">
-        <div class="tc-head">
-          <span class="tc-name">P99 tx submission</span>
-          <span class="prov estimated" id="tx-card-prov"><span class="sw"></span>Estimated</span>
-        </div>
-        <div class="tc-entity">entity · <b>Platform team · Client → RPC v2</b></div>
-        <p id="tx-card-text">The time for a transaction to travel from the client to Stellar RPC v2. This value is an estimate.
-          A measured value from RPC v2 will replace it.</p>
       </div>
       <div class="term-card" style="--tp:var(--s1)">
         <div class="tc-head">
@@ -253,12 +289,13 @@
       </div>
       <div class="term-card" style="--tp:var(--s3)">
         <div class="tc-head">
-          <span class="tc-name">P99 query</span>
+          <span class="tc-name">P99 getTransaction</span>
           <span class="prov estimated"><span class="sw"></span>Estimated</span>
         </div>
-        <div class="tc-entity">entity · <b>Platform team · RPC → client</b></div>
-        <p>The time from ingested in RPC to the client having that information, for example a GetTransaction
-          call. This value is an estimate. A measured value will replace it after a query benchmark.</p>
+        <div class="tc-entity">entity · <b>Platform team · in-RPC handler</b></div>
+        <p>The in-RPC duration of the <code>getTransaction</code> endpoint for an ingested transaction —
+          network time excluded. This value is an estimate. A measured value will replace it after a query
+          benchmark.</p>
       </div>
     </div>
   </section>
@@ -270,14 +307,18 @@
       <h2>Goal vs. current</h2>
     </div>
     <p class="sec-intro">
-      Pick a phase to load its <strong>fixed goal</strong>. Pick a run to measure the <strong>current
-      state</strong>. Both E2E totals are derived from the formula — never controlled directly. The E2E
-      budget the team declared for the phase is drawn as a <strong>ceiling</strong> on each bar.
+      Pick a phase to load its <strong>fixed goal</strong>; the run list narrows to runs paced for it.
     </p>
 
-    <div class="phase-pick" id="phase-pick" role="group" aria-label="Phase (fixed goal)">
-      <span class="plab">Goal phase</span>
-      <!-- phase pills injected by JS -->
+    <div class="pick-row">
+      <div class="phase-pick" id="phase-pick" role="group" aria-label="Phase (fixed goal)">
+        <span class="plab">Goal phase</span>
+        <!-- phase pills injected by JS -->
+      </div>
+      <div class="run-pick">
+        <label for="run-sel">Run</label>
+        <select id="run-sel"></select>
+      </div>
     </div>
 
     <div class="cmp" id="cmp"><!-- goal + current panels injected by JS --></div>
@@ -287,8 +328,8 @@
 
   <div class="footer">
     The goal numbers live in <code>docs/targets.json</code> — the single source shared by this model and the
-    benchmark reports. The ingestion slice is measured; tx submission and query are estimates until their
-    benchmarks land. See <code>SCHEMA.md</code> and the
+    benchmark reports. The ingestion slice is measured; the network slices are hardcoded constants;
+    sendTransaction and getTransaction are in-RPC estimates until their benchmarks land. See <code>SCHEMA.md</code> and the
     <a href="./" class="meta-v" style="color:var(--accent)">benchmark reports</a> for the source data.
   </div>
 </div>
@@ -309,20 +350,22 @@
     if (STATE.phase != null) render();
   });
 
-  /* ---- component model (order = formula order) ---- */
+  /* ---- component model (order = formula order = transaction lifecycle) ---- */
   const COMPONENTS = [
-    { key: "block",  label: "Block time",    entity: "Stellar Core team · consensus + execution", colorVar: "--hot", prov: "network"   },
-    { key: "tx",     label: "Tx submission", entity: "Platform team · Client → RPC v2",           colorVar: "--s5",  prov: "estimated" },
-    { key: "ingest", label: "Ingestion",     entity: "Platform team · Stellar Core → RPC",        colorVar: "--s1",  prov: "measured"  },
-    { key: "query",  label: "Query",         entity: "Platform team · RPC → client",              colorVar: "--s3",  prov: "estimated" },
+    { key: "netsend", label: "Network (request)",    entity: "assumed constant · client → RPC",           colorVar: "--deemph", prov: "assumed"   },
+    { key: "tx",      label: "sendTransaction",      entity: "Platform team · in-RPC handler",            colorVar: "--s5",     prov: "estimated" },
+    { key: "block",   label: "Block time",           entity: "Stellar Core team · consensus + execution", colorVar: "--hot",    prov: "network"   },
+    { key: "ingest",  label: "Ingestion",            entity: "Platform team · Stellar Core → RPC",        colorVar: "--s1",     prov: "measured"  },
+    { key: "netread", label: "Network (round trip)", entity: "assumed constant · client ↔ RPC",           colorVar: "--deemph", prov: "assumed"   },
+    { key: "query",   label: "getTransaction",       entity: "Platform team · in-RPC handler",            colorVar: "--s3",     prov: "estimated" },
   ];
 
   /* ---- module state ---- */
   let TARGETS = null;      // parsed targets.json
   let MANIFEST = null;     // parsed runs/index.json
-  let TXSUB = null;        // measured tx submission { ns, rtt, runId } from docs/txsub/, null → fixed estimate
+  let TXSUB = null;        // measured in-RPC sendTransaction { ns, runId } from docs/txsub/, null → fixed estimate
   const RUN = { id: null, meta: null, data: null, measured: null, error: null, loading: false };
-  const STATE = { phase: null, runId: null };
+  const STATE = { phase: null };
 
   /* ---- formatting (all durations are nanoseconds) ---- */
   function fmt(ns) {
@@ -337,17 +380,22 @@
   function phaseByNum(n) {
     return (TARGETS.phases || []).find(p => p.phase === n) || null;
   }
-  const txNs = () => (TARGETS.fixed_estimates || {}).tx_submit_p99_ns || 0;
-  const queryNs = () => (TARGETS.fixed_estimates || {}).client_read_p99_ns || 0;
+  const rttNs = () => (TARGETS.fixed_estimates || {}).network_rtt_ns || 0;
+  const txNs = () => (TARGETS.fixed_estimates || {}).send_tx_p99_ns || 0;
+  const queryNs = () => (TARGETS.fixed_estimates || {}).get_tx_p99_ns || 0;
+  // Fixed non-ingest, non-consensus E2E cost: half a round trip carries the
+  // submission request, a full round trip the getTransaction call, plus the
+  // two in-RPC handler slices.
+  const fixedNs = () => Math.floor(3 * rttNs() / 2) + txNs() + queryNs();
 
   // How many block times the path spans this phase (per-phase consensus plan).
   const blockCount = p => p.block_count || 2;
 
   // Ingest-slice target: stated, else derived from the E2E budget (same rule the
-  // converter uses): budget - block_count*block - tx - query.
+  // converter uses): budget - block_count*block - ⌊3*rtt/2⌋ - send_tx - get_tx.
   function ingestTargetNs(p) {
     if (p.ingest_p99_target_ns != null) return p.ingest_p99_target_ns;
-    return p.e2e_budget_ns - blockCount(p) * p.block_time_ns - txNs() - queryNs();
+    return p.e2e_budget_ns - blockCount(p) * p.block_time_ns - fixedNs();
   }
 
   // Worst (max) hot-ingest p99 across the run's profiles.
@@ -377,43 +425,56 @@
     const v = contrib(c, vals, n);
     const pct = scaleMax > 0 ? (v / scaleMax) * 100 : 0;
     const prov = provs[c.key] || c.prov;
-    const hatch = prov === "estimated" ? " estimated" : (prov === "target" ? " target" : "");
+    const hatch = prov === "estimated" ? " estimated" : (prov === "target" ? " target" : (prov === "assumed" ? " assumed" : ""));
     return `<div class="seg${hatch}" style="width:${pct}%;background:var(${c.colorVar})"
                  title="${c.label}${multLabel(c, n)}: ${fmt(v)}">
               ${pct >= 9 ? `<span class="seg-lab">${fmt(v)}</span>` : ""}
             </div>`;
   }
 
-  function barHTML(vals, scaleMax, ceilingNs, provs, n) {
+  // budgetLab labels the ceiling mark; pass "" on the lower bar so the shared
+  // ceiling is labeled once.
+  function barHTML(vals, scaleMax, ceilingNs, provs, n, budgetLab) {
     const ceilPct = scaleMax > 0 ? (ceilingNs / scaleMax) * 100 : 0;
     return `<div class="bar-wrap"><div class="bar">
       ${COMPONENTS.map(c => segHTML(c, vals, scaleMax, provs, n)).join("")}
       <div class="seg empty"></div>
-      ${ceilingNs > 0 && ceilPct <= 100 ? `<div class="budget-mark" style="left:${ceilPct}%" data-lab="budget ${fmt(ceilingNs)}"></div>` : ""}
+      ${ceilingNs > 0 && ceilPct <= 100 ? `<div class="budget-mark" style="left:${ceilPct}%" data-lab="${budgetLab || ""}"></div>` : ""}
     </div></div>`;
   }
 
-  /* ---- breakdown table ---- */
-  function breakdownTable(vals, provs, n) {
-    const total = COMPONENTS.reduce((s, c) => s + contrib(c, vals, n), 0);
+  /* ---- merged breakdown table: goal and current side by side, with a Δ ---- */
+  function deltaCell(d) {
+    if (d == null || d === 0) return `<td class="d-mut">—</td>`;
+    return `<td class="${d < 0 ? "d-good" : "d-warn"}">${d > 0 ? "+" : "−"}${fmt(Math.abs(d))}</td>`;
+  }
+  function combinedTable(goalVals, curVals, goalProvs, curProvs, n) {
     const rows = COMPONENTS.map(c => {
-      const v = contrib(c, vals, n);
-      const prov = provs[c.key] || c.prov;
+      const gv = contrib(c, goalVals, n);
+      const cv = curVals ? contrib(c, curVals, n) : null;
+      const gp = goalProvs[c.key] || c.prov;
+      const cp = curVals ? (curProvs[c.key] || c.prov) : gp;
+      const provTxt = cp !== gp ? `${PROV_LABEL[gp]} → ${PROV_LABEL[cp]}` : PROV_LABEL[gp];
       return `<tr style="--tp:var(${c.colorVar})">
         <td class="comp"><span class="sw"></span>${c.label}${multLabel(c, n)}</td>
-        <td>${provCell(prov)}</td>
-        <td>${fmt(v)}</td>
+        <td><span class="prov ${cp}"><span class="sw"></span>${provTxt}</span></td>
+        <td>${fmt(gv)}</td>
+        <td>${cv == null ? "—" : fmt(cv)}</td>
+        ${deltaCell(cv == null ? null : cv - gv)}
       </tr>`;
     }).join("");
+    const gTot = COMPONENTS.reduce((s, c) => s + contrib(c, goalVals, n), 0);
+    const cTot = curVals ? COMPONENTS.reduce((s, c) => s + contrib(c, curVals, n), 0) : null;
     return `<table class="bd">
-      <thead><tr><th>Slice</th><th>Provenance</th><th>P99</th></tr></thead>
+      <thead><tr><th>Slice</th><th>Provenance</th><th>Goal</th><th>Current</th><th>Δ</th></tr></thead>
       <tbody>${rows}
-        <tr class="total"><td class="comp">End-to-end (derived)</td><td></td><td>${fmt(total)}</td></tr>
+        <tr class="total"><td class="comp">End-to-end (derived)</td><td></td>
+          <td>${fmt(gTot)}</td><td>${cTot == null ? "—" : fmt(cTot)}</td>
+          ${deltaCell(cTot == null ? null : cTot - gTot)}</tr>
       </tbody></table>`;
   }
   // CSS class stays keyed by prov (color); the displayed text is a friendlier label.
-  const PROV_LABEL = { network: "core team", estimated: "estimated", target: "goal target", measured: "measured" };
-  function provCell(prov) { return `<span class="prov ${prov}"><span class="sw"></span>${PROV_LABEL[prov] || prov}</span>`; }
+  const PROV_LABEL = { network: "core team", assumed: "assumed constant", estimated: "estimated", target: "goal target", measured: "measured" };
 
   function verdict(pass, text) {
     return `<span class="verdict ${pass ? "pass" : "miss"}">${pass ? "▪" : "▲"} ${text}</span>`;
@@ -428,25 +489,53 @@
       btn.className = "phase-pill";
       btn.dataset.phase = p.phase;
       btn.innerHTML = `Phase ${p.phase}<small>${fmt(p.block_time_ns)} block · ${fmt(p.e2e_budget_ns)} budget</small>`;
-      btn.addEventListener("click", () => { STATE.phase = p.phase; syncUrl(); render(); });
+      btn.addEventListener("click", () => setPhase(p.phase));
       el.appendChild(btn);
     });
   }
 
-  /* ---- run selector ---- */
-  function buildRunSelect() {
-    const opts = (MANIFEST.runs || []).map(r =>
-      `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.date)}</option>`).join("");
-    return `<div class="run-pick">
-      <label for="run-sel">Measured by run</label>
-      <select id="run-sel">${opts}</select>
-    </div>`;
+  /* ---- run selector, narrowed to the selected phase ----
+     The manifest tags every run with the phase it was paced for; the dropdown
+     only ever offers runs of the selected phase, so a phase/run mismatch
+     cannot happen. */
+  const runSel = document.getElementById("run-sel");
+  runSel.addEventListener("change", () => loadRun(runSel.value));
+  const runsForPhase = ph => (MANIFEST.runs || []).filter(r => r.phase === ph)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));   // newest first
+
+  // Refill the dropdown for the selected phase. Keeps the current run when it
+  // belongs to the phase; otherwise falls to the newest.
+  // Returns the run id to show, or null when the phase has no runs.
+  function fillRunSelect() {
+    const runs = runsForPhase(STATE.phase);
+    runSel.innerHTML = runs.length
+      ? runs.map(r => `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.date)}</option>`).join("")
+      : `<option value="">no runs for this phase</option>`;
+    runSel.disabled = !runs.length;
+    const keep = runs.find(r => r.id === RUN.id);
+    const next = keep ? keep.id : (runs[0] ? runs[0].id : null);
+    runSel.value = next || "";
+    return next;
+  }
+
+  // Phase change: refill the run list, then load the run it settled on.
+  function setPhase(ph) {
+    STATE.phase = ph;
+    const next = fillRunSelect();
+    document.querySelectorAll(".phase-pill").forEach(b =>
+      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
+    if (next && next !== RUN.id) { loadRun(next); }
+    else {
+      if (!next) { RUN.id = null; RUN.meta = null; RUN.data = null; RUN.measured = null; RUN.error = null; }
+      syncUrl(); render();
+    }
   }
 
   async function loadRun(id) {
-    const entry = (MANIFEST.runs || []).find(r => r.id === id) || (MANIFEST.runs || [])[0];
+    const entry = runsForPhase(STATE.phase).find(r => r.id === id);
     if (!entry) return;
     RUN.id = entry.id; RUN.meta = entry; RUN.error = null; RUN.loading = true; RUN.data = null; RUN.measured = null;
+    syncUrl();
     render();
     try {
       const res = await fetch(entry.path, { cache: "no-cache" });
@@ -470,101 +559,92 @@
     STATE.phase = p.phase;
 
     const block = p.block_time_ns, tx = txNs(), query = queryNs();
+    const netsend = Math.floor(rttNs() / 2), netread = rttNs();
     const n = blockCount(p);
     const targetNs = ingestTargetNs(p);
     const ceiling = p.e2e_budget_ns || 0;
 
-    const goalVals = { block, tx, ingest: targetNs, query };
+    const goalVals = { netsend, block, tx, ingest: targetNs, netread, query };
     const goalE2E = COMPONENTS.reduce((s, c) => s + contrib(c, goalVals, n), 0);
     const goalProvs = { ingest: "target" };
 
     const measured = RUN.measured;
-    const txCur = TXSUB ? TXSUB.ns : tx;   // measured tx submission when available, phase-independent
-    const currentVals = measured ? { block, tx: txCur, ingest: measured.ns, query } : null;
+    const txCur = TXSUB ? TXSUB.ns : tx;   // measured in-RPC sendTransaction when available, phase-independent
+    const currentVals = measured ? { netsend, block, tx: txCur, ingest: measured.ns, netread, query } : null;
     const currentE2E = currentVals ? COMPONENTS.reduce((s, c) => s + contrib(c, currentVals, n), 0) : null;
     const curProvs = { ingest: "measured", tx: TXSUB ? "measured" : "estimated" };
 
-    const scaleMax = Math.max(goalE2E, currentE2E || 0, ceiling);
+    // The axis is pinned per phase: it spans the ceiling, the goal, and the
+    // worst run of the phase (worst p99 from the manifest), so switching runs
+    // never rescales the goal bar. currentE2E stays in the max as a fallback
+    // for a loaded run the manifest does not describe.
+    const phaseWorstP99 = runsForPhase(STATE.phase).reduce((w, r) =>
+      Math.max(w, ...(r.ingest_p99 || []).map(e => (e && e.p99_ns) || 0)), 0);
+    const phaseWorstE2E = phaseWorstP99 > 0
+      ? netsend + txCur + n * block + phaseWorstP99 + netread + query : 0;
+    const scaleMax = Math.max(goalE2E, currentE2E || 0, phaseWorstE2E, ceiling);
 
-    /* --- goal panel --- */
+    /* --- combined panel: both bars on one scale, one merged table --- */
     const goalWithin = ceiling > 0 ? goalE2E <= ceiling : true;
-    const goalPanel = `
-      <div class="panel goal">
-        <div class="panel-head">
-          <span class="panel-kicker">Fixed goal · <b>Phase ${p.phase}</b></span>
-        </div>
-        <p class="panel-sub">Block time ${fmt(block)} × ${n}, ingestion target ${fmt(targetNs)}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}.
-          The declared E2E budget is ${fmt(ceiling)}.</p>
-        ${barHTML(goalVals, scaleMax, ceiling, goalProvs, n)}
-        <div class="e2e">
-          <div class="e2e-k">Goal E2E (derived)</div>
-          <div class="e2e-big">${fmt(goalE2E)}</div>
-          <div class="verdict-row">
-            ${ceiling > 0 ? verdict(goalWithin, goalE2E === ceiling ? "on budget" : `${goalWithin ? fmt(ceiling - goalE2E) + " under" : fmt(goalE2E - ceiling) + " over"} budget`) : ""}
-          </div>
-        </div>
-        ${breakdownTable(goalVals, goalProvs, n)}
-      </div>`;
+    const goalVerdict = ceiling > 0
+      ? ` · <span class="${goalWithin ? "br-good" : "br-warn"}">${goalE2E === ceiling ? "on budget" : goalWithin ? fmt(ceiling - goalE2E) + " under" : fmt(goalE2E - ceiling) + " over"}</span>` : "";
+    const goalRow = `
+      <div class="bar-row">
+        <span class="br-name">Phase ${p.phase} goal<span class="br-sub">ingestion target ${fmt(targetNs)}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}</span></span>
+        <span class="br-val">E2E ${fmt(goalE2E)}${goalVerdict}</span>
+      </div>
+      ${barHTML(goalVals, scaleMax, ceiling, goalProvs, n, `budget ${fmt(ceiling)}`)}`;
 
-    /* --- current panel --- */
-    let currentBody;
-    if (RUN.loading) {
-      currentBody = `<div class="loading">Loading ${esc(RUN.meta ? (RUN.meta.name || RUN.meta.id) : "run")}…</div>`;
+    let currentRow, chips = "", src = "";
+    if (!RUN.id && !RUN.loading) {
+      currentRow = `<p class="measured-src">No runs are paced for this phase yet.</p>`;
+    } else if (RUN.loading) {
+      currentRow = `<div class="loading">Loading ${esc(RUN.meta ? (RUN.meta.name || RUN.meta.id) : "run")}…</div>`;
     } else if (RUN.error) {
-      currentBody = `<div class="error-box">Could not load the run (${esc(RUN.error)}). Serve the folder with <code>make serve</code> — <code>file://</code> blocks fetch().</div>`;
+      currentRow = `<div class="error-box">Could not load the run (${esc(RUN.error)}). Serve the folder with <code>make serve</code> — <code>file://</code> blocks fetch().</div>`;
     } else if (!measured) {
-      currentBody = `<p class="measured-src">This run carries no hot-ingest measurement (<code>ingest_hot</code>). Pick another run.</p>`;
+      currentRow = `<p class="measured-src">This run carries no hot-ingest measurement (<code>ingest_hot</code>). Pick another run.</p>`;
     } else {
       const meetsTarget = measured.ns <= targetNs;
       const currentWithin = ceiling > 0 ? currentE2E <= ceiling : true;
-      currentBody = `
-        <p class="measured-src">Ingestion = <strong>${fmt(measured.ns)}</strong>, the worst of ${measured.count} profile${measured.count === 1 ? "" : "s"}
-          (<code>${esc(measured.profile)}</code>) in <strong>${esc(RUN.meta.name)}</strong> · ${esc(RUN.meta.date)}.${
-            TXSUB ? ` Tx submission = <strong>${fmt(TXSUB.ns)}</strong>, from the
-          <a href="tx-submission.html">tx-submission benchmark</a> (worst-profile in-RPC p99 + the assumed ${fmt(TXSUB.rtt)} network round trip).` : ""}</p>
-        ${barHTML(currentVals, scaleMax, ceiling, curProvs, n)}
-        <div class="e2e">
-          <div class="e2e-k">Current E2E (derived)</div>
-          <div class="e2e-big" style="color:${currentWithin ? "var(--ink)" : "var(--warn)"}">${fmt(currentE2E)}</div>
-          <div class="verdict-row">
-            ${verdict(meetsTarget, `ingestion ${meetsTarget ? "≤" : ">"} ${fmt(targetNs)} target`)}
-            ${ceiling > 0 ? verdict(currentWithin, `E2E ${currentWithin ? "≤" : ">"} ${fmt(ceiling)} budget`) : ""}
-          </div>
+      currentRow = `
+        <div class="bar-row">
+          <span class="br-name">This run<span class="br-sub">${esc(measured.profile)} p99</span></span>
+          <span class="br-val">E2E ${fmt(currentE2E)}${ceiling > 0
+            ? ` · <span class="${currentWithin ? "br-good" : "br-warn"}">${currentWithin ? fmt(ceiling - currentE2E) + " under" : fmt(currentE2E - ceiling) + " over"}</span>` : ""}</span>
         </div>
-        ${breakdownTable(currentVals, curProvs, n)}`;
+        ${barHTML(currentVals, scaleMax, ceiling, curProvs, n, "")}`;
+      chips = `<div class="verdict-row">
+        ${verdict(meetsTarget, `ingestion ${meetsTarget ? "≤" : ">"} ${fmt(targetNs)} target`)}
+        ${ceiling > 0 ? verdict(currentWithin, `E2E ${currentWithin ? "≤" : ">"} ${fmt(ceiling)} budget`) : ""}
+      </div>`;
+      src = `<p class="measured-src">Ingestion = <strong>${fmt(measured.ns)}</strong>, the worst of ${measured.count} profile${measured.count === 1 ? "" : "s"}
+        (<code>${esc(measured.profile)}</code>) in <strong>${esc(RUN.meta.name)}</strong> · ${esc(RUN.meta.date)}.${
+          TXSUB ? ` sendTransaction = <strong>${fmt(TXSUB.ns)}</strong>, from the
+        <a href="tx-submission.html">tx-submission benchmark</a> (worst-profile in-RPC handler p99; network time is a separate constant slice).` : ""}</p>`;
     }
-    const currentPanel = `
-      <div class="panel current">
+
+    cmpEl.innerHTML = `
+      <div class="panel combined">
         <div class="panel-head">
-          <span class="panel-kicker">Current state · <b>measured</b></span>
+          <span class="panel-kicker">Goal vs. current · <b>Phase ${p.phase}</b></span>
         </div>
-        ${buildRunSelect()}
-        ${currentBody}
+        ${goalRow}
+        ${currentRow}
+        ${chips}
+        ${src}
+        ${combinedTable(goalVals, measured ? currentVals : null, goalProvs, curProvs, n)}
       </div>`;
 
-    cmpEl.innerHTML = goalPanel + currentPanel;
-
-    // re-wire the run <select> (innerHTML replaced it)
-    const sel = document.getElementById("run-sel");
-    if (sel) {
-      sel.value = RUN.id || "";
-      sel.addEventListener("change", () => { STATE.runId = sel.value; syncUrl(); loadRun(sel.value); });
-    }
-    // reflect the selected phase on the pills
-    document.querySelectorAll(".phase-pill").forEach(b =>
-      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
-
-    // source note + phase/run mismatch hint
-    const runPhase = RUN.data && RUN.data.campaign ? RUN.data.campaign.phase : null;
-    const mismatch = runPhase != null && runPhase !== STATE.phase
-      ? ` This run was paced for Phase ${runPhase}; you are viewing it against the Phase ${STATE.phase} goal.` : "";
+    // source note
     const txNote = TXSUB
-      ? `Tx submission is measured — ${fmt(TXSUB.ns)}, phase-independent (<a href="tx-submission.html">tx-submission benchmark</a>); ` +
-        `the goal keeps the ${fmt(tx)} allocation. Query (${fmt(query)}) is a fixed estimate.`
-      : `Tx submission (${fmt(tx)}) and query (${fmt(query)}) are fixed estimates.`;
+      ? `sendTransaction is measured — ${fmt(TXSUB.ns)} in-RPC, phase-independent (<a href="tx-submission.html">tx-submission benchmark</a>); ` +
+        `the goal keeps the ${fmt(tx)} allocation. getTransaction (${fmt(query)}) is a fixed estimate.`
+      : `sendTransaction (${fmt(tx)}) and getTransaction (${fmt(query)}) are fixed in-RPC estimates.`;
     document.getElementById("source-note").innerHTML =
       `Goal numbers from <code>targets.json</code>: Phase ${p.phase} — ${fmt(block)} block time × ${n}, ${fmt(ceiling)} E2E budget, ` +
-      `${fmt(targetNs)} ingestion target. ` + txNote + mismatch;
+      `${fmt(targetNs)} ingestion target. The network slices are constants from the assumed ${fmt(rttNs())} round trip ` +
+      `(${fmt(Math.floor(rttNs() / 2))} submission request + ${fmt(rttNs())} getTransaction round trip). ` + txNote;
   }
 
   /* ---- deep-link ?phase=N&run=ID ---- */
@@ -575,14 +655,16 @@
     history.replaceState({}, "", url);
   }
 
-  /* ---- measured tx submission (docs/txsub/) — best-effort; null keeps the estimate ---- */
+  /* ---- measured tx submission (docs/txsub/) — best-effort; null keeps the estimate ----
+     The measured value is the worst profile's in-RPC handler p99 alone: the model
+     carries the client↔RPC network as hardcoded constant slices, so no network
+     time is ever added to a measured value. */
   async function loadTxsub() {
     try {
       const m = await fetch("txsub/index.json", { cache: "no-cache" })
         .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
       const run = (m.runs || []).find(r => r.role === "headline");
-      const rtt = m.assumed_network_rtt_ns;
-      if (!run || rtt == null) return null;
+      if (!run) return null;
       const sums = await Promise.all(Object.values(run.summaries || {}).map(p =>
         fetch("txsub/" + p, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
       let worst = null;
@@ -590,7 +672,7 @@
         const v = s && s.handler && s.handler.p99_ns;
         if (typeof v === "number" && (worst == null || v > worst)) worst = v;
       }
-      return worst == null ? null : { ns: worst + rtt, rtt, runId: run.id };
+      return worst == null ? null : { ns: worst, runId: run.id };
     } catch (err) { return null; }
   }
 
@@ -602,10 +684,10 @@
     const badge = document.getElementById("tx-card-prov");
     if (badge) { badge.className = "prov measured"; badge.innerHTML = `<span class="sw"></span>Measured`; }
     const txt = document.getElementById("tx-card-text");
-    if (txt) txt.innerHTML = `The time for a transaction to travel from the client to Stellar RPC v2.
-      Measured by the <a href="tx-submission.html">tx-submission benchmark</a>: the worst profile's in-RPC
-      p99 plus an assumed ${fmt(TXSUB.rtt)} network round trip. Phase-independent — the same value applies
-      at every phase; the goal panel keeps the fixed allocation.`;
+    if (txt) txt.innerHTML = `The in-RPC duration of the <code>sendTransaction</code> endpoint — network time
+      excluded. Measured by the
+      <a href="tx-submission.html">tx-submission benchmark</a> by taking the p99 of the worst profile performance.
+      This value is the same for every phase.`;
   }
 
   /* ---- boot ---- */
@@ -625,14 +707,21 @@
     }
     buildPhasePills();
 
+    // Deep link: a valid ?run locks the phase to the run's own phase, so a
+    // shared link always lands coherent; otherwise ?phase (default Phase 2)
+    // picks the goal and the dropdown settles on that phase's newest run.
     const url = new URL(location.href);
+    const qRun = (MANIFEST.runs || []).find(r => r.id === url.searchParams.get("run"));
     const qPhase = parseInt(url.searchParams.get("phase"), 10);
-    STATE.phase = phaseByNum(qPhase) ? qPhase : ((TARGETS.phases[1] || TARGETS.phases[0]).phase); // default Phase 2
-    const qRun = url.searchParams.get("run");
-    const initialRun = (MANIFEST.runs || []).find(r => r.id === qRun) ? qRun : (MANIFEST.runs[0] && MANIFEST.runs[0].id);
+    STATE.phase = qRun && phaseByNum(qRun.phase) ? qRun.phase
+      : phaseByNum(qPhase) ? qPhase : ((TARGETS.phases[1] || TARGETS.phases[0]).phase); // default Phase 2
+    if (qRun && qRun.phase === STATE.phase) RUN.id = qRun.id;   // fillRunSelect keeps it
+    const initial = fillRunSelect();
+    document.querySelectorAll(".phase-pill").forEach(b =>
+      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
 
     render();                 // paint the goal panel immediately
-    if (initialRun) loadRun(initialRun);
+    if (initial) loadRun(initial);
   }
 
   boot();
