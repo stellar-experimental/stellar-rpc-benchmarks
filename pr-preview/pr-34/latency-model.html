@@ -386,13 +386,13 @@
   // Fixed non-ingest, non-consensus E2E cost: half a round trip carries the
   // submission request, a full round trip the getTransaction call, plus the
   // two in-RPC handler slices.
-  const fixedNs = () => 1.5 * rttNs() + txNs() + queryNs();
+  const fixedNs = () => Math.floor(3 * rttNs() / 2) + txNs() + queryNs();
 
   // How many block times the path spans this phase (per-phase consensus plan).
   const blockCount = p => p.block_count || 2;
 
   // Ingest-slice target: stated, else derived from the E2E budget (same rule the
-  // converter uses): budget - block_count*block - 1.5*rtt - send_tx - get_tx.
+  // converter uses): budget - block_count*block - ⌊3*rtt/2⌋ - send_tx - get_tx.
   function ingestTargetNs(p) {
     if (p.ingest_p99_target_ns != null) return p.ingest_p99_target_ns;
     return p.e2e_budget_ns - blockCount(p) * p.block_time_ns - fixedNs();
@@ -559,7 +559,7 @@
     STATE.phase = p.phase;
 
     const block = p.block_time_ns, tx = txNs(), query = queryNs();
-    const netsend = rttNs() / 2, netread = rttNs();
+    const netsend = Math.floor(rttNs() / 2), netread = rttNs();
     const n = blockCount(p);
     const targetNs = ingestTargetNs(p);
     const ceiling = p.e2e_budget_ns || 0;
@@ -644,7 +644,7 @@
     document.getElementById("source-note").innerHTML =
       `Goal numbers from <code>targets.json</code>: Phase ${p.phase} — ${fmt(block)} block time × ${n}, ${fmt(ceiling)} E2E budget, ` +
       `${fmt(targetNs)} ingestion target. The network slices are constants from the assumed ${fmt(rttNs())} round trip ` +
-      `(${fmt(rttNs() / 2)} submission request + ${fmt(rttNs())} getTransaction round trip). ` + txNote;
+      `(${fmt(Math.floor(rttNs() / 2))} submission request + ${fmt(rttNs())} getTransaction round trip). ` + txNote;
   }
 
   /* ---- deep-link ?phase=N&run=ID ---- */
