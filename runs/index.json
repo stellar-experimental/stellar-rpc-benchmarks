@@ -210,6 +210,28 @@
       ]
     },
     {
+      "id": "pr902-phase1-8x-df1d98ac-20260813T171828Z",
+      "name": "pr902-phase1-8x",
+      "date": "2026-08-13",
+      "kind": "synthetic",
+      "path": "runs/pr902-phase1-8x-df1d98ac-20260813T171828Z.json",
+      "phase": 1,
+      "machine": "c6id.8xlarge",
+      "hostname": "ip-172-31-28-187",
+      "commit": "df1d98ac9e5423ab2919d9bf305531005506323b",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-6000-c1",
+          "p99_ns": 38802261
+        },
+        {
+          "unit": "custom_token-4000-c1",
+          "p99_ns": 28800097
+        }
+      ]
+    },
+    {
       "id": "pr902-phase2-8x-12082026-df1d98ac-20260813T035729Z",
       "name": "pr902-phase2-8x-12082026",
       "date": "2026-08-13",
