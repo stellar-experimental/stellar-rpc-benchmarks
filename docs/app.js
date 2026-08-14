@@ -2069,10 +2069,13 @@
       if (!res.ok) throw new Error("HTTP " + res.status);
       const t = await res.json();
       const fx = t.fixed_estimates || {};
-      const tx = fx.tx_submit_p99_ns || 0, query = fx.client_read_p99_ns || 0;
+      // Fixed non-ingest, non-consensus E2E cost: half a round trip for the
+      // submission request, a full round trip for the getTransaction call,
+      // plus the two in-RPC handler slices (sendTransaction, getTransaction).
+      const fixed = 1.5 * (fx.network_rtt_ns || 0) + (fx.send_tx_p99_ns || 0) + (fx.get_tx_p99_ns || 0);
       (t.phases || []).forEach(p => {
         if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0) {
-          p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - tx - query;
+          p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - fixed;
         }
       });
       LIVE_TARGETS = t.phases || null;

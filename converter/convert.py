@@ -387,14 +387,19 @@ def resolve_close_interval_ns(metadata, invocations):
 # (backfill) has no phase and no targets.
 #
 # The converter derives the ingest-slice target for any phase that does not
-# state one. It uses the end-to-end latency budget:
+# state one. It uses the end-to-end latency budget, which follows the
+# transaction lifecycle:
 #
-#   e2e = block_time*2 + tx_submit_p99 + ingest_p99 + client_read_p99
+#   e2e = rtt/2 + send_tx_p99 + block_time*block_count + ingest_p99
+#         + rtt + get_tx_p99
 #
-# The formula counts block time once per ledger close on the path (block_count,
-# a per-phase consensus plan: 2 for phases 1-2, 3 for phase 3). The tx-submission
-# and read latencies are fixed across phases. This leaves ingest_p99 as the only
-# unknown.
+# The network legs are hardcoded constants from the assumed client<->RPC round
+# trip (rtt): half a round trip carries the submission request (the response is
+# off the critical path), and a full round trip carries the getTransaction
+# call. The formula counts block time once per ledger close on the path
+# (block_count, a per-phase consensus plan: 2 for phases 1-2, 3 for phase 3).
+# The in-RPC handler latencies (sendTransaction, getTransaction) are fixed
+# across phases. This leaves ingest_p99 as the only unknown.
 TARGETS_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "docs", "targets.json")
 
@@ -402,14 +407,19 @@ with open(TARGETS_PATH, encoding="utf-8") as _f:
     _TARGETS = json.load(_f)
 
 _FIXED = _TARGETS["fixed_estimates"]
-TX_SUBMIT_P99_NS = _FIXED["tx_submit_p99_ns"]    # P99 client → RPC submission (fixed)
-CLIENT_READ_P99_NS = _FIXED["client_read_p99_ns"]  # P99 ingested → client-visible (fixed)
+NETWORK_RTT_NS = _FIXED["network_rtt_ns"]     # assumed client <-> RPC round trip
+SEND_TX_P99_NS = _FIXED["send_tx_p99_ns"]     # P99 in-RPC sendTransaction handler (fixed)
+GET_TX_P99_NS = _FIXED["get_tx_p99_ns"]       # P99 in-RPC getTransaction handler (fixed)
+
+# Fixed non-ingest, non-consensus E2E cost: half a round trip for the
+# submission request, a full round trip for the getTransaction call, plus the
+# two in-RPC handler slices.
+FIXED_E2E_NS = 3 * NETWORK_RTT_NS // 2 + SEND_TX_P99_NS + GET_TX_P99_NS
 
 
 def ingest_p99_target(block_time_ns, e2e_budget_ns, block_count=2):
     """Ingest-slice p99 budget implied by the end-to-end latency formula."""
-    return (e2e_budget_ns - block_count * block_time_ns
-            - TX_SUBMIT_P99_NS - CLIENT_READ_P99_NS)
+    return e2e_budget_ns - block_count * block_time_ns - FIXED_E2E_NS
 
 
 PHASE_TARGETS = _TARGETS["phases"]
