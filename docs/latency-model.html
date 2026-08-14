@@ -81,8 +81,9 @@
   .term-card ul { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 6px 0; padding-left: 18px; }
   .term-card li { margin: 3px 0; }
 
-  /* --- phase selector (segmented control) --- */
-  .phase-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+  /* --- controls: phase pills + run selector on one row --- */
+  .pick-row { display: flex; align-items: center; gap: 12px 32px; flex-wrap: wrap; margin: 4px 0 2px; }
+  .phase-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .phase-pick .plab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
                       letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
   .phase-pill {
@@ -116,15 +117,16 @@
   .panel-kicker b { color: var(--ink-2); font-weight: 700; }
   .panel-sub { color: var(--ink-2); font-size: 12.5px; margin: 2px 0 0; line-height: 1.5; }
 
-  /* run selector */
-  .run-pick { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 12px 0 2px; }
+  /* run selector — a sibling control of the phase pills, same visual weight */
+  .run-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .run-pick label { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
                     letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
   .run-pick select {
-    font: 600 13px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink);
-    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
-    padding: 8px 10px; max-width: 100%; cursor: pointer;
+    font: 650 13px/1.2 -apple-system, "Segoe UI", system-ui, sans-serif; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 999px;
+    padding: 10px 14px; max-width: 100%; cursor: pointer;
   }
+  .run-pick select:hover { border-color: var(--accent); }
   .run-pick select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .measured-src { font-size: 12px; color: var(--ink-2); margin: 8px 0 2px; line-height: 1.5; }
   .measured-src code { font-size: 11px; }
@@ -305,13 +307,18 @@
       <h2>Goal vs. current</h2>
     </div>
     <p class="sec-intro">
-      Pick a phase to load its <strong>fixed goal</strong>. Pick a run to measure the <strong>current
-      state</strong>.
+      Pick a phase to load its <strong>fixed goal</strong>; the run list narrows to runs paced for it.
     </p>
 
-    <div class="phase-pick" id="phase-pick" role="group" aria-label="Phase (fixed goal)">
-      <span class="plab">Goal phase</span>
-      <!-- phase pills injected by JS -->
+    <div class="pick-row">
+      <div class="phase-pick" id="phase-pick" role="group" aria-label="Phase (fixed goal)">
+        <span class="plab">Goal phase</span>
+        <!-- phase pills injected by JS -->
+      </div>
+      <div class="run-pick">
+        <label for="run-sel">Run</label>
+        <select id="run-sel"></select>
+      </div>
     </div>
 
     <div class="cmp" id="cmp"><!-- goal + current panels injected by JS --></div>
@@ -358,7 +365,7 @@
   let MANIFEST = null;     // parsed runs/index.json
   let TXSUB = null;        // measured in-RPC sendTransaction { ns, runId } from docs/txsub/, null → fixed estimate
   const RUN = { id: null, meta: null, data: null, measured: null, error: null, loading: false };
-  const STATE = { phase: null, runId: null };
+  const STATE = { phase: null };
 
   /* ---- formatting (all durations are nanoseconds) ---- */
   function fmt(ns) {
@@ -482,25 +489,53 @@
       btn.className = "phase-pill";
       btn.dataset.phase = p.phase;
       btn.innerHTML = `Phase ${p.phase}<small>${fmt(p.block_time_ns)} block · ${fmt(p.e2e_budget_ns)} budget</small>`;
-      btn.addEventListener("click", () => { STATE.phase = p.phase; syncUrl(); render(); });
+      btn.addEventListener("click", () => setPhase(p.phase));
       el.appendChild(btn);
     });
   }
 
-  /* ---- run selector ---- */
-  function buildRunSelect() {
-    const opts = (MANIFEST.runs || []).map(r =>
-      `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.date)}</option>`).join("");
-    return `<div class="run-pick">
-      <label for="run-sel">Measured by run</label>
-      <select id="run-sel">${opts}</select>
-    </div>`;
+  /* ---- run selector, narrowed to the selected phase ----
+     The manifest tags every run with the phase it was paced for; the dropdown
+     only ever offers runs of the selected phase, so a phase/run mismatch
+     cannot happen. */
+  const runSel = document.getElementById("run-sel");
+  runSel.addEventListener("change", () => loadRun(runSel.value));
+  const runsForPhase = ph => (MANIFEST.runs || []).filter(r => r.phase === ph)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));   // newest first
+
+  // Refill the dropdown for the selected phase. Keeps the current run when it
+  // belongs to the phase; otherwise falls to the newest.
+  // Returns the run id to show, or null when the phase has no runs.
+  function fillRunSelect() {
+    const runs = runsForPhase(STATE.phase);
+    runSel.innerHTML = runs.length
+      ? runs.map(r => `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.date)}</option>`).join("")
+      : `<option value="">no runs for this phase</option>`;
+    runSel.disabled = !runs.length;
+    const keep = runs.find(r => r.id === RUN.id);
+    const next = keep ? keep.id : (runs[0] ? runs[0].id : null);
+    runSel.value = next || "";
+    return next;
+  }
+
+  // Phase change: refill the run list, then load the run it settled on.
+  function setPhase(ph) {
+    STATE.phase = ph;
+    const next = fillRunSelect();
+    document.querySelectorAll(".phase-pill").forEach(b =>
+      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
+    if (next && next !== RUN.id) { loadRun(next); }
+    else {
+      if (!next) { RUN.id = null; RUN.meta = null; RUN.data = null; RUN.measured = null; RUN.error = null; }
+      syncUrl(); render();
+    }
   }
 
   async function loadRun(id) {
-    const entry = (MANIFEST.runs || []).find(r => r.id === id) || (MANIFEST.runs || [])[0];
+    const entry = runsForPhase(STATE.phase).find(r => r.id === id);
     if (!entry) return;
     RUN.id = entry.id; RUN.meta = entry; RUN.error = null; RUN.loading = true; RUN.data = null; RUN.measured = null;
+    syncUrl();
     render();
     try {
       const res = await fetch(entry.path, { cache: "no-cache" });
@@ -539,7 +574,15 @@
     const currentE2E = currentVals ? COMPONENTS.reduce((s, c) => s + contrib(c, currentVals, n), 0) : null;
     const curProvs = { ingest: "measured", tx: TXSUB ? "measured" : "estimated" };
 
-    const scaleMax = Math.max(goalE2E, currentE2E || 0, ceiling);
+    // The axis is pinned per phase: it spans the ceiling, the goal, and the
+    // worst run of the phase (worst p99 from the manifest), so switching runs
+    // never rescales the goal bar. currentE2E stays in the max as a fallback
+    // for a loaded run the manifest does not describe.
+    const phaseWorstP99 = runsForPhase(STATE.phase).reduce((w, r) =>
+      Math.max(w, ...(r.ingest_p99 || []).map(e => (e && e.p99_ns) || 0)), 0);
+    const phaseWorstE2E = phaseWorstP99 > 0
+      ? netsend + txCur + n * block + phaseWorstP99 + netread + query : 0;
+    const scaleMax = Math.max(goalE2E, currentE2E || 0, phaseWorstE2E, ceiling);
 
     /* --- combined panel: both bars on one scale, one merged table --- */
     const goalWithin = ceiling > 0 ? goalE2E <= ceiling : true;
@@ -553,7 +596,9 @@
       ${barHTML(goalVals, scaleMax, ceiling, goalProvs, n, `budget ${fmt(ceiling)}`)}`;
 
     let currentRow, chips = "", src = "";
-    if (RUN.loading) {
+    if (!RUN.id && !RUN.loading) {
+      currentRow = `<p class="measured-src">No runs are paced for this phase yet.</p>`;
+    } else if (RUN.loading) {
       currentRow = `<div class="loading">Loading ${esc(RUN.meta ? (RUN.meta.name || RUN.meta.id) : "run")}…</div>`;
     } else if (RUN.error) {
       currentRow = `<div class="error-box">Could not load the run (${esc(RUN.error)}). Serve the folder with <code>make serve</code> — <code>file://</code> blocks fetch().</div>`;
@@ -584,7 +629,6 @@
         <div class="panel-head">
           <span class="panel-kicker">Goal vs. current · <b>Phase ${p.phase}</b></span>
         </div>
-        ${buildRunSelect()}
         ${goalRow}
         ${currentRow}
         ${chips}
@@ -592,20 +636,7 @@
         ${combinedTable(goalVals, measured ? currentVals : null, goalProvs, curProvs, n)}
       </div>`;
 
-    // re-wire the run <select> (innerHTML replaced it)
-    const sel = document.getElementById("run-sel");
-    if (sel) {
-      sel.value = RUN.id || "";
-      sel.addEventListener("change", () => { STATE.runId = sel.value; syncUrl(); loadRun(sel.value); });
-    }
-    // reflect the selected phase on the pills
-    document.querySelectorAll(".phase-pill").forEach(b =>
-      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
-
-    // source note + phase/run mismatch hint
-    const runPhase = RUN.data && RUN.data.campaign ? RUN.data.campaign.phase : null;
-    const mismatch = runPhase != null && runPhase !== STATE.phase
-      ? ` This run was paced for Phase ${runPhase}; you are viewing it against the Phase ${STATE.phase} goal.` : "";
+    // source note
     const txNote = TXSUB
       ? `sendTransaction is measured — ${fmt(TXSUB.ns)} in-RPC, phase-independent (<a href="tx-submission.html">tx-submission benchmark</a>); ` +
         `the goal keeps the ${fmt(tx)} allocation. getTransaction (${fmt(query)}) is a fixed estimate.`
@@ -613,7 +644,7 @@
     document.getElementById("source-note").innerHTML =
       `Goal numbers from <code>targets.json</code>: Phase ${p.phase} — ${fmt(block)} block time × ${n}, ${fmt(ceiling)} E2E budget, ` +
       `${fmt(targetNs)} ingestion target. The network slices are constants from the assumed ${fmt(rttNs())} round trip ` +
-      `(${fmt(rttNs() / 2)} submission request + ${fmt(rttNs())} getTransaction round trip). ` + txNote + mismatch;
+      `(${fmt(rttNs() / 2)} submission request + ${fmt(rttNs())} getTransaction round trip). ` + txNote;
   }
 
   /* ---- deep-link ?phase=N&run=ID ---- */
@@ -676,14 +707,21 @@
     }
     buildPhasePills();
 
+    // Deep link: a valid ?run locks the phase to the run's own phase, so a
+    // shared link always lands coherent; otherwise ?phase (default Phase 2)
+    // picks the goal and the dropdown settles on that phase's newest run.
     const url = new URL(location.href);
+    const qRun = (MANIFEST.runs || []).find(r => r.id === url.searchParams.get("run"));
     const qPhase = parseInt(url.searchParams.get("phase"), 10);
-    STATE.phase = phaseByNum(qPhase) ? qPhase : ((TARGETS.phases[1] || TARGETS.phases[0]).phase); // default Phase 2
-    const qRun = url.searchParams.get("run");
-    const initialRun = (MANIFEST.runs || []).find(r => r.id === qRun) ? qRun : (MANIFEST.runs[0] && MANIFEST.runs[0].id);
+    STATE.phase = qRun && phaseByNum(qRun.phase) ? qRun.phase
+      : phaseByNum(qPhase) ? qPhase : ((TARGETS.phases[1] || TARGETS.phases[0]).phase); // default Phase 2
+    if (qRun && qRun.phase === STATE.phase) RUN.id = qRun.id;   // fillRunSelect keeps it
+    const initial = fillRunSelect();
+    document.querySelectorAll(".phase-pill").forEach(b =>
+      b.setAttribute("aria-pressed", String(+b.dataset.phase === STATE.phase)));
 
     render();                 // paint the goal panel immediately
-    if (initialRun) loadRun(initialRun);
+    if (initial) loadRun(initial);
   }
 
   boot();
