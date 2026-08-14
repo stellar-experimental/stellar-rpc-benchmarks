@@ -114,8 +114,14 @@ public (stellar/stellar-rpc issues #872–#874) and live in **`docs/targets.json
 single source of truth shared by the converter, the reports viewer (`docs/app.js`), and
 the latency model (`docs/latency-model.html`). Edit a target once, there: the viewer and
 model fetch `targets.json` live, and the converter reads it to fill `PHASE_TARGETS`.
-`targets.json` also holds the two fixed E2E estimates (`fixed_estimates.tx_submit_p99_ns`,
-`fixed_estimates.client_read_p99_ns`).
+`targets.json` also holds the fixed E2E constants: the assumed client↔RPC network round
+trip (`fixed_estimates.network_rtt_ns`) and the two in-RPC handler estimates
+(`fixed_estimates.send_tx_p99_ns`, `fixed_estimates.get_tx_p99_ns`). The E2E formula
+follows the transaction lifecycle: `e2e = rtt/2 + send_tx + block_time*block_count +
+ingest + rtt + get_tx`. The network legs are hardcoded constants — half a round trip
+carries the submission request (the response is off the critical path), a full round
+trip carries the getTransaction call — so no slice depends on a measured client↔RPC
+network time.
 
 The converter matches a campaign run's phase from `campaign.close_interval_ns`:
 `2000000000` → phase 1, `1000000000` → phase 2, `600000000` → phase 3. The match must be
@@ -132,11 +138,12 @@ converted and lets the viewer degrade gracefully offline; the live viewer/model 
   "block_time_ns": 2000000000,        // the phase block time; also the keep-up budget
   "e2e_budget_ns": 5000000000,        // end-to-end budget (externalized → client);
                                       //   context only — this benchmark does not measure it
-  "ingest_p99_target_ns": 880000000,  // ingest-slice target (meta available in captive
+  "ingest_p99_target_ns": 905000000,  // ingest-slice target (meta available in captive
                                       //   core → ingested in RPC) — the row this benchmark
                                       //   measures as per-ledger ingest_total p99. When a phase
                                       //   omits it (phase 2), the converter derives it from the
-                                      //   e2e budget: e2e = block_time*2 + 60ms + ingest + 60ms.
+                                      //   e2e budget: e2e = 25ms + 10ms + block_time*block_count
+                                      //   + ingest + 50ms + 10ms.
   "workloads": [                      // the three model workloads at this phase
     { "name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000 }, … ],
   "orgs": 10,

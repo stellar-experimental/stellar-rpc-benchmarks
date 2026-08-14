@@ -29,7 +29,7 @@
   let CURRENT = null;       // { meta, data } of the run on screen
   let LIVE_TARGETS = null;  // phases[] from targets.json, or null if unfetched
   let LIVE_FIXED = null;    // fixed_estimates from targets.json (tx submission, query)
-  let MEASURED_TX = null;   // measured tx-submission basis (ns) from docs/txsub/, or null → estimate
+  let MEASURED_TX = null;   // measured in-RPC sendTransaction p99 (ns) from docs/txsub/, or null → estimate
   let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
   let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
   let redrawTimer = null;
@@ -500,12 +500,15 @@
   /* ============================ phase goals ============================ */
   // Fill the derived ingestion target for any phase that omits it — the same
   // rule targets.json documents and the internal viewer applies:
-  // ingest = e2e_budget − block_count × block_time − tx_submit − client_read.
+  // ingest = e2e_budget − block_count × block_time − ⌊3 × rtt / 2⌋ − send_tx − get_tx
+  // (half a round trip carries the submission request, a full round trip the
+  // getTransaction call; the two handler slices are in-RPC time).
   function deriveTargets(phases, fixed) {
-    const tx = (fixed || {}).tx_submit_p99_ns || 0, query = (fixed || {}).client_read_p99_ns || 0;
+    const fx = fixed || {};
+    const fxTotal = Math.floor(3 * (fx.network_rtt_ns || 0) / 2) + (fx.send_tx_p99_ns || 0) + (fx.get_tx_p99_ns || 0);
     (phases || []).forEach(p => {
-      if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0 && (tx || query)) {
-        p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - tx - query;
+      if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0 && fxTotal > 0) {
+        p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - fxTotal;
       }
     });
     return phases;
@@ -522,16 +525,16 @@
     }
   }
   // Measured tx submission (the tx-submission benchmark): worst headline-run
-  // profile's handler p99 + the manifest's assumed network RTT. Best-effort —
-  // on any failure the fixed estimate stands.
+  // profile's in-RPC handler p99. Network time is never part of it — the E2E
+  // model carries the network legs as hardcoded constants. Best-effort — on
+  // any failure the fixed estimate stands.
   async function loadTxsub() {
     try {
       const res = await fetch("txsub/index.json", { cache: "no-cache" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const m = await res.json();
       const run = (m.runs || []).find(r => r.role === "headline");
-      const rtt = m.assumed_network_rtt_ns;
-      if (!run || rtt == null) return;
+      if (!run) return;
       const sums = await Promise.all(Object.values(run.summaries || {}).map(p =>
         fetch("txsub/" + p, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
       let worst = null;
@@ -539,7 +542,7 @@
         const v = s && s.handler && s.handler.p99_ns;
         if (typeof v === "number" && (worst == null || v > worst)) worst = v;
       }
-      if (worst != null) MEASURED_TX = worst + rtt;
+      if (worst != null) MEASURED_TX = worst;
     } catch (err) {
       console.warn("txsub data not loaded; tx-submission slice stays an estimate", err);
     }
@@ -785,12 +788,14 @@
 
     /* ---- fig 1.1 inputs: the E2E budget composition ---- */
     // Renders only when every slice is known: a phase goal with a declared
-    // E2E budget, plus the tx-submission/query estimates from targets.json.
+    // E2E budget, plus the network constant and the two in-RPC handler
+    // estimates (sendTransaction, getTransaction) from targets.json.
     const FIXED = LIVE_FIXED || {};
-    const txNs = FIXED.tx_submit_p99_ns || 0, queryNs = FIXED.client_read_p99_ns || 0;
+    const rttNs = FIXED.network_rtt_ns || 0;
+    const sendNs = FIXED.send_tx_p99_ns || 0, getNs = FIXED.get_tx_p99_ns || 0;
     const budgetNs = sel ? sel.e2e_budget_ns || 0 : 0;
     const nBlocks = sel ? sel.block_count || 2 : 2;
-    const canBudget = !!(goalNs && blockNs && budgetNs && txNs && queryNs && goalWorst);
+    const canBudget = !!(goalNs && blockNs && budgetNs && rttNs && sendNs && getNs && goalWorst);
     // Why the consensus slice spans N blocks: in Phases 1–2 a transaction
     // waits for the next ledger close; Phase 3's consensus + execution
     // pipelining adds one more.
@@ -798,7 +803,7 @@
       ? `Phase ${sel.phase} pipelines consensus and execution, so a transaction completes after ${nBlocks} ledger closes`
       : `a transaction submitted now lands in the <em>next</em> ledger close, not the one in flight`) : "";
     const budgetFig = canBudget ? figHTML("fig11", "Fig 1.1", "Where ingestion sits in the end-to-end budget", "fig11-legend",
-      `The four slices of the end-to-end (E2E) round trip, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices come from outside this benchmark${MEASURED_TX ? " (tx submission is measured by its own benchmark; query stays an estimate until its benchmark lands)" : " (tx submission and query stay estimates until their benchmarks land)"}; the solid slice is what this run measures. Ingestion is the one slice these benchmarks move.`) : "";
+      `The six slices of the end-to-end (E2E) trip, in lifecycle order, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The two network slices are hardcoded constants from the assumed ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(Math.floor(rttNs / 2))} carries the submission request (the response is off the critical path), and a full round trip carries the getTransaction call. The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices come from outside this benchmark${MEASURED_TX ? " (sendTransaction is measured by its own benchmark; getTransaction stays an estimate until its benchmark lands)" : " (sendTransaction and getTransaction stay estimates until their benchmarks land)"}; the solid ingestion slice is what this run measures. Ingestion is the one slice these benchmarks move.`) : "";
 
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
@@ -868,47 +873,56 @@
 
     /* ---- fig 1.1 E2E budget bar ---- */
     // Same slice order and derivation as the latency model
-    // (latency-model.html): E2E = block_count × block + tx + ingest + query.
+    // (latency-model.html), in lifecycle order:
+    // E2E = rtt/2 + sendTransaction + block_count × block + ingest + rtt + getTransaction.
     if (canBudget) {
       const wp99 = ING[goalWorst].driver.ingest_total.p99.m;
       const blockTotal = nBlocks * blockNs;
-      const txRunNs = MEASURED_TX || txNs;     // measured tx submission when available, phase-independent
-      const txRunLabel = MEASURED_TX ? "tx submission (measured + assumed RTT)" : "tx submission (estimate)";
-      const e2eOf = (ing, txV) => blockTotal + txV + ing + queryNs;
+      const netSendNs = Math.floor(rttNs / 2), netReadNs = rttNs;   // hardcoded network constants
+      const txRunNs = MEASURED_TX || sendNs;   // measured in-RPC sendTransaction when available, phase-independent
+      const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
+      const e2eOf = (ing, txV) => netSendNs + txV + blockTotal + ing + netReadNs + getNs;
       const segs = (ingNs, hatch, txV) => [
-        { color: C.de, ns: blockTotal, lab: `Stellar Core consensus — ${fmtNsAxis(blockTotal)}`, ink: true },
+        { color: C.de, ns: netSendNs, hatch: true },
         { color: C.de, ns: txV, hatch: true },
+        { color: C.de, ns: blockTotal, lab: `Stellar Core consensus — ${fmtNsAxis(blockTotal)}`, ink: true },
         { color: C.s1, ns: ingNs, hatch: hatch, lab: fmtNs(ingNs), callout: true },
-        { color: C.de, ns: queryNs, hatch: true },
+        { color: C.de, ns: netReadNs, hatch: true },
+        { color: C.de, ns: getNs, hatch: true },
       ];
       const tip = (ingNs, ingLabel, txV, txLabel) => [
-        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
+        { color: C.de, value: fmtNs(netSendNs), label: "network — submission request (assumed)" },
         { color: C.de, value: fmtNs(txV), label: txLabel },
+        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
         { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
-        { color: C.de, value: fmtNs(queryNs), label: "query (estimate)" },
+        { color: C.de, value: fmtNs(netReadNs), label: "network — getTransaction round trip (assumed)" },
+        { color: C.de, value: fmtNs(getNs), label: "getTransaction (estimate)" },
         { value: fmtNs(e2eOf(ingNs, txV)), label: "end-to-end (derived)" },
       ];
       budgetChart("fig11-body", [
         { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
-          segs: segs(goalNs, true, txNs), tip: tip(goalNs, "ingestion (target)", txNs, "tx submission (allocated)") },
+          segs: segs(goalNs, true, sendNs), tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
           segs: segs(wp99, false, txRunNs), tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel) },
       ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
       legend("fig11-legend", [
         { label: "Stellar Core consensus", color: C.de },
-        { label: MEASURED_TX ? "tx submission (measured) + query (estimate)" : "tx submission + query (estimates)",
+        { label: MEASURED_TX ? "network (assumed) + getTransaction (estimate); sendTransaction measured"
+          : "network (assumed) + sendTransaction + getTransaction (estimates)",
           color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
         { label: "ingestion", color: C.s1 },
         { label: "E2E budget", color: CVAR("--warn"), line: true },
       ]);
       const dTxt = e2e => { const d = budgetNs - e2e; return d === 0 ? "on budget" : d > 0 ? fmtNs(d) + " under" : fmtNs(-d) + " over"; };
       tableView("fig11", ["Slice", `Phase ${sel.phase} goal`, "This run", "Provenance"], [
+        ["network — submission request", fmtNsAxis(netSendNs), fmtNsAxis(netSendNs), "assumed constant (half the round trip)"],
+        ["sendTransaction", fmtNsAxis(sendNs), MEASURED_TX ? fmtNs(txRunNs) : fmtNsAxis(sendNs), MEASURED_TX ? "allocated → measured" : "estimate"],
         [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
-        ["tx submission", fmtNsAxis(txNs), MEASURED_TX ? fmtNs(txRunNs) : fmtNsAxis(txNs), MEASURED_TX ? "allocated → measured" : "estimate"],
         ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
-        ["query", fmtNsAxis(queryNs), fmtNsAxis(queryNs), "estimate"],
-        ["end-to-end (derived)", fmtNs(e2eOf(goalNs, txNs)), fmtNs(e2eOf(wp99, txRunNs)), "derived"],
-        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eOf(goalNs, txNs)), dTxt(e2eOf(wp99, txRunNs)), "derived"],
+        ["network — getTransaction round trip", fmtNsAxis(netReadNs), fmtNsAxis(netReadNs), "assumed constant"],
+        ["getTransaction", fmtNsAxis(getNs), fmtNsAxis(getNs), "estimate"],
+        ["end-to-end (derived)", fmtNs(e2eOf(goalNs, sendNs)), fmtNs(e2eOf(wp99, txRunNs)), "derived"],
+        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eOf(goalNs, sendNs)), dTxt(e2eOf(wp99, txRunNs)), "derived"],
       ]);
     }
 

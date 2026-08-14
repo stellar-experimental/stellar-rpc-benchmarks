@@ -146,7 +146,7 @@ function checkSanity(kind, doc, group, D) {
       check(group, "banner shows both goal + keep-up verdicts",
         /(MEETS GOAL|MISS)/.test(banner) && /(KEEPS UP|OVER INTERVAL)/.test(banner), banner.slice(0, 140));
       if (group.startsWith("phase2-")) {
-        // SAC's ~604 ms ingest p99 misses the 380 ms Phase 2 goal: the headline
+        // SAC's ~604 ms ingest p99 misses the 405 ms Phase 2 goal: the headline
         // must read 2 / 3 with a MISS, not an all-clear 3 / 3.
         check(group, "phase 2 headline is 2 / 3 MISS (not all-clear)",
           /2 \/ 3/.test(banner) && /MISS/.test(banner) && !/MEETS GOAL/.test(banner), banner.slice(0, 140));
@@ -319,16 +319,16 @@ if (phaseRun) {
     check(group, "phase table rendered", !!tbl, "missing");
     const tblTxt = txt(tbl);
     check(group, "all three phases in table", /Phase 1/.test(tblTxt) && /Phase 2/.test(tblTxt) && /Phase 3/.test(tblTxt), tblTxt.slice(0, 100));
-    check(group, "phase 2 ingest-slice target derived from e2e budget (380 ms)", /380 ms/.test(tblTxt), tblTxt.slice(0, 100));
+    check(group, "phase 2 ingest-slice target derived from e2e budget (405 ms)", /405 ms/.test(tblTxt), tblTxt.slice(0, 100));
     const selTh = doc.querySelector("#phase-block th.ph-sel");
     check(group, `matched phase (${matched}) highlighted`, !!selTh && txt(selTh).includes(`Phase ${matched}`), selTh ? txt(selTh) : "missing");
     check(group, "matched phase badged 'this run'", /this run/.test(txt(doc.getElementById("phase-block"))), "missing");
     check(group, "no caveat at default (matched) selection", !doc.querySelector(".phase-caveat"), "caveat present");
     const svgTxt = txt(doc.querySelector("#fig42-body"));
     check(group, "budget line at Phase 1 block time (2 s)", /2 s — Phase 1 block time/.test(svgTxt), svgTxt.slice(0, 200));
-    check(group, "ingest target line at 880 ms", /880 ms — Phase 1 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
+    check(group, "ingest target line at 905 ms", /905 ms — Phase 1 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
     const readout = txt(doc.getElementById("ingest-target-readout"));
-    check(group, "pass/miss readout vs Phase 1 target", /vs Phase 1 target 880 ms/.test(readout) && /(PASS|MISS)/.test(readout), readout.slice(0, 140));
+    check(group, "pass/miss readout vs Phase 1 target", /vs Phase 1 target 905 ms/.test(readout) && /(PASS|MISS)/.test(readout), readout.slice(0, 140));
     // Tier-1: peak memory + pacing now surface in the DEFAULT report, not just ?view=hot.
     check(group, "peak-memory figure rendered", !!doc.querySelector("#fig21-body svg"), "missing");
     const memTv = txt(doc.querySelector("#fig21-tv"));
@@ -351,9 +351,9 @@ if (phaseRun) {
     check(group, "caveat names Phase 3 and the actual pace", /Viewing against Phase 3 targets/.test(caveat) && /2 s close interval/.test(caveat), caveat.slice(0, 160));
     const svgTxt = txt(doc.querySelector("#fig42-body"));
     check(group, "budget line re-based to 600 ms", /600 ms — Phase 3 block time/.test(svgTxt), svgTxt.slice(0, 200));
-    check(group, "ingest target line re-based to 80 ms", /80 ms — Phase 3 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
+    check(group, "ingest target line re-based to 105 ms", /105 ms — Phase 3 ingest target \(p99\)/.test(svgTxt), svgTxt.slice(0, 200));
     const readout = txt(doc.getElementById("ingest-target-readout"));
-    check(group, "readout vs Phase 3 target 80 ms", /vs Phase 3 target 80 ms/.test(readout), readout.slice(0, 140));
+    check(group, "readout vs Phase 3 target 105 ms", /vs Phase 3 target 105 ms/.test(readout), readout.slice(0, 140));
     // The pacing figure's budget is always the run's ACTUAL close interval —
     // never re-based when another phase is selected.
     const paceReadout = txt(doc.getElementById("pace-readout-full"));
@@ -410,8 +410,10 @@ for (const run of manifest.runs) {
     check(group, "budget figure rendered", !!f11, "missing");
     check(group, "budget ceiling line drawn", !!(f11 && f11.querySelector("line.refline-budget")), "missing");
     const f11t = txt(doc.querySelector("#fig11-tv"));
-    check(group, "budget table: all four slices + derived end-to-end",
-      /Stellar Core consensus/.test(f11t) && /tx submission/.test(f11t) && /ingestion/.test(f11t) && /query/.test(f11t) && /end-to-end \(derived\)/.test(f11t),
+    check(group, "budget table: all six slices + derived end-to-end",
+      /network — submission request/.test(f11t) && /sendTransaction/.test(f11t) && /Stellar Core consensus/.test(f11t)
+      && /ingestion/.test(f11t) && /network — getTransaction round trip/.test(f11t) && /getTransaction/.test(f11t)
+      && /end-to-end \(derived\)/.test(f11t),
       f11t.slice(0, 160));
     check(group, "budget verdict rendered (under/over/on budget)", /(under|over|on budget)/.test(f11t), f11t.slice(0, 160));
   }
@@ -447,10 +449,10 @@ for (const run of manifest.runs) {
   check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
   // Per-run sanity values.
   if (run.id.startsWith("phase2-")) {
-    check(group, "Phase 2 ingestion target derived (380 ms)", /380 ms/.test(phTbl), phTbl.slice(0, 200));
-    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 380 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
+    check(group, "Phase 2 ingestion target derived (405 ms)", /405 ms/.test(phTbl), phTbl.slice(0, 200));
+    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 405 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
     // SAC's p99 is a per-box number, not a per-phase one — both Phase 2 runs miss
-    // the 380 ms goal, but at 604 ms on the m6id.2xlarge and 456 ms on the faster
+    // the 405 ms goal, but at 604 ms on the m6id.2xlarge and 456 ms on the faster
     // c6id.8xlarge. Key each figure to its own run id.
     if (run.id === "phase2-m6id2xl-c48a55c6-20260723T035541Z") {
       check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));

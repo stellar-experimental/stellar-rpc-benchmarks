@@ -44,7 +44,8 @@
   }
 
   // tag: a small scope pill on the heading row — which clock the section's
-  // numbers are on (with vs without the assumed network round trip).
+  // numbers are on (every section is in-RPC time; the E2E model carries
+  // network time as hardcoded constants of its own).
   const secHead = (no, title, tag) =>
     `<div class="sec-head"><span class="sec-num">${no}</span><h2>${title}</h2>${
       tag ? `<span class="scope-tag">${tag}</span>` : ""}</div>`;
@@ -76,31 +77,31 @@
       if (typeof v === "number" && (!worst || v > worst.ns)) worst = { ns: v, mode: p.mode };
     }
     const rtt = manifest.assumed_network_rtt_ns;
-    const model = targets && targets.fixed_estimates && targets.fixed_estimates.tx_submit_p99_ns;
+    const model = targets && targets.fixed_estimates && targets.fixed_estimates.send_tx_p99_ns;
 
     const tile = (v, k, sub, eq) =>
       `<div class="tile"><div class="tile-value">${v}</div>${eq ? `<div class="tile-eq">${eq}</div>` : ""}<div class="tile-label"><strong>${k}.</strong> ${sub}</div></div>`;
     let tiles = "";
     if (model != null) {
       tiles += tile(fmt(model), "Target value",
-        `What the E2E latency model currently allocates to the submission slice.`);
+        `What the E2E latency model allocates to the in-RPC <code>sendTransaction</code> slice.`);
     }
-    if (worst && rtt != null) {
-      const basis = worst.ns + rtt;
+    if (worst) {
       const chip = model == null ? ""
-        : basis <= model
-          ? ` <span class="chip">▪ ${fmt(model - basis)} under the model</span>`
-          : ` <span class="chip warn">▲ ${fmt(basis - model)} over the model</span>`;
-      tiles += tile(fmt(basis), "Calculated value" + chip,
-        `worst-profile handler p99 (${esc(label(worst.mode))}, standalone) + the assumed network round trip.`,
-        `= ${fmt(rtt)} network (assumed) + ${fmt(worst.ns)} in-RPC (measured)`);
+        : worst.ns <= model
+          ? ` <span class="chip">▪ ${fmt(model - worst.ns)} under the model</span>`
+          : ` <span class="chip warn">▲ ${fmt(worst.ns - model)} over the model</span>`;
+      tiles += tile(fmt(worst.ns), "Measured value" + chip,
+        `worst-profile handler p99 (${esc(label(worst.mode))}, standalone) — in-RPC time only.`);
     }
 
     return `<section id="budget">
-      ${secHead(no, "The tx submission budget", rtt != null ? `includes ~${fmt(rtt)} network` : "")}
-      <p class="sec-intro">The tx submission slice of the end-to-end latency model decomposes as
-        <strong>client↔RPC network time</strong> — assumed at ~${fmt(rtt)} round trip, not measured here —
-        plus the <strong>in-RPC time</strong> this benchmark measures. </p>
+      ${secHead(no, "The tx submission budget", "in-RPC only — network is a model constant")}
+      <p class="sec-intro">The end-to-end latency model carries <strong>client↔RPC network time</strong> as
+        hardcoded constants${rtt != null ? ` from an assumed ~${fmt(rtt)} round trip: half a round trip carries the
+        submission request (the response is off the critical path)` : ""} — never measured. The model's
+        submission slice is therefore <strong>in-RPC time only</strong>, and this benchmark's handler p99
+        compares against it directly.</p>
       <div class="tiles">${tiles}</div>
     </section>`;
   }
@@ -124,7 +125,7 @@
       <p class="sec-intro">Tx submission duration per profile, measured at RPC's <code>sendTransaction</code> handler: Load: ${fmtInt(run.target_rps)} rps ×
         ${fmtInt(run.duration_s)} s per profile against RPC ${esc(run.rpc_version)} on ${esc(run.instance)}.</p>
       ${figure("Fig 2.1", "Handler p99 per profile", "", p99Bars(run._profiles),
-        "The tail (p99) is the in-RPC number; §01 adds the assumed network round trip on top of the worst one. The full distribution is in the table below.")}
+        "The tail (p99) is the in-RPC number; §01 compares the worst one against the model's sendTransaction allocation. The full distribution is in the table below.")}
       ${handlerTable("headline-table", run._profiles)}
     </section>`;
   }
