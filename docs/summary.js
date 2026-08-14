@@ -500,12 +500,12 @@
   /* ============================ phase goals ============================ */
   // Fill the derived ingestion target for any phase that omits it — the same
   // rule targets.json documents and the internal viewer applies:
-  // ingest = e2e_budget − block_count × block_time − 1.5 × rtt − send_tx − get_tx
+  // ingest = e2e_budget − block_count × block_time − ⌊3 × rtt / 2⌋ − send_tx − get_tx
   // (half a round trip carries the submission request, a full round trip the
   // getTransaction call; the two handler slices are in-RPC time).
   function deriveTargets(phases, fixed) {
     const fx = fixed || {};
-    const fxTotal = 1.5 * (fx.network_rtt_ns || 0) + (fx.send_tx_p99_ns || 0) + (fx.get_tx_p99_ns || 0);
+    const fxTotal = Math.floor(3 * (fx.network_rtt_ns || 0) / 2) + (fx.send_tx_p99_ns || 0) + (fx.get_tx_p99_ns || 0);
     (phases || []).forEach(p => {
       if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0 && fxTotal > 0) {
         p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - fxTotal;
@@ -803,7 +803,7 @@
       ? `Phase ${sel.phase} pipelines consensus and execution, so a transaction completes after ${nBlocks} ledger closes`
       : `a transaction submitted now lands in the <em>next</em> ledger close, not the one in flight`) : "";
     const budgetFig = canBudget ? figHTML("fig11", "Fig 1.1", "Where ingestion sits in the end-to-end budget", "fig11-legend",
-      `The six slices of the end-to-end (E2E) trip, in lifecycle order, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The two network slices are hardcoded constants from the assumed ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(rttNs / 2)} carries the submission request (the response is off the critical path), and a full round trip carries the getTransaction call. The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices come from outside this benchmark${MEASURED_TX ? " (sendTransaction is measured by its own benchmark; getTransaction stays an estimate until its benchmark lands)" : " (sendTransaction and getTransaction stay estimates until their benchmarks land)"}; the solid ingestion slice is what this run measures. Ingestion is the one slice these benchmarks move.`) : "";
+      `The six slices of the end-to-end (E2E) trip, in lifecycle order, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The two network slices are hardcoded constants from the assumed ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(Math.floor(rttNs / 2))} carries the submission request (the response is off the critical path), and a full round trip carries the getTransaction call. The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices come from outside this benchmark${MEASURED_TX ? " (sendTransaction is measured by its own benchmark; getTransaction stays an estimate until its benchmark lands)" : " (sendTransaction and getTransaction stay estimates until their benchmarks land)"}; the solid ingestion slice is what this run measures. Ingestion is the one slice these benchmarks move.`) : "";
 
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
@@ -878,7 +878,7 @@
     if (canBudget) {
       const wp99 = ING[goalWorst].driver.ingest_total.p99.m;
       const blockTotal = nBlocks * blockNs;
-      const netSendNs = rttNs / 2, netReadNs = rttNs;   // hardcoded network constants
+      const netSendNs = Math.floor(rttNs / 2), netReadNs = rttNs;   // hardcoded network constants
       const txRunNs = MEASURED_TX || sendNs;   // measured in-RPC sendTransaction when available, phase-independent
       const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
       const e2eOf = (ing, txV) => netSendNs + txV + blockTotal + ing + netReadNs + getNs;
