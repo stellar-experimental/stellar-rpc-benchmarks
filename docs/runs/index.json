@@ -360,6 +360,32 @@
           "p99_ns": 154032111
         }
       ]
+    },
+    {
+      "id": "phase2-2x-full-history-fb1efac1-20260822T102137Z",
+      "name": "phase2-2x-full-history",
+      "date": "2026-08-22",
+      "kind": "synthetic",
+      "path": "runs/phase2-2x-full-history-fb1efac1-20260822T102137Z.json",
+      "phase": 2,
+      "machine": "m6id.2xlarge",
+      "hostname": "ip-172-31-34-155",
+      "commit": "fb1efac1dccda2a4ff735098954444418640b037",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-5000-c1",
+          "p99_ns": 595517114
+        },
+        {
+          "unit": "custom_token-4000-c1",
+          "p99_ns": 187207073
+        },
+        {
+          "unit": "soroswap-1500-c1",
+          "p99_ns": 152794013
+        }
+      ]
     }
   ]
 }
