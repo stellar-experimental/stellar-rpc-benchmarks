@@ -422,6 +422,10 @@ def ingest_p99_target(block_time_ns, e2e_budget_ns, block_count=2):
     return e2e_budget_ns - block_count * block_time_ns - FIXED_E2E_NS
 
 
+# Read-path design target: the p99 no query cell may exceed. One number for
+# every phase, so it lives beside the phase list rather than inside it.
+QUERY_P99_TARGET_NS = _TARGETS["query_p99_target_ns"]
+
 PHASE_TARGETS = _TARGETS["phases"]
 
 # Fill the ingest-slice target for any phase that does not state one (phase 2).
@@ -972,6 +976,15 @@ def convert(args):
     if hostname:
         data["hostname"] = hostname
 
+    # Every check the run's own shape earns, most-central first. A run can earn
+    # more than one: a paced campaign that also swept queries is judged on both
+    # keeping up with the block model AND meeting the read-path target, and the
+    # two answer different questions about different sections. `checks` carries
+    # the first for readers that predate the list; `checks_all` carries them all.
+    checks = []
+    query_check = {"kind": "query_p99_threshold", "threshold_ns": QUERY_P99_TARGET_NS,
+                   "label": f"query p99 ≤ {QUERY_P99_TARGET_NS // 1_000_000} ms",
+                   "applies_to": "queries"}
     if layout == "campaign":
         # The keep-up check derives from the run's own pace: a matched phase
         # names it, any other pace is judged as itself, and an unpaced
@@ -980,17 +993,21 @@ def convert(args):
             label = (f"Phase {matched_phase['phase']} block model "
                      f"({format_interval(close_interval_ns)})" if matched_phase
                      else f"{format_interval(close_interval_ns)} pace")
-            data["checks"] = {"kind": "block_keepup", "interval_ns": close_interval_ns,
-                              "label": label, "applies_to": "ingest_hot"}
-        elif queries:
-            data["checks"] = {"kind": "query_p99_threshold", "threshold_ns": 500000000,
-                              "label": "query p99 ≤ 500 ms", "applies_to": "queries"}
+            checks.append({"kind": "block_keepup", "interval_ns": close_interval_ns,
+                           "label": label, "applies_to": "ingest_hot"})
+        if queries:
+            checks.append(query_check)
     elif args.dataset_kind == "synthetic":
-        data["checks"] = {"kind": "block_keepup", "interval_ns": 600000000,
-                          "label": "600 ms block model", "applies_to": "ingest_hot"}
+        checks.append({"kind": "block_keepup", "interval_ns": 600000000,
+                       "label": "600 ms block model", "applies_to": "ingest_hot"})
+        if queries:
+            checks.append(query_check)
     elif queries:
-        data["checks"] = {"kind": "query_p99_threshold", "threshold_ns": 500000000,
-                          "label": "query p99 ≤ 500 ms", "applies_to": "queries"}
+        checks.append(query_check)
+
+    if checks:
+        data["checks"] = checks[0]
+        data["checks_all"] = checks
 
     if ingest_cold:
         data["ingest_cold"] = ingest_cold

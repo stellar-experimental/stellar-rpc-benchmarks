@@ -87,7 +87,7 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   (ingest/query/runs/query_concurrency/cold_iters/
                                            //   hot_iters/workers/hot_num_ledgers/ref/built_commit)
   },
-  "checks":                                 // this run's pass/fail semantics AS DATA
+  "checks":                                 // this run's PRIMARY pass/fail semantics AS DATA
     { "kind": "query_p99_threshold", "threshold_ns": 500000000,
       "label": "query p99 ≤ 500 ms", "applies_to": "queries" }
   | { "kind": "block_keepup", "interval_ns": 600000000,
@@ -95,8 +95,18 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
       // block_keepup interval_ns: the legacy synthetic layout keeps the constant
       // 600 ms model. The campaign layout derives it from close_interval_ns —
       // label "Phase 1 block model (2 s)" on an exact phase match, "1.5 s pace"
-      // otherwise. An unpaced campaign run emits no block_keepup check; with
-      // queries present it falls back to query_p99_threshold, else no checks.
+      // otherwise. An unpaced campaign run emits no block_keepup check.
+      // query_p99_threshold threshold_ns comes from docs/targets.json
+      // (query_p99_target_ns) — one number for every phase.
+  "checks_all": [ … ],                      // EVERY check the run earns, primary first
+      // A run can earn more than one: a paced campaign that also swept queries
+      // is judged both on keeping up with the block model (applies_to
+      // "ingest_hot") and on the read-path target (applies_to "queries"), and
+      // the two answer different questions about different sections. Each entry
+      // has the shape of "checks", and checks_all[0] IS "checks" — the single
+      // object stays for readers written before the list, and for the published
+      // runs that predate it. Read a verdict by matching applies_to, never by
+      // position; treat an absent checks_all as the one-element list [checks].
   "sections": ["ingest_cold", "ingest_hot", "queries", "golden"],  // exactly the keys present
   "ingest_cold":  { … }, "ingest_hot": { … },
   "queries": { … },                        // pubnet only
