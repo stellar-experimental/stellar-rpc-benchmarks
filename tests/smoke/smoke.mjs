@@ -123,6 +123,34 @@ function checkKind(kind, doc, group, data) {
   check(group, "all phases in fig42 table", /extract/.test(f42) && /commit \(fsync\)/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
 }
 
+/* Expected phase-goal verdict, derived from the run data the same way the
+   viewer derives it (docs/app.js + docs/summary.js): count the units whose
+   hot ingest_total p99 median is within the paced phase's ingest_p99_target_ns.
+   Returns null when the run carries no phase or no goal, so callers skip the
+   check rather than pin a verdict that the data does not define. */
+function expectedGoal(D) {
+  const camp = D && D.campaign;
+  if (!camp || camp.phase == null || !Array.isArray(camp.phase_targets)) return null;
+  const sel = camp.phase_targets.find(p => p.phase === camp.phase);
+  const goalNs = sel && sel.ingest_p99_target_ns;
+  if (!goalNs) return null;
+  const hot = D.ingest_hot || {};
+  const units = Object.keys(hot).filter(u => hot[u].driver && hot[u].driver.ingest_total && hot[u].driver.ingest_total.p99);
+  if (!units.length) return null;
+  const pass = units.filter(u => hot[u].driver.ingest_total.p99.m <= goalNs).length;
+  return { pass, n: units.length, met: pass === units.length, goalNs };
+}
+
+/* Assert a goal banner's headline matches the verdict the run data implies:
+   "<pass> / <n>" plus MEETS GOAL when every unit clears the goal, else MISS. */
+function checkGoalBanner(group, bannerTxt, g, what) {
+  const want = g.met ? "MEETS GOAL" : "MISS";
+  const other = g.met ? "MISS" : "MEETS GOAL";
+  check(group, `${what}: ${g.pass} / ${g.n} ${want} (from run data)`,
+    new RegExp(`${g.pass} / ${g.n}`).test(bannerTxt) && new RegExp(want).test(bannerTxt) && !new RegExp(other).test(bannerTxt),
+    bannerTxt.slice(0, 140));
+}
+
 function checkSanity(kind, doc, group, D) {
   const report = doc.getElementById("report");
   // Synthetic wraps its two verdict banners (phase goal + block model) in a
@@ -145,12 +173,11 @@ function checkSanity(kind, doc, group, D) {
       // per-run blocks below pin the actual state for each committed run.
       check(group, "banner shows both goal + keep-up verdicts",
         /(MEETS GOAL|MISS)/.test(banner) && /(KEEPS UP|OVER INTERVAL)/.test(banner), banner.slice(0, 140));
-      if (group.startsWith("phase2-")) {
-        // SAC's ~604 ms ingest p99 misses the 405 ms Phase 2 goal: the headline
-        // must read 2 / 3 with a MISS, not an all-clear 3 / 3.
-        check(group, "phase 2 headline is 2 / 3 MISS (not all-clear)",
-          /2 \/ 3/.test(banner) && /MISS/.test(banner) && !/MEETS GOAL/.test(banner), banner.slice(0, 140));
-      }
+      // The headline count and verdict follow from the data, not from the run's
+      // phase: a Phase 2 run may miss on SAC (the 2026-07 runs) or clear all
+      // three profiles (the 2026-08 runs), and both must pass this gate.
+      const g = expectedGoal(D);
+      if (g) checkGoalBanner(group, banner, g, `phase ${phase} headline`);
     } else {
       check(group, "banner 3 / 3 KEEPS UP", /3 \/ 3/.test(banner) && /KEEPS UP/.test(banner), banner.slice(0, 60));
     }
@@ -448,19 +475,20 @@ for (const run of manifest.runs) {
   const meta = txt(doc.getElementById("machine-metadata"));
   check(group, "machine metadata block filled", meta.length > 100, meta.length + " chars");
   // Per-run sanity values.
+  // The goal banner's count and verdict follow from the run data (see
+  // expectedGoal); the run id only selects the fixed target and per-run figures.
+  const g = expectedGoal(runJSON(run.id));
+  if (g) checkGoalBanner(group, bannerTxt, g, `phase ${phNo} banner`);
   if (run.id.startsWith("phase2-")) {
     check(group, "Phase 2 ingestion target derived (405 ms)", /405 ms/.test(phTbl), phTbl.slice(0, 200));
-    check(group, "phase 2 banner: 2 / 3 with a MISS (SAC over 405 ms)", /2 \/ 3/.test(bannerTxt) && /MISS/.test(bannerTxt), bannerTxt.slice(0, 140));
-    // SAC's p99 is a per-box number, not a per-phase one — both Phase 2 runs miss
-    // the 405 ms goal, but at 604 ms on the m6id.2xlarge and 456 ms on the faster
-    // c6id.8xlarge. Key each figure to its own run id.
+    // SAC's p99 is a per-box number, not a per-phase one — the two 2026-07 Phase 2
+    // runs miss the 405 ms goal, at 604 ms on the m6id.2xlarge and 456 ms on the
+    // faster c6id.8xlarge. Key each figure to its own run id.
     if (run.id === "phase2-m6id2xl-c48a55c6-20260723T035541Z") {
       check(group, "SAC p99 ≈ 604 ms surfaced", /60[34](\.\d)? ms/.test(text), text.slice(0, 120));
     } else if (run.id === "phase2-c6id8xl-c48a55c6-20260724T000724Z") {
       check(group, "SAC p99 ≈ 456 ms surfaced", /45[56](\.\d)? ms/.test(text), text.slice(0, 120));
     }
-  } else if (run.id.startsWith("phase1-")) {
-    check(group, "phase 1 banner: 3 / 3 MEETS GOAL", /3 \/ 3/.test(bannerTxt) && /MEETS GOAL/.test(bannerTxt), bannerTxt.slice(0, 140));
   }
   window.close();
 }
