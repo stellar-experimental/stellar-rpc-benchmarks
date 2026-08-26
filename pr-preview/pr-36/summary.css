@@ -1,0 +1,75 @@
+/* Page-scoped styles for the stakeholder summary (docs/summary.html).
+   The page loads styles.css first and reuses its masthead, banner, figure,
+   table, and phase-block styles; only what is unique to the summary lives
+   here. Colors come from the same CSS custom properties, so the theme toggle
+   re-themes both pages. */
+
+/* ---------- toolbar full-report link ---------- */
+.summary-toolbar .full-link {
+  font: 600 12px/1 -apple-system, "Segoe UI", system-ui, sans-serif; text-decoration: none;
+  color: var(--ink-2); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px;
+}
+.summary-toolbar .full-link:hover { border-color: var(--accent); color: var(--ink); }
+
+/* ---------- reference lines ----------
+   Two visually separate references: the ingestion target (the goal) stays a
+   dashed amber line; the block time (the cadence, not the goal) is a solid
+   muted line. The dashed .refline from styles.css is re-colored here so the
+   summary's target lines read as "the bar to clear". */
+.summary .refline { stroke: var(--warn); }
+.summary .reflab { fill: var(--warn); }
+.refline-block { stroke: var(--muted); stroke-width: 1.5; }
+.reflab-block {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+  fill: var(--muted); letter-spacing: 0.04em;
+}
+
+/* ---------- fig 1.1 E2E budget bar ----------
+   The budget is a hard ceiling, not a goal to aim at, so it gets a solid
+   warn-colored line — distinct from the dashed ingestion-target refline. */
+.refline-budget { stroke: var(--warn); stroke-width: 1.5; }
+.reflab-budget {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+  fill: var(--warn); letter-spacing: 0.04em;
+}
+/* in-bar label on the light gray block-time segment (white would wash out) */
+.bud-lab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: var(--ink); }
+
+/* pass/miss readout under the headline figure — never wrap mid-item */
+.summary #goal-readout .goal-item { white-space: nowrap; }
+
+/* ---------- in-prose links (section cross-references, source data) ---------- */
+.summary .banner a, .summary .sec-intro a {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.summary .banner a:hover, .summary .sec-intro a:hover { border-bottom-color: var(--accent); }
+
+/* ---------- methodology subheads ---------- */
+.summary .method-sub { font-size: 15px; font-weight: 650; margin: 26px 0 0; }
+.summary .method-sub + .sec-intro { margin-top: 6px; }
+.summary #dataset-table .ds-name { font-weight: 600; }
+
+/* ---------- fig 4.1 share bar + fig 4.2 phase picker ---------- */
+.share-lab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: #fff; }
+.phase-picker { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+.phase-picker button {
+  font: 600 11.5px/1 ui-monospace, Menlo, Consolas, monospace;
+  padding: 6px 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+}
+.phase-picker button:hover { border-color: var(--accent); color: var(--ink); }
+.phase-picker button.sel {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* ---------- pacing diagram ---------- */
+.pace-due { stroke: var(--baseline); stroke-dasharray: 3 3; }
+.pace-anchor { stroke: var(--ink-2); stroke-width: 1.5; }
+.pace-pre { stroke: var(--baseline); stroke-dasharray: 2 4; opacity: 0.7; }
+.pace-note { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: var(--muted); }
+.pace-note.warn { fill: var(--warn); }
+.pace-note.anchor { fill: var(--ink-2); }
+.pace-barlab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #fff; }
