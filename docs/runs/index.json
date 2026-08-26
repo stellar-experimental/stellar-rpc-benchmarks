@@ -438,6 +438,32 @@
           "p99_ns": 104888313
         }
       ]
+    },
+    {
+      "id": "phase3-500ledgers-8x-query-d77cc53c-20260826T202723Z",
+      "name": "phase3-500ledgers-8x-query",
+      "date": "2026-08-26",
+      "kind": "synthetic",
+      "path": "runs/phase3-500ledgers-8x-query-d77cc53c-20260826T202723Z.json",
+      "phase": 3,
+      "machine": "c6id.8xlarge",
+      "hostname": "ip-172-31-84-191",
+      "commit": "d77cc53cac6b52e0d44240c4f4d46dcf429ae50d",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-6000-c1",
+          "p99_ns": 162035154
+        },
+        {
+          "unit": "custom_token-3600-c1",
+          "p99_ns": 77655493
+        },
+        {
+          "unit": "soroswap-1800-c1",
+          "p99_ns": 114053354
+        }
+      ]
     }
   ]
 }
