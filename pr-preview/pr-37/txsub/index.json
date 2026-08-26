@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "issue": "https://github.com/stellar/stellar-rpc/issues/869",
+  "producer": "stellar-rpc-blaster scripts/tx-submission/ (harvest.py)",
+  "assumed_network_rtt_ns": 50000000,
+  "runs": [
+    {
+      "id": "txsub-standalone-20260728",
+      "network": "standalone",
+      "role": "headline",
+      "date": "2026-07-28",
+      "rpc_version": "27.1.1",
+      "instance": "m6id.2xlarge",
+      "target_rps": 10,
+      "duration_s": 120,
+      "gcs": "gs://rpc-full-history/results/txsub-standalone-20260728",
+      "summaries": {
+        "sac-transfer": "txsub-standalone-20260728/summary-sac-transfer.json",
+        "oz-transfer": "txsub-standalone-20260728/summary-oz-transfer.json",
+        "soroswap": "txsub-standalone-20260728/summary-soroswap.json"
+      }
+    },
+    {
+      "id": "txsub-testnet-20260728",
+      "network": "testnet",
+      "role": "confirmation",
+      "date": "2026-07-28",
+      "rpc_version": "27.1.1",
+      "instance": "m6id.2xlarge",
+      "target_rps": 2,
+      "duration_s": 60,
+      "gcs": "gs://rpc-full-history/results/txsub-testnet-20260728",
+      "summaries": {
+        "sac-transfer": "txsub-testnet-20260728/summary-sac-transfer.json",
+        "oz-transfer": "txsub-testnet-20260728/summary-oz-transfer.json",
+        "soroswap": "txsub-testnet-20260728/summary-soroswap.json"
+      }
+    }
+  ]
+}
