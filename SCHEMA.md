@@ -81,6 +81,11 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
     "phase_targets": [ { … }, … ],         // campaign layout only; the full three-phase target
                                            //   table, copied verbatim at convert time — see
                                            //   "Phase 1/2/3 performance targets" below.
+    "query_load": { … },                   // campaign layout only, and only when the run carries
+                                           //   open-loop query cells; targets.json's query_load
+                                           //   block copied verbatim (RPS floors per profile ×
+                                           //   phase, the 0.5/1/2 ladder, and the two extra
+                                           //   budgets) — see "queries" below.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs
@@ -225,17 +230,76 @@ converter warns.
 
 "queries": { "cold"|"hot": { "<unit>": {
   "<qtype>": {                            // qtype ∈ discovered per-type CSVs: ledgers, txpage, txhash, events
+    // CLOSED-LOOP cells — a concurrency sweep. Every published run to date.
     "c<W>": StageAgg & {                  // from <qtype>.csv row total_c<W>; W discovered from row names
       "wall": V,                          // driver.csv row <qtype>_c<W> total_ns
       "ops_s": V,                         // n / wall, per run
       "items_s": V, "items_r": [int×5]    // events only: n_items / wall per run; raw per-run n_items
+    },
+    // OPEN-LOOP cells — one per paced target rate. The key is the rate token
+    // verbatim as the CSV spells it ("r0.5", "r3.75", "r300"); cells are
+    // ordered ascending BY VALUE, so r500 precedes r1000.
+    "r<rate>": StageAgg & {               // from <qtype>.csv row total_r<rate> — the SCHEDULED
+                                          //   latency (due→done). THIS is the headline percentile:
+                                          //   it is coordinated-omission-correct, so a leg that
+                                          //   falls behind its arrival schedule shows the queueing
+                                          //   it caused. Never report service in its place.
+      "target_rps": float,                // the rate this cell was paced at (the key, parsed)
+      "service": StageAgg,                // service_r<rate> — the same requests' dispatch→done
+                                          //   time; a secondary column, not the headline
+      "wall": V,                          // driver.csv row <qtype>_r<rate> total_ns (leg wall clock)
+      "achieved_rps": V,                  // driver row <qtype>_r<rate>_millirps ÷ 1000, per run
+                                          //   (the row carries the rate ×1000 as an int in the
+                                          //   duration columns, the way peak_rss_bytes carries bytes)
+      "dispatch_lag": StageAgg,           // driver row <qtype>_r<rate>_lag — one sample per
+                                          //   DISPATCHED request; zeros (on time) are kept, so
+                                          //   p50 = 0 means the pacer held schedule
+      "shed": V,                          // driver row <qtype>_r<rate>_shed n_items — requests
+                                          //   dropped at the in-flight cap
+      "mean_page_ns": V, "items_r": […]   // events only: service total ÷ n (a sequential
+                                          //   subscriber's mean page latency); raw per-run n_items
+    },
+    "verdict_1x": {                       // open-loop only; sibling of the rate cells, see below
+      "rate": "r1000",                    // the cell whose target_rps IS this phase's floor
+      "target_rps": 1000.0,               // campaign.query_load.profiles.<profile>.<qtype>_rps[phase−1]
+      "achieved_rps_m": 999.998,          // that cell's achieved_rps median (absent if unmeasured)
+      "p99_ns": 200000000,                // that cell's SCHEDULED p99 median
+      "threshold_ns": 500000000,          // query_p99_target_ns
+      "pass": true,                       // p99_ns ≤ threshold_ns — the headline verdict
+      "in_rpc":      { "p99_ns": …, "threshold_ns": 10000000,  "pass": true },  // txhash only
+      "page_budget": { "mean_ns": …, "budget_ns": 100000000, "pass": true }     // events only
     }
   },
-  "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows not matching *_c<W>
+  "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows belonging to no cell
+                                          //   (open, evict, peak_rss_bytes) — i.e. matching neither
+                                          //   *_c<W> nor *_r<rate>{,_millirps,_lag,_shed}
 }}}
 
 "golden": { "<unit>": { "wall_ns": int } }   // golden-download-<unit>/driver.csv chunk_wall total_ns (single run)
 ```
+
+### Query cells: two generations
+
+The two cell shapes are the two load models, and a `<qtype>` entry carries one or
+the other, never both — read the key prefix (`c` = concurrency, `r` = rate). Both come
+from the same `stage,n,n_items,total_ns,p50_ns,p90_ns,p99_ns,max_ns` rows; only the
+sweep axis differs. `txhash` also writes `found_r<rate>`/`miss_r<rate>` sub-stage
+splits (as it wrote `found_c<W>`); the converter ignores them. Every optional
+open-loop field (`service`, `wall`, `achieved_rps`, `dispatch_lag`, `shed`,
+`mean_page_ns`) is omitted with a converter warning when its row is missing from any
+rep — never zero-filled, so an `r`-array is always one entry per rep.
+
+`verdict_1x` is emitted for campaign-layout runs whose pace matches a phase. The 1×
+cell is the one paced at the phase's RPS floor for that profile and endpoint — the
+ladder's 0.5×/2× cells are context around it — and it is matched by VALUE, so the
+token's spelling never has to be guessed. The profile key is the dataset MODEL name:
+the unit id minus its `-c<chunk>` suffix and minus the trailing per-ledger tx count
+(`sac-6000-c1` → `sac`, `custom_token-3600-c1` → `custom_token`). `in_rpc`
+(getTransaction's additional in-RPC p99 budget) and `page_budget` (getEvents' MEAN
+page-latency budget, which a sequential subscriber accumulates as lag) are **separate
+verdicts** — render them as their own columns and never fold them into `pass`. The
+whole object is omitted, with a warning, when the run matches no phase, the profile is
+unknown to `targets.json`, or no cell sits at the floor; the data still converts.
 
 ## Manifest — `docs/runs/index.json`
 
@@ -285,6 +349,10 @@ The converter auto-detects the input bundle layout from its subdirectory names:
   are dataset preparation, **not results** — the converter skips them and warns. The
   `-c<chunk>-run<R>` suffix is what distinguishes this layout from flat pubnet dirs; it is
   orthogonal to `dataset.kind` (a campaign may carry pubnet or synthetic data).
+  Open-loop query legs split one more level — `query-{cold,hot}-<unit>-<qtype>-run<R>`,
+  each holding `<qtype>.csv` + its own `driver.csv` — where the closed-loop generation put
+  every type's CSV in a single `query-{cold,hot}-<unit>-run<R>` dir. The converter picks
+  the path per (tier, unit) from the dir names, so a bundle of either generation converts.
 
 Every bundle also carries a free-text `*machine-metadata*.txt` at the root (parsed into
 `machine`). A campaign bundle additionally carries **JSON manifests** — all optional and

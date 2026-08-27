@@ -122,7 +122,9 @@ def subdirs(results_dir):
 # A campaign bundle (from campaign.sh) names its timed dirs
 # <family>-<dataset>-c<chunk>-run<R> and its untimed prep dirs golden-<dataset>-c<chunk>.
 # The -c<chunk>-run<R> suffix distinguishes it from the flat pubnet ingest-*-run<R>.
-_CAMPAIGN_RUN = re.compile(r"^(?:ingest|query)-(?:cold|hot)-.+-c\d+-run\d+$")
+# The RPS-era runner splits a query leg per query type, inserting one more token
+# before the run number: query-<tier>-<dataset>-c<chunk>-<qtype>-run<R>.
+_CAMPAIGN_RUN = re.compile(r"^(?:ingest|query)-(?:cold|hot)-.+-c\d+(?:-[a-z]+)?-run\d+$")
 _CAMPAIGN_GOLDEN = re.compile(r"^golden-.+-c\d+$")
 _UNIT_CHUNK = re.compile(r"^(.+)-c(\d+)$")
 
@@ -426,6 +428,18 @@ def ingest_p99_target(block_time_ns, e2e_budget_ns, block_count=2):
 # every phase, so it lives beside the phase list rather than inside it.
 QUERY_P99_TARGET_NS = _TARGETS["query_p99_target_ns"]
 
+# Open-loop query load model: per endpoint x profile x phase RPS floors, the
+# 0.5/1/2 ladder they are paced at, and the two budgets that are judged beside
+# the headline p99 (getTransaction's in-RPC p99, getEvents' mean page latency).
+# Copied verbatim into campaign runs that carry RPS query cells, the way
+# PHASE_TARGETS is, so the viewer reads the floors as data.
+QUERY_LOAD = _TARGETS["query_load"]
+
+# targets.json keys its floors by endpoint; the bundle names its legs by query
+# type. One mapping, in one place.
+_QTYPE_RPS_KEY = {"ledgers": "ledgers_rps", "txpage": "txpage_rps",
+                  "txhash": "txhash_rps", "events": "events_rps"}
+
 PHASE_TARGETS = _TARGETS["phases"]
 
 # Fill the ingest-slice target for any phase that does not state one (phase 2).
@@ -616,9 +630,139 @@ def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
 
 
 _CW = re.compile(r"_c(\d+)$")
+# The RPS-era per-leg driver rows: <qtype>_r<rate> and its _millirps/_lag/_shed
+# siblings. Everything a driver carries that matches neither this nor _CW is
+# setup (open, evict, peak_rss_bytes).
+_RPS_ROW = re.compile(r"_r\d+(?:\.\d+)?(?:_(?:millirps|lag|shed))?$")
+_TOTAL_R = re.compile(r"^total_r(\d+(?:\.\d+)?)$")
+
+
+def _is_leg_row(stage):
+    """True for a per-cell driver row (closed-loop _c<W> or paced _r<rate>)."""
+    return bool(_CW.search(stage) or _RPS_ROW.search(stage))
+
+
+def rps_query_types(results_dir, tier, unit):
+    """Query types with their own leg dir for this (tier, unit), sorted.
+
+    Empty for a pre-RPS bundle, where one query-<tier>-<unit>-run<R> dir holds
+    every type's CSV — that shape keeps converting through the closed-loop path.
+    """
+    pat = re.compile(rf"^query-{tier}-{re.escape(unit)}-(.+)-run\d+$")
+    return sorted({m.group(1) for n in subdirs(results_dir)
+                   for m in [pat.match(n)] if m})
+
+
+def rps_run_dirs(results_dir, tier, unit, qtype, reps):
+    """Existing per-qtype leg dirs for a (tier, unit, qtype); warns on gaps."""
+    out = []
+    for r in reps:
+        d = os.path.join(results_dir, f"query-{tier}-{unit}-{qtype}-run{r}")
+        if os.path.isdir(d):
+            out.append(d)
+        else:
+            warn(f"missing run dir: {os.path.basename(d)}")
+    return out
+
+
+def _opt_stage_agg(rows, stage, label, warn_nitems=True):
+    """StageAgg for an optional row, or None (with a warning) when no run has it."""
+    try:
+        return stage_agg(rows, stage, warn_nitems=warn_nitems)
+    except KeyError:
+        warn(f"{label}: row {stage} missing; omitting")
+        return None
+
+
+def _opt_driver_v(drivers, row, label, col="total_ns", f=None):
+    """V of one driver column across runs, or None (with a warning) when any run
+    lacks the row — a short r-array would break the per-rep invariant."""
+    if not all(row in d for d in drivers):
+        warn(f"{label}: driver row {row} missing; omitting")
+        return None
+    vals = [d[row][col] for d in drivers]
+    return stat([f(v) for v in vals] if f else vals)
+
+
+def build_queries_rps(results_dir, tier, unit, reps, qtypes):
+    """Open-loop (paced-RPS) query legs: one dir per query type, one cell per
+    target rate.
+
+    The headline latency is the SCHEDULED one (total_r<rate>, due->done): it is
+    coordinated-omission-correct, so a leg that falls behind its arrival
+    schedule shows the queueing it caused. Service time (dispatch->done) rides
+    along as a secondary column. txhash also splits found/miss sub-stages; like
+    the closed-loop found_c<W> rows, they are ignored here.
+    """
+    entry, setup_drivers = {}, None
+    for qt in qtypes:
+        dirs = rps_run_dirs(results_dir, tier, unit, qt, reps)
+        rows = read_all(dirs, f"{qt}.csv")
+        drivers = read_all(dirs, "driver.csv")
+        if not rows or not drivers:
+            warn(f"query-{tier}-{unit} {qt}: no CSVs; skipping")
+            continue
+        # Every leg's driver repeats the same setup rows (they measure the same
+        # open/evict prep), so the first type's leg stands for the whole cell.
+        if setup_drivers is None:
+            setup_drivers = drivers
+        tokens = sorted({m.group(1) for st in rows[0]
+                         for m in [_TOTAL_R.match(st)] if m}, key=float)
+        qout = {}
+        for tok in tokens:
+            label = f"query-{tier}-{unit} {qt} r{tok}"
+            agg = stage_agg(rows, f"total_r{tok}", warn_nitems=(qt != "events"))
+            agg["target_rps"] = float(tok)
+            svc = _opt_stage_agg(rows, f"service_r{tok}", label, warn_nitems=False)
+            if svc is not None:
+                agg["service"] = svc
+            wall = _opt_driver_v(drivers, f"{qt}_r{tok}", label)
+            if wall is not None:
+                agg["wall"] = wall
+            # The achieved rate is carried x1000 as an int in the duration
+            # columns (the way peak_rss_bytes carries bytes) — divide it back
+            # out per run, then aggregate.
+            achieved = _opt_driver_v(drivers, f"{qt}_r{tok}_millirps", label,
+                                     f=lambda v: v / 1000)
+            if achieved is not None:
+                agg["achieved_rps"] = achieved
+            lag = _opt_stage_agg(drivers, f"{qt}_r{tok}_lag", label, warn_nitems=False)
+            if lag is not None:
+                agg["dispatch_lag"] = lag
+            shed = _opt_driver_v(drivers, f"{qt}_r{tok}_shed", label, col="n_items")
+            if shed is not None:
+                agg["shed"] = shed
+            if qt == "events":
+                # A sequential subscriber needs each page's cursor, so the MEAN
+                # page latency (service total / pages) is what accumulates as
+                # lag — a separate budget from the p99.
+                svc_row = f"service_r{tok}"
+                if all(svc_row in r and r[svc_row]["n"] for r in rows):
+                    agg["mean_page_ns"] = stat([r[svc_row]["total_ns"] / r[svc_row]["n"]
+                                                for r in rows])
+                else:
+                    warn(f"{label}: no {svc_row} sample count; omitting mean_page_ns")
+                agg["items_r"] = [r[f"total_r{tok}"]["n_items"] for r in rows]
+            qout[f"r{tok}"] = agg
+        entry[qt] = qout
+
+    if setup_drivers is None:
+        return None
+    setup = {}
+    for st in setup_drivers[0]:
+        if _is_leg_row(st):
+            continue
+        v = stat([d[st]["total_ns"] for d in setup_drivers])
+        v["n_items"] = setup_drivers[0][st]["n_items"]
+        setup[st] = v
+    entry["setup"] = setup
+    return entry
 
 
 def build_queries(results_dir, layout, unit, reps, tier):
+    qtypes = rps_query_types(results_dir, tier, unit)
+    if qtypes:
+        return build_queries_rps(results_dir, tier, unit, reps, qtypes)
     dirs = run_dirs(results_dir, layout, f"query-{tier}", unit, reps)
     drivers = read_all(dirs, "driver.csv")
     if not drivers:
@@ -654,12 +798,101 @@ def build_queries(results_dir, layout, unit, reps, tier):
 
     setup = {}
     for st in drivers[0]:
-        if not _CW.search(st):
+        if not _is_leg_row(st):
             v = stat([d[st]["total_ns"] for d in drivers])
             v["n_items"] = drivers[0][st]["n_items"]
             setup[st] = v
     entry["setup"] = setup
     return entry
+
+
+# ------------------------------------------------------- query load verdicts
+_PROFILE_TAIL = re.compile(r"-\d+$")
+
+
+def query_profile(unit):
+    """The query_load profile a unit is judged against: the dataset MODEL name.
+
+    The unit id is <dataset>-c<chunk> and the dataset name carries its
+    per-ledger tx count — sac-6000-c1 -> sac, custom_token-3600-c1 ->
+    custom_token.
+    """
+    m = _UNIT_CHUNK.match(unit)
+    return _PROFILE_TAIL.sub("", m.group(1) if m else unit)
+
+
+def rps_cells(qout):
+    """The rate cells of one qtype entry (a verdict sibling is not one)."""
+    return {k: v for k, v in qout.items()
+            if isinstance(v, dict) and "target_rps" in v}
+
+
+def has_rps_cells(queries):
+    return any(rps_cells(qout)
+               for units in queries.values() for entry in units.values()
+               for qt, qout in entry.items() if qt != "setup")
+
+
+def _verdict_1x(cell, rate_key, floor, qt, idx, prof):
+    """Pass/fail at the 1x cell. The headline is the SCHEDULED p99 against the
+    read-path SLA; getTransaction's in-RPC budget and getEvents' mean-page
+    budget are separate columns, never folded into it."""
+    p99 = cell["p99"]["m"]
+    v = {"rate": rate_key, "target_rps": float(floor)}
+    if "achieved_rps" in cell:
+        v["achieved_rps_m"] = cell["achieved_rps"]["m"]
+    v["p99_ns"] = p99
+    v["threshold_ns"] = QUERY_P99_TARGET_NS
+    v["pass"] = p99 <= QUERY_P99_TARGET_NS
+    if qt == "txhash" and "service" in cell:
+        budget = QUERY_LOAD["get_tx_in_rpc_p99_ns"]
+        in_rpc = cell["service"]["p99"]["m"]
+        v["in_rpc"] = {"p99_ns": in_rpc, "threshold_ns": budget,
+                       "pass": in_rpc <= budget}
+    if qt == "events" and "mean_page_ns" in cell:
+        budgets = prof.get("events_page_budget_ns") or []
+        if idx < len(budgets):
+            mean = cell["mean_page_ns"]["m"]
+            v["page_budget"] = {"mean_ns": mean, "budget_ns": budgets[idx],
+                                "pass": mean <= budgets[idx]}
+    return v
+
+
+def attach_query_verdicts(queries, phase):
+    """Attach each qtype's verdict_1x beside its rate cells, in place.
+
+    The 1x rate IS the floor the load model sets for this profile and phase;
+    the ladder's 0.5x/2x cells are context around it. A cell is matched to the
+    floor by value, so the rate token's spelling never has to be guessed.
+    """
+    idx = phase["phase"] - 1
+    for tier, units in queries.items():
+        for unit, entry in units.items():
+            profile = query_profile(unit)
+            prof = QUERY_LOAD["profiles"].get(profile)
+            for qt, qout in entry.items():
+                if qt == "setup":
+                    continue
+                cells = rps_cells(qout)
+                if not cells:
+                    continue
+                if prof is None:
+                    warn(f"query-{tier}-{unit}: no query_load profile {profile!r} "
+                         f"in targets.json; no 1x verdict")
+                    break
+                floors = prof.get(_QTYPE_RPS_KEY.get(qt, "")) or []
+                if idx >= len(floors):
+                    warn(f"query-{tier}-{unit} {qt}: no phase-{phase['phase']} RPS "
+                         f"floor in targets.json; no 1x verdict")
+                    continue
+                floor = floors[idx]
+                hit = next((k for k, c in cells.items()
+                            if abs(c["target_rps"] - floor) <= 1e-9), None)
+                if hit is None:
+                    warn(f"query-{tier}-{unit} {qt}: no cell at the phase-"
+                         f"{phase['phase']} floor of {floor} rps; no 1x verdict")
+                    continue
+                qout["verdict_1x"] = _verdict_1x(cells[hit], hit, floor, qt, idx, prof)
 
 
 def build_golden(results_dir, unit):
@@ -943,6 +1176,15 @@ def convert(args):
         if matched_phase is not None:
             campaign["phase"] = matched_phase["phase"]
         campaign["phase_targets"] = PHASE_TARGETS
+        # RPS query cells are judged against the load-model floors, which are
+        # per phase: embed the table (as phase_targets is) and, when the pace
+        # names a phase, attach each qtype's verdict at its 1x cell.
+        if has_rps_cells(queries):
+            campaign["query_load"] = QUERY_LOAD
+            if matched_phase is not None:
+                attach_query_verdicts(queries, matched_phase)
+            else:
+                warn("no phase matches the close interval; query load verdicts omitted")
     if metadata:
         mc = metadata.get("campaign", {})
         if mc.get("name"):

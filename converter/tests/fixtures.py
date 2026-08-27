@@ -7,6 +7,8 @@ end-to-end / viewer checks convert a real bundle rather than a mock:
                            with metadata.json at the root + invocation.json in
                            every timed dir, paced or unpaced, plus golden-* prep
                            dirs that must be skipped.
+  build_rps_bundle       — a one-unit campaign whose query legs are the RPS-era
+                           per-qtype dirs (query-<tier>-<unit>-<qtype>-run<R>).
   build_legacy_bundle    — a manifest-less pubnet bundle (today's path).
 
 All timing values scale linearly with the run number, so for the 2-rep default
@@ -248,6 +250,138 @@ def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
     return root
 
 
+# ------------------------------------------------------------ RPS query legs
+# The open-loop contract (stellar-rpc bench-query, paced mode): ONE LEG DIR PER
+# QUERY TYPE — query-<tier>-<unit>-<qtype>-run<R> — whose <qtype>.csv carries a
+# scheduled row (total_r<rate>, due->done) and a service row (service_r<rate>,
+# dispatch->done) per target rate, and whose driver.csv carries four rows per
+# leg (<qtype>_r<rate>{,_millirps,_lag,_shed}) beside the usual setup rows.
+# Rates are spelled the way Go's strconv.FormatFloat(rps,'f',-1,64) spells them.
+#
+# The default ladder is the sac profile's phase-3 floors x 0.5/1/2, so the
+# MIDDLE rung of every type is the 1x cell a phase-3 run is judged at.
+RPS_DATASET = "sac-6000"
+RPS_RATES = {
+    "ledgers": ["0.835", "1.67", "3.34"],
+    "txpage":  ["25", "50", "100"],
+    "txhash":  ["500", "1000", "2000"],
+    "events":  ["5", "10", "20"],
+}
+RPS_ANSWERED = 100                 # answered requests per leg
+RPS_SCHED_P99_NS = 200_000_000     # scheduled p99, inside the 500 ms read SLA
+RPS_SERVICE_P99_NS = 5_000_000     # service p99, inside the 10 ms in-RPC budget
+RPS_MEAN_PAGE_NS = 80_000_000      # getEvents mean page, inside phase-3 sac's 100 ms
+RPS_SHED = 7                       # dropped at the in-flight cap (top rung only)
+
+
+def _millirps(tok):
+    """Achieved rate x1000, a hair under target — an int in the duration cols."""
+    return int(round(float(tok) * 1000)) - 2
+
+
+def _rps_qtype_rows(qt, run, rates, sched_p99, svc_p99, mean_page):
+    rows = []
+    for tok in rates[qt]:
+        n = RPS_ANSWERED
+        items = n * (10 if qt == "events" else 1)
+        s, v = sched_p99[qt], svc_p99[qt]
+        rows.append((f"total_r{tok}",) + _scale(
+            (n, items, n * s // 2, s // 4, s // 2, s, s * 2), run))
+        rows.append((f"service_r{tok}",) + _scale(
+            (n, items, n * mean_page[qt], v // 4, v // 2, v, v * 2), run))
+        if qt == "txhash":
+            # found/miss sub-stage splits: the converter matches total_ alone.
+            rows.append((f"found_r{tok}",) + _scale(
+                (n - 1, n - 1, n * s // 3, s // 4, s // 2, s, s * 2), run))
+            rows.append((f"miss_r{tok}",) + _scale((1, 1, s, s, s, s, s), run))
+    return rows
+
+
+def _rps_driver_rows(tier, qt, run, rates):
+    rows = [("open", 1, 1, 60_000_000, 60_000_000, 60_000_000, 60_000_000, 60_000_000)]
+    if tier == "cold":
+        rows.append(("evict", len(rates[qt]), 6, 4000, 500, 600, 700, 700))
+    for i, tok in enumerate(rates[qt]):
+        n = RPS_ANSWERED
+        shed = RPS_SHED if i == len(rates[qt]) - 1 else 0
+        wall = int(n / float(tok) * 1e9)
+        rows.append((f"{qt}_r{tok}",) + _scale((1, n, wall, 0, 0, 0, 0), run))
+        # Counts, not durations: they do not scale with the run number.
+        rows.append((f"{qt}_r{tok}_millirps", 1, 0) + (_millirps(tok),) * 5)
+        rows.append((f"{qt}_r{tok}_lag",) + _scale(
+            (n + shed, n + shed, 50_000_000, 0, 1_000_000, 3_000_000, 10_000_000), run))
+        rows.append((f"{qt}_r{tok}_shed", shed, shed, 0, 0, 0, 0, 0))
+    rows.append(("peak_rss_bytes", 1, 0, 900_000_000, 0, 0, 0, 0))
+    return rows
+
+
+def build_rps_bundle(root, reps=2, close_interval="600ms", dataset=RPS_DATASET,
+                     rates=None, sched_p99=None, svc_p99=None, mean_page=None):
+    """Campaign bundle with ONE unit (<dataset>-c1) whose query legs use the
+    RPS-era per-qtype dirs. The ingest legs, metadata.json and machine metadata
+    mirror build_campaign_bundle, so the whole convert() pipeline runs.
+
+    Timing columns scale with the run number (median_low of the 2-rep default is
+    the run-1 value); the count-carrying rows (millirps, shed) do not, so the
+    achieved rate reads the same in every rep.
+    """
+    rates = dict(RPS_RATES if rates is None else rates)
+    sched_p99 = dict({q: RPS_SCHED_P99_NS for q in rates}, **(sched_p99 or {}))
+    svc_p99 = dict({q: RPS_SERVICE_P99_NS for q in rates}, **(svc_p99 or {}))
+    mean_page = dict({q: RPS_MEAN_PAGE_NS for q in rates}, **(mean_page or {}))
+    paced = close_interval not in ("0", "")
+    unit = f"{dataset}-c1"
+    os.makedirs(root, exist_ok=True)
+    for r in range(1, reps + 1):
+        cdir = os.path.join(root, f"ingest-cold-{unit}-run{r}")
+        os.makedirs(cdir, exist_ok=True)
+        _write_csv(os.path.join(cdir, "driver.csv"), _cold_driver(unit, r))
+        for name, rows in _cold_files(unit, r).items():
+            _write_csv(os.path.join(cdir, f"{name}.csv"), rows)
+        _write_invocation(cdir, "bench-ingest cold", close_interval)
+
+        hdir = os.path.join(root, f"ingest-hot-{unit}-run{r}")
+        os.makedirs(hdir, exist_ok=True)
+        _write_csv(os.path.join(hdir, "driver.csv"), _hot_driver(unit, r, paced))
+        _write_csv(os.path.join(hdir, "hot.csv"), _hot_phases(unit, r))
+        _write_invocation(hdir, "bench-ingest hot", close_interval)
+
+        for tier in ("cold", "hot"):
+            for qt in rates:
+                qdir = os.path.join(root, f"query-{tier}-{unit}-{qt}-run{r}")
+                os.makedirs(qdir, exist_ok=True)
+                _write_csv(os.path.join(qdir, f"{qt}.csv"),
+                           _rps_qtype_rows(qt, r, rates, sched_p99, svc_p99, mean_page))
+                _write_csv(os.path.join(qdir, "driver.csv"),
+                           _rps_driver_rows(tier, qt, r, rates))
+                _write_invocation(qdir, f"bench-query {tier}", close_interval)
+
+    metadata = {
+        "schema_version": 1,
+        "run_id": f"rps-{dataset}-b32bc9be-20260826T010000Z",
+        "campaign": {
+            "name": "rps-query-load", "config_file": "rps-query-load.toml",
+            "ref": "", "built_commit": COMMIT,
+            "ingest": "both", "query": "yes", "close_interval": close_interval,
+            "runs": reps, "query_rps_ladder": "0.5,1,2",
+        },
+        "datasets": [{"name": dataset, "kind": "packs-local",
+                      "location": f"/data/{dataset}/packs/cold", "chunks": [1]}],
+        "hardware": {
+            "instance_type": "m6id.2xlarge", "instance_id": "i-0123456789abcdef0",
+            "uname": "Linux 6.8.0-1015-aws x86_64", "cpus": 8, "mem_total_kb": 32000000,
+        },
+        "hostname": "user-dev-063a",
+        "started_at": "2026-08-26T01:00:00Z",
+        "finished_at": "2026-08-26T09:30:00Z",
+    }
+    with open(os.path.join(root, "metadata.json"), "w") as f:
+        json.dump(metadata, f, indent=2)
+    with open(os.path.join(root, "machine-metadata.txt"), "w") as f:
+        f.write(MACHINE_META.format(commit="0" * 40))
+    return root
+
+
 def build_legacy_bundle(root, reps=2):
     """Manifest-less pubnet bundle (old vocabulary) — today's conversion path."""
     os.makedirs(root, exist_ok=True)
@@ -278,6 +412,8 @@ if __name__ == "__main__":
         build_campaign_bundle(dest, paced=True)
     elif kind == "campaign-unpaced":
         build_campaign_bundle(dest, paced=False)
+    elif kind == "rps":
+        build_rps_bundle(dest)
     elif kind == "legacy":
         build_legacy_bundle(dest)
     else:
