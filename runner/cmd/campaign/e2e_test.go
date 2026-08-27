@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
 // stubCommit is what the fake git resolves every ref to and what the stub
@@ -45,12 +47,26 @@ const (
 	killGrace   = 5 * time.Second
 )
 
-// legNames are the eight timed legs the e2e config produces, in plan order.
-var legNames = []string{
-	"ingest-cold-fix-c1-run1", "ingest-cold-fix-c1-run2",
-	"ingest-hot-fix-c1-run1", "ingest-hot-fix-c1-run2",
-	"query-cold-fix-c1-run1", "query-cold-fix-c1-run2",
-	"query-hot-fix-c1-run1", "query-hot-fix-c1-run2",
+// legNames are the timed legs the e2e config produces, in plan order: two reps
+// of each ingest tier, then a query leg per endpoint type per rep, because each
+// type is paced at its own arrival rate.
+var legNames = append(
+	[]string{
+		"ingest-cold-sac-6000-c1-run1", "ingest-cold-sac-6000-c1-run2",
+		"ingest-hot-sac-6000-c1-run1", "ingest-hot-sac-6000-c1-run2",
+	},
+	append(queryLegNames("cold"), queryLegNames("hot")...)...,
+)
+
+// queryLegNames is one query tier's legs for the e2e config, in plan order.
+func queryLegNames(tier string) []string {
+	var names []string
+	for rep := 1; rep <= 2; rep++ {
+		for _, qtype := range plan.QueryTypes() {
+			names = append(names, fmt.Sprintf("query-%s-sac-6000-c1-%s-run%d", tier, qtype, rep))
+		}
+	}
+	return names
 }
 
 var reBundleName = regexp.MustCompile(`^e2e-` + stubSha8 + `-[0-9]{8}T[0-9]{6}Z$`)
@@ -77,7 +93,7 @@ func TestE2E(t *testing.T) {
 			t.Errorf("bundle name = %q, want e2e-<sha8>-<stamp>", name)
 		}
 		// The untimed prep dir the golden freeze wrote, and the eight timed legs.
-		mustExist(t, filepath.Join(bundle, "golden-fix-c1"))
+		mustExist(t, filepath.Join(bundle, "golden-sac-6000-c1"))
 		for _, leg := range legNames {
 			dir := filepath.Join(bundle, leg)
 			for _, f := range []string{"driver.csv", "invocation.json", "leg.json"} {
@@ -106,21 +122,21 @@ func TestE2E(t *testing.T) {
 
 		// The cold scratch store is post-cleaned the moment its rep is done; the
 		// hot DB is deliberately kept, because query-hot reads what it holds.
-		mustNotExist(t, filepath.Join(sc.root, "scratch", "fix", "1"))
-		mustExist(t, filepath.Join(sc.root, "hot", "fix", "1"))
+		mustNotExist(t, filepath.Join(sc.root, "scratch", "sac-6000", "1"))
+		mustExist(t, filepath.Join(sc.root, "hot", "sac-6000", "1"))
 	})
 
 	t.Run("KillMidLegResume", func(t *testing.T) {
 		sc := newScenario(t, bin, filepath.Join(work, "resume"), cfgPath)
-		sc.setControl("hang ingest-hot-fix-c1-run2")
+		sc.setControl("hang ingest-hot-sac-6000-c1-run2")
 
 		proc := sc.start(t, "run", sc.cfg, "--no-preflight")
 		bundle := waitForBundle(t, sc.root)
-		killed := filepath.Join(bundle, "ingest-hot-fix-c1-run2")
+		killed := filepath.Join(bundle, "ingest-hot-sac-6000-c1-run2")
 		waitFor(t, "the hung leg's out dir", func() bool { return exists(killed) })
 		// The whole process group: the stub's sleep must die with the runner.
 		proc.terminate()
-		if s := proc.out.String(); !strings.Contains(s, "ingest-hot-fix-c1-run2") {
+		if s := proc.out.String(); !strings.Contains(s, "ingest-hot-sac-6000-c1-run2") {
 			t.Fatalf("killed before the campaign reached the hung leg; output:\n%s", s)
 		}
 
@@ -134,8 +150,8 @@ func TestE2E(t *testing.T) {
 		for _, want := range []string{
 			"session start",
 			"session resume",
-			"resume: ingest-cold-fix-c1-run1 already complete — skipping",
-			"resume: ingest-hot-fix-c1-run2 is a partial leg — wiping and re-running",
+			"resume: ingest-cold-sac-6000-c1-run1 already complete — skipping",
+			"resume: ingest-hot-sac-6000-c1-run2 is a partial leg — wiping and re-running",
 		} {
 			if !strings.Contains(log, want) {
 				t.Errorf("campaign.log missing %q", want)
@@ -157,7 +173,7 @@ func TestE2E(t *testing.T) {
 		sc := newScenario(t, bin, filepath.Join(work, "failed"), cfgPath)
 		// The last hot rep: query-hot depends on it, so its failure is what
 		// takes the hot query suite down with it.
-		sc.setControl("fail ingest-hot-fix-c1-run2")
+		sc.setControl("fail ingest-hot-sac-6000-c1-run2")
 
 		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
 		if code == 0 {
@@ -165,25 +181,26 @@ func TestE2E(t *testing.T) {
 		}
 		bundle := sc.bundle(t)
 		log := readFile(t, filepath.Join(bundle, "campaign.log"))
-		for _, want := range []string{
-			"skipping query-hot-fix-c1-run1: needs ingest-hot-fix-c1-run2",
-			"skipping query-hot-fix-c1-run2: needs ingest-hot-fix-c1-run2",
-			"== campaign summary:",
-		} {
-			if !strings.Contains(log, want) {
-				t.Errorf("campaign.log missing %q", want)
+		want := []string{"== campaign summary:"}
+		// Every query-hot leg of the cell goes down with it, one per type per rep.
+		for _, leg := range queryLegNames("hot") {
+			want = append(want, "skipping "+leg+": needs ingest-hot-sac-6000-c1-run2")
+		}
+		for _, w := range want {
+			if !strings.Contains(log, w) {
+				t.Errorf("campaign.log missing %q", w)
 			}
 		}
 		// A hot failure must not take the cold query suite with it: it needs
 		// nothing the failed leg produced.
-		for _, leg := range []string{"query-cold-fix-c1-run1", "query-cold-fix-c1-run2"} {
+		for _, leg := range queryLegNames("cold") {
 			if got := readLeg(t, filepath.Join(bundle, leg)).ExitCode; got != 0 {
 				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, got)
 			}
 		}
-		mustNotExist(t, filepath.Join(bundle, "query-hot-fix-c1-run1"))
+		mustNotExist(t, filepath.Join(bundle, "query-hot-sac-6000-c1-ledgers-run1"))
 
-		failed := filepath.Join(bundle, "ingest-hot-fix-c1-run2")
+		failed := filepath.Join(bundle, "ingest-hot-sac-6000-c1-run2")
 		leg := readLeg(t, failed)
 		if leg.ExitCode != 1 || leg.Error == "" {
 			t.Errorf("failed leg.json = exit_code %d, error %q; want exit_code 1 with an error",

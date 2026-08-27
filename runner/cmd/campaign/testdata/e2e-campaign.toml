@@ -9,8 +9,14 @@ query = true
 runs = 2
 close_interval = "0"
 
+# The query legs are paced at phase-1 RPS floors. An unpaced campaign has no
+# block time to derive the phase from, so it states the phase outright. The
+# dataset name carries the load profile: sac-6000 targets the sac floors.
+phase = 1
+query_duration = "1s"
+
 [[dataset]]
-name = "fix"
+name = "sac-6000"
 kind = "fixture"
 ledgers = 10000
 chunks = [1]

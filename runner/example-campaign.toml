@@ -39,7 +39,9 @@ ingest = "both"
 
 # Whether to run the query benchmark suites after ingest: true | false
 # (required — there is no default). Query-hot additionally needs the hot DB a
-# hot ingest leaves behind, so it only runs when ingest is hot or both.
+# hot ingest leaves behind, so it only runs when ingest is hot or both. Each
+# suite runs one leg per endpoint type (ledgers, txpage, txhash, events),
+# because each type is paced at its own arrival rate.
 query = false
 
 # Pace the hot ingest at a fixed ledger close interval — a Go duration, e.g.
@@ -50,11 +52,13 @@ query = false
 # converter's median/min-max aggregation assumes.
 #runs = 5
 
-# Query tuning, used only when query = true: the concurrency sweep and the
-# per-benchmark iteration counts. Defaults shown.
-#query_concurrency = [1, 4, 16]
-#cold_iters = 100
-#hot_iters = 200
+# How long each query leg holds its paced load — a Go duration. Default "60s".
+#query_duration = "60s"
+
+# Which goal phase's RPS floors the query legs target: 1 | 2 | 3. Only needed
+# when query = true, and only when close_interval is not a phase block time —
+# a paced campaign derives the phase from it, and the two must agree.
+#phase = 1
 
 # bench-ingest cold --workers. Default 1.
 #workers = 1
@@ -72,6 +76,12 @@ query = false
 # (the directory holding ledgers/, events/, txhash/) that the legs then read;
 # they differ only in how that root is materialized. Uncomment the kind you
 # want — a copy-paste of this file starts with the fetched-packs one.
+#
+# When query = true the name also picks the load profile: strip a trailing
+# -<per-ledger tx count> and what is left must be a query_load profile in
+# docs/targets.json — sac, custom_token, or soroswap. So sac-6000 is paced at
+# the sac floors, and a name with no profile is refused before the campaign
+# starts.
 
 # packs-s3: location is an s3:// prefix of a cold pack tree, fetched once with
 # `aws s3 sync` into $BENCH_ROOT/golden/<name>/ and reused by every later

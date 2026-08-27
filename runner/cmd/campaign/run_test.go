@@ -38,9 +38,15 @@ func TestRunCmdDryRunTouchesNothing(t *testing.T) {
 		"using placeholder sha 'deadbeef' in paths",
 		"== build\n",
 		filepath.Join(benchRoot, "bin", "stellar-rpc-deadbeef"),
-		"== dataset-packs\n",
-		"== ingest-cold-packs-c1-run1\n",
-		"== query-hot-fix-c2-run2\n",
+		// close_interval is phase 1's block time, so the query legs pace
+		// themselves at the phase-1 floors without the config naming a phase.
+		"query load: phase 1 floors",
+		"== dataset-sac-6000\n",
+		"== ingest-cold-sac-6000-c1-run1\n",
+		"== query-cold-sac-6000-c1-txhash-run1\n",
+		"--types=txhash --target-rps=150,300,600 --duration=60s",
+		"== query-hot-soroswap-1500-c2-events-run2\n",
+		"--types=events --target-rps=1.875,3.75,7.5 --duration=60s",
 		"$ campaign publish " + filepath.Join(benchRoot, "results"),
 		"dry run complete",
 	} {

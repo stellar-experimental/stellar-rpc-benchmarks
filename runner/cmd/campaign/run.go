@@ -40,13 +40,21 @@ func runCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// The RPS floors are resolved before anything is built or locked: a config
+	// the load model cannot pace is a config error, not a campaign failure.
+	ql, err := resolveQueryLoad(cfg, stringFlag(fs, "targets"))
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 2
+	}
+
 	benchRoot := benchRootFromEnv()
 	src := filepath.Join(benchRoot, "src")
 	resumeDir := stringFlag(fs, "resume")
 	if boolFlag(fs, "dry-run") {
-		return dryRun(cfg, cfgPath, benchRoot, src, resumeDir, stdout, stderr)
+		return dryRun(cfg, ql, cfgPath, benchRoot, src, resumeDir, stdout, stderr)
 	}
-	return realRun(cfg, cfgPath, benchRoot, src, resumeDir,
+	return realRun(cfg, ql, cfgPath, benchRoot, src, resumeDir,
 		boolFlag(fs, "fail-fast"), boolFlag(fs, "no-preflight"), stdout, stderr)
 }
 
@@ -54,11 +62,19 @@ func runCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 // directory, exactly as the bash campaign runner's --dry-run did. Whatever the
 // clone already knows is used; what it does not know is planned with a
 // placeholder sha.
-func dryRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string, stdout, stderr io.Writer) int {
+func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir string, stdout, stderr io.Writer) int {
 	run.Notef(stdout, "dry run: printing commands only — nothing is built, downloaded, or executed")
 	run.Notef(stdout, "source: %s @ %s → %s (the build clone is not touched)", cfg.Repo, cfg.Ref, src)
+	if cfg.Query {
+		run.Notef(stdout, "query load: phase %d floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
+	}
 
-	in := plan.Inputs{BenchRoot: benchRoot, Stamp: time.Now().UTC().Format(stampLayout)}
+	in := plan.Inputs{
+		BenchRoot:     benchRoot,
+		Stamp:         time.Now().UTC().Format(stampLayout),
+		QueryRates:    ql.rates,
+		QueryDuration: queryDuration(cfg),
+	}
 	builtCommit, resolveErr := run.ResolveRef(src, cfg.Ref)
 	if resolveErr == nil {
 		in.BuiltCommit, in.Sha8 = builtCommit, builtCommit[:8]
@@ -112,7 +128,7 @@ func dryRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string, stdou
 }
 
 // realRun is the campaign itself.
-func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
+func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir string,
 	failFast, noPreflight bool, stdout, stderr io.Writer) int {
 
 	// One campaign per BENCH_ROOT: two would fight over the build clone, the
@@ -173,7 +189,14 @@ func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
 		}
 	}
 
-	p := plan.Build(cfg, plan.Inputs{BenchRoot: benchRoot, BuiltCommit: builtCommit, Sha8: sha8, Stamp: stamp})
+	p := plan.Build(cfg, plan.Inputs{
+		BenchRoot:     benchRoot,
+		BuiltCommit:   builtCommit,
+		Sha8:          sha8,
+		Stamp:         stamp,
+		QueryRates:    ql.rates,
+		QueryDuration: queryDuration(cfg),
+	})
 	res := p.ResultsDir
 	if resume != nil && filepath.Clean(res) != filepath.Clean(resume.Dir) {
 		fmt.Fprintf(stderr, "error: --resume: '%s' is not the bundle this config and commit produce (%s)\n",
@@ -214,6 +237,11 @@ func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
 	defer logFile.Close()
 	out = io.MultiWriter(stdout, logFile)
 	run.Notef(out, "session %s %s — logging to %s", session, time.Now().UTC().Format(startedAtLayout), logFile.Name())
+	if cfg.Query {
+		// Which floors the query legs were paced at is the first thing anyone
+		// reading this bundle six months later will want to know.
+		run.Notef(out, "query load: phase %d floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
+	}
 
 	hostname, _ := os.Hostname()
 	meta := bundle.MetadataInput{
@@ -221,6 +249,7 @@ func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
 		ConfigFile:  configFile,
 		RunID:       p.RunID,
 		BuiltCommit: builtCommit,
+		QueryPhase:  ql.phase,
 		Resumed:     resume != nil,
 		Hardware:    bundle.CollectHardware(bundle.DefaultIMDSBase),
 		Hostname:    hostname,
@@ -266,6 +295,7 @@ func realRun(cfg *config.Config, cfgPath, benchRoot, src, resumeDir string,
 	if err := bundle.WriteMachineMetadata(res, bundle.MachineInput{
 		Cfg: cfg, Repo: cfg.Repo, Ref: cfg.Ref, BuiltCommit: builtCommit,
 		BinPath: p.Bin, BenchRoot: benchRoot, Hardware: meta.Hardware,
+		QueryPhase: ql.phase,
 	}); err != nil {
 		run.Notef(out, "warning: %s", err)
 	}

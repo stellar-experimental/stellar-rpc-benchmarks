@@ -49,7 +49,7 @@ environment:
 // Usage text for each subcommand, describing the shape it will have once
 // ported. Keyed by subcommand name.
 var subUsage = map[string]string{
-	"run": `usage: campaign run <config.toml> [--dry-run] [--resume <results-dir>] [--fail-fast] [--no-preflight]
+	"run": `usage: campaign run <config.toml> [--dry-run] [--resume <results-dir>] [--fail-fast] [--no-preflight] [--targets <path>]
 
 Run a campaign: build the configured ref, prepare its datasets, and execute
 every ingest and query leg into a results bundle.
@@ -58,15 +58,23 @@ every ingest and query leg into a results bundle.
   --resume DIR     continue an interrupted campaign into an existing bundle
   --fail-fast      stop at the first failed step (default: keep going)
   --no-preflight   skip the up-front tool and credential checks
+  --targets PATH   docs/targets.json to read the query RPS floors from
+                   (default: the copy in this checkout)
 `,
-	"plan": `usage: campaign plan <config.toml>
+	"plan": `usage: campaign plan <config.toml> [--targets <path>]
 
 Print the ordered steps the campaign would execute, one command per line.
+
+  --targets PATH   docs/targets.json to read the query RPS floors from
+                   (default: the copy in this checkout)
 `,
-	"preflight": `usage: campaign preflight <config.toml>
+	"preflight": `usage: campaign preflight <config.toml> [--targets <path>]
 
 Check that the tools, credentials, mounts, and free disk this config needs are
 available, before a campaign spends hours discovering otherwise.
+
+  --targets PATH   docs/targets.json to read the query RPS floors from
+                   (default: the copy in this checkout)
 `,
 	"publish": `usage: campaign publish <results-dir> [dest-root] [--dry-run] [--force]
 
@@ -92,6 +100,9 @@ func subFlags(name string, stderr io.Writer) *flag.FlagSet {
 		fs.String("resume", "", "")
 		fs.Bool("fail-fast", false, "")
 		fs.Bool("no-preflight", false, "")
+		fs.String("targets", "", "")
+	case "plan", "preflight":
+		fs.String("targets", "", "")
 	case "publish":
 		fs.Bool("dry-run", false, "")
 		fs.Bool("force", false, "")
@@ -125,7 +136,7 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 
 // planCmd prints the steps a campaign would execute. It builds no clone,
 // fetches nothing, and writes nothing — it is readable on any machine.
-func planCmd(pos []string, stdout, stderr io.Writer) int {
+func planCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	if len(pos) != 1 {
 		fmt.Fprint(stderr, subUsage["plan"])
 		fmt.Fprint(stderr, "error: plan needs exactly one config path\n")
@@ -136,10 +147,17 @@ func planCmd(pos []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 2
 	}
+	ql, err := resolveQueryLoad(cfg, stringFlag(fs, "targets"))
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 2
+	}
 	benchRoot := benchRootFromEnv()
 	in := plan.Inputs{
-		BenchRoot: benchRoot,
-		Stamp:     time.Now().UTC().Format(stampLayout),
+		BenchRoot:     benchRoot,
+		Stamp:         time.Now().UTC().Format(stampLayout),
+		QueryRates:    ql.rates,
+		QueryDuration: queryDuration(cfg),
 	}
 	src := filepath.Join(benchRoot, "src")
 	if sha, err := run.ResolveRef(src, cfg.Ref); err == nil {
@@ -160,7 +178,7 @@ func planCmd(pos []string, stdout, stderr io.Writer) int {
 // ref and touches no clone: binPath is empty, so the toolchain checks assume a
 // build will happen. `campaign run` passes the real versioned binary path,
 // which lets an already-built ref skip them.
-func preflightCmd(pos []string, stdout, stderr io.Writer) int {
+func preflightCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	if len(pos) != 1 {
 		fmt.Fprint(stderr, subUsage["preflight"])
 		fmt.Fprint(stderr, "error: preflight needs exactly one config path\n")
@@ -168,6 +186,13 @@ func preflightCmd(pos []string, stdout, stderr io.Writer) int {
 	}
 	cfg, err := config.Load(pos[0])
 	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 2
+	}
+	// The query floors are a precondition like any other: a config whose
+	// datasets have no load profile, or whose phase cannot be resolved, must say
+	// so here rather than at the first query leg.
+	if _, err := resolveQueryLoad(cfg, stringFlag(fs, "targets")); err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 2
 	}
@@ -240,9 +265,9 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		case "run":
 			return runCmd(pos, fs, stdout, stderr)
 		case "plan":
-			return planCmd(pos, stdout, stderr)
+			return planCmd(pos, fs, stdout, stderr)
 		case "preflight":
-			return preflightCmd(pos, stdout, stderr)
+			return preflightCmd(pos, fs, stdout, stderr)
 		case "publish":
 			return publishCmd(pos, fs, stdout, stderr)
 		}

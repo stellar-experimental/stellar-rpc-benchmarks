@@ -10,9 +10,8 @@
     "query": "yes",
     "close_interval": "2s",
     "runs": 5,
-    "query_concurrency": "1,4,16",
-    "cold_iters": 100,
-    "hot_iters": 200,
+    "query_duration": "60s",
+    "query_phase": 1,
     "workers": 1,
     "hot_num_ledgers": 50000
   },

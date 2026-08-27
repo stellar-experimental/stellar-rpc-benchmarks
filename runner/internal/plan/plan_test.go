@@ -23,11 +23,39 @@ const goldenPath = "testdata/plan.golden.json"
 // function of the config alone.
 func goldenInputs() Inputs {
 	return Inputs{
-		BenchRoot:   "/bench",
-		BuiltCommit: "deadbeefcafebabefeedface1234567890abcdef",
-		Sha8:        "deadbeef",
-		Stamp:       "20260101T000000Z",
+		BenchRoot:     "/bench",
+		BuiltCommit:   "deadbeefcafebabefeedface1234567890abcdef",
+		Sha8:          "deadbeef",
+		Stamp:         "20260101T000000Z",
+		QueryRates:    goldenRates(),
+		QueryDuration: "60s",
 	}
+}
+
+// goldenRates stands in for what the CLI resolves out of docs/targets.json: the
+// phase-1 ladders of the profiles these tests' datasets name. Build never reads
+// that file, so pinning the numbers keeps the golden plan a function of the
+// config alone.
+func goldenRates() map[string]map[string][]float64 {
+	sac := map[string][]float64{
+		"ledgers": {0.25, 0.5, 1},
+		"txpage":  {7.5, 15, 30},
+		"txhash":  {150, 300, 600},
+		"events":  {1.5, 3, 6},
+	}
+	soroswap := map[string][]float64{
+		"ledgers": {0.25, 0.5, 1},
+		"txpage":  {1.875, 3.75, 7.5},
+		"txhash":  {37.5, 75, 150},
+		"events":  {1.875, 3.75, 7.5},
+	}
+	rates := map[string]map[string][]float64{"soroswap-1500": soroswap}
+	// The single-dataset configs below name their dataset for what it is rather
+	// than for a profile; they all benchmark the sac ladders here.
+	for _, dataset := range []string{"sac-6000", "ds", "mainnet"} {
+		rates[dataset] = sac
+	}
+	return rates
 }
 
 // load writes src to a temp file and loads it as a campaign config.
@@ -134,8 +162,10 @@ func TestQueryHotNeedsLastIngestHotRep(t *testing.T) {
 			continue
 		}
 		seen++
-		// runs = 2, so every rep — not just rep 2 — waits on rep 2.
+		// runs = 2, so every rep — not just rep 2 — waits on rep 2. The ingest
+		// legs are per cell, not per query type, so the type drops off the id.
 		cell, _, _ := strings.Cut(strings.TrimPrefix(s.ID, "query-hot-"), "-run")
+		cell = cell[:strings.LastIndex(cell, "-")]
 		want := "ingest-hot-" + cell + "-run2"
 		if !slices.Contains(s.Needs, want) {
 			t.Errorf("%s needs %v, want it to include %q", s.ID, s.Needs, want)
@@ -144,8 +174,60 @@ func TestQueryHotNeedsLastIngestHotRep(t *testing.T) {
 			t.Errorf("%s needs %v, want it to include \"build\"", s.ID, s.Needs)
 		}
 	}
-	if seen != 8 { // 2 datasets x 2 chunks x 2 reps
-		t.Errorf("found %d query-hot steps, want 8", seen)
+	if seen != 32 { // 2 datasets x 2 chunks x 2 reps x 4 query types
+		t.Errorf("found %d query-hot steps, want 32", seen)
+	}
+}
+
+// TestQueryLegsAreOneTypeEach pins the shape of the paced query suites: a leg
+// per endpoint type, each driving that type's own rate ladder for one duration.
+func TestQueryLegsAreOneTypeEach(t *testing.T) {
+	p := buildGolden(t)
+	cases := []struct {
+		id   string
+		want []string
+	}{
+		{"query-cold-sac-6000-c1-ledgers-run1", []string{
+			"--types=ledgers", "--target-rps=0.25,0.5,1", "--duration=60s",
+		}},
+		{"query-cold-sac-6000-c1-txhash-run1", []string{
+			"--types=txhash", "--target-rps=150,300,600", "--duration=60s",
+		}},
+		{"query-hot-soroswap-1500-c2-events-run2", []string{
+			"--types=events", "--target-rps=1.875,3.75,7.5", "--duration=60s", "--warmup=20",
+		}},
+		{"query-hot-soroswap-1500-c2-txpage-run2", []string{
+			"--types=txpage", "--target-rps=1.875,3.75,7.5", "--duration=60s",
+		}},
+	}
+	for _, tc := range cases {
+		argv := stepByID(t, p, tc.id).Argv[0]
+		for _, want := range tc.want {
+			if !slices.Contains(argv, want) {
+				t.Errorf("%s argv = %v, want it to contain %q", tc.id, argv, want)
+			}
+		}
+		for _, gone := range []string{"--iters=", "--query-concurrency="} {
+			if slices.ContainsFunc(argv, func(a string) bool { return strings.HasPrefix(a, gone) }) {
+				t.Errorf("%s argv = %v, want no %s flag — the query suites are open-loop", tc.id, argv, gone)
+			}
+		}
+		if last := argv[len(argv)-1]; !strings.HasPrefix(last, "--out=") {
+			t.Errorf("%s last arg = %q, want an --out flag", tc.id, last)
+		}
+	}
+
+	// Every cell produces the four types, in queryTypes order.
+	var got []string
+	for _, s := range p.Steps {
+		if strings.HasPrefix(s.ID, "query-cold-sac-6000-c1-") {
+			cell, _, _ := strings.Cut(strings.TrimPrefix(s.ID, "query-cold-sac-6000-c1-"), "-run")
+			got = append(got, cell)
+		}
+	}
+	want := append(append([]string{}, queryTypes...), queryTypes...) // two reps
+	if !slices.Equal(got, want) {
+		t.Errorf("query-cold types = %v, want %v", got, want)
 	}
 }
 
@@ -199,8 +281,8 @@ func TestHotLedgerCaps(t *testing.T) {
 	}{
 		{capped, "ingest-hot-ds-c7-run1", "--num-ledgers=50000", true},
 		{uncapped, "ingest-hot-ds-c7-run1", "--num-ledgers=", false},
-		{capped, "query-hot-ds-c7-run1", "--sample-ledgers=50000", true},
-		{uncapped, "query-hot-ds-c7-run1", "--sample-ledgers=", false},
+		{capped, "query-hot-ds-c7-ledgers-run1", "--sample-ledgers=50000", true},
+		{uncapped, "query-hot-ds-c7-ledgers-run1", "--sample-ledgers=", false},
 	}
 	for _, tc := range cases {
 		argv := stepByID(t, tc.plan, tc.id).Argv[0]
@@ -337,7 +419,22 @@ chunks = [1]
 			t.Errorf("plan has %s, but ingest = cold leaves no hot DB", id)
 		}
 	}
-	stepByID(t, p, "query-cold-ds-c1-run1")
+	for _, qtype := range queryTypes {
+		stepByID(t, p, "query-cold-ds-c1-"+qtype+"-run1")
+	}
+}
+
+// TestQueryTypesIsACopy guards the accessor the CLI resolves rates through: a
+// caller that reorders what it gets back must not reorder the legs.
+func TestQueryTypesIsACopy(t *testing.T) {
+	got := QueryTypes()
+	if !slices.Equal(got, queryTypes) {
+		t.Fatalf("QueryTypes() = %v, want %v", got, queryTypes)
+	}
+	got[0] = "clobbered"
+	if queryTypes[0] == "clobbered" {
+		t.Error("QueryTypes() handed out the package's own slice")
+	}
 }
 
 // packsS3Config is a datasets-only campaign over one fetched s3:// pack tree.
@@ -404,7 +501,7 @@ chunks = [4]
 
 func TestFixtureStepGeneratesThenFreezes(t *testing.T) {
 	p := buildGolden(t)
-	ds := stepByID(t, p, "dataset-fix")
+	ds := stepByID(t, p, "dataset-soroswap-1500")
 	if len(ds.Argv) != 4 { // 2 chunks generated, then 2 frozen
 		t.Fatalf("argv has %d commands, want 4", len(ds.Argv))
 	}
@@ -413,7 +510,7 @@ func TestFixtureStepGeneratesThenFreezes(t *testing.T) {
 			t.Errorf("argv[%d] subcommand = %q, want %q", i, got, want)
 		}
 	}
-	if ds.Dataset.Stage != "/bench/fixture/fix/ledgers" {
+	if ds.Dataset.Stage != "/bench/fixture/soroswap-1500/ledgers" {
 		t.Errorf("stage = %q, want the fixture staging pack dir", ds.Dataset.Stage)
 	}
 	if ds.Dataset.Location != "" {
@@ -428,12 +525,12 @@ func TestDatasetPreClean(t *testing.T) {
 	p := buildGolden(t)
 	// packs-gs clears the leftover root so the rename cannot nest the partial
 	// inside it, but keeps the partial itself: rsync resumes into it.
-	if got, want := stepByID(t, p, "dataset-packs").PreClean, []string{"/bench/golden/packs"}; !slices.Equal(got, want) {
+	if got, want := stepByID(t, p, "dataset-sac-6000").PreClean, []string{"/bench/golden/sac-6000"}; !slices.Equal(got, want) {
 		t.Errorf("packs-gs pre_clean = %v, want %v — the .partial is resumable", got, want)
 	}
 	// A fixture wipes the staging tree by its parent, plus both roots.
-	want := []string{"/bench/fixture/fix", "/bench/golden/fix", "/bench/golden/fix.partial"}
-	if got := stepByID(t, p, "dataset-fix").PreClean; !slices.Equal(got, want) {
+	want := []string{"/bench/fixture/soroswap-1500", "/bench/golden/soroswap-1500", "/bench/golden/soroswap-1500.partial"}
+	if got := stepByID(t, p, "dataset-soroswap-1500").PreClean; !slices.Equal(got, want) {
 		t.Errorf("fixture pre_clean = %v, want %v", got, want)
 	}
 
@@ -569,20 +666,21 @@ func TestPrintDatasetChoreography(t *testing.T) {
 	buildGolden(t).Print(&out)
 	got := out.String()
 	for _, want := range []string{
-		"== dataset-packs\n" +
-			"  $ rm -rf /bench/golden/packs\n" +
-			"  $ mkdir -p /bench/golden/packs.partial\n" +
-			"  $ gcloud storage rsync -r gs://bucket/cold /bench/golden/packs.partial\n" +
-			"  $ mv /bench/golden/packs.partial /bench/golden/packs\n",
-		"== dataset-fix\n  $ rm -rf /bench/fixture/fix /bench/golden/fix /bench/golden/fix.partial\n",
-		"  $ mv /bench/golden/fix.partial /bench/golden/fix\n",
+		"== dataset-sac-6000\n" +
+			"  $ rm -rf /bench/golden/sac-6000\n" +
+			"  $ mkdir -p /bench/golden/sac-6000.partial\n" +
+			"  $ gcloud storage rsync -r gs://bucket/cold /bench/golden/sac-6000.partial\n" +
+			"  $ mv /bench/golden/sac-6000.partial /bench/golden/sac-6000\n",
+		"== dataset-soroswap-1500\n  $ rm -rf /bench/fixture/soroswap-1500 " +
+			"/bench/golden/soroswap-1500 /bench/golden/soroswap-1500.partial\n",
+		"  $ mv /bench/golden/soroswap-1500.partial /bench/golden/soroswap-1500\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Print output missing %q, got:\n%s", want, got)
 		}
 	}
 	// A fixture freezes straight into --cold-out-dir, so it gets no mkdir.
-	if strings.Contains(got, "mkdir -p /bench/golden/fix.partial") {
+	if strings.Contains(got, "mkdir -p /bench/golden/soroswap-1500.partial") {
 		t.Errorf("Print output has a mkdir for the fixture partial, got:\n%s", got)
 	}
 

@@ -30,6 +30,7 @@ func goldenInput(t *testing.T) MetadataInput {
 		ConfigFile:  "campaign.toml",
 		RunID:       "golden-deadbeef-20260101T000000Z",
 		BuiltCommit: "deadbeefcafebabefeedface1234567890abcdef",
+		QueryPhase:  1,
 		Hardware: Hardware{
 			InstanceType: "i4i.4xlarge",
 			InstanceID:   "i-0123456789abcdef0",
@@ -81,7 +82,8 @@ func TestMetadataQuirks(t *testing.T) {
 	got := marshal(t, goldenInput(t))
 	for _, want := range []string{
 		`"query": "yes"`,
-		`"query_concurrency": "1,4,16"`,
+		`"query_duration": "60s"`,
+		`"query_phase": 1`,
 		`"close_interval": "2s"`,
 		`"schema_version": 1`,
 	} {
@@ -99,10 +101,15 @@ func TestMetadataQuirks(t *testing.T) {
 func TestMetadataQueryNo(t *testing.T) {
 	in := goldenInput(t)
 	in.Cfg.Query = false
-	in.Cfg.QueryConcurrency = []int{8}
+	in.QueryPhase = 0
 	got := marshal(t, in)
-	if !strings.Contains(got, `"query": "no"`) || !strings.Contains(got, `"query_concurrency": "8"`) {
-		t.Errorf("query = false should render \"no\" and a one-element sweep:\n%s", got)
+	if !strings.Contains(got, `"query": "no"`) {
+		t.Errorf("query = false should render \"no\":\n%s", got)
+	}
+	// No query legs means no phase was resolved, and a recorded 0 would read as
+	// one.
+	if strings.Contains(got, "query_phase") {
+		t.Errorf("a campaign with no query legs must omit query_phase:\n%s", got)
 	}
 }
 

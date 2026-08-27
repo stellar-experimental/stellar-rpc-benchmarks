@@ -11,6 +11,7 @@ runner/
 ├── cmd/campaign/           # the campaign CLI: run · plan · preflight · publish
 ├── internal/
 │   ├── config/             # TOML in, validated Config out (unknown keys rejected)
+│   ├── targets/            # docs/targets.json → the query legs' RPS floors
 │   ├── plan/               # config → ordered steps; the campaign as data (plan.json)
 │   ├── run/                # executes a plan: legs, sentinels, resume, the lock
 │   ├── preflight/          # does this machine have what this config needs?
@@ -58,26 +59,31 @@ than queueing it — two campaigns sharing a machine measure each other.
 | `--resume DIR` | Continue an interrupted campaign into an existing bundle (see [Resuming](#resuming-a-crashed-campaign)). |
 | `--fail-fast` | Stop at the first failed step. The default is to keep going: a failure only skips the steps that need it. |
 | `--no-preflight` | Skip the up-front tool, credential, mount, and disk checks. |
+| `--targets PATH` | Read the query RPS floors from this `targets.json` instead of the checkout's own (see [Query load](#query-load-open-loop-paced-rps)). |
 
 A failed step never costs the bundle: the epilogue — machine metadata, the final
 `metadata.json`, the tarball — runs even after failures, because a campaign that went
 wrong is exactly the one whose bundle has to be complete. The run exits nonzero and ends
 with a summary naming every failed and skipped step.
 
-### `campaign plan <config.toml>`
+### `campaign plan <config.toml> [--targets <path>]`
 
 Print the ordered steps the campaign would execute, one `$ command` line each. It
 resolves no ref against the network and writes nothing; when the ref is not resolvable in
 the local build clone it plans with the placeholder sha `deadbeef` in the derived paths
-and says so. This is the same data the runner writes to `plan.json` in the bundle.
+and says so. This is the same data the runner writes to `plan.json` in the bundle. A
+query campaign's RPS ladders are resolved for real, so the printed `--target-rps` lists
+are the ones a run would drive.
 
-### `campaign preflight <config.toml>`
+### `campaign preflight <config.toml> [--targets <path>]`
 
 Answer, in seconds, whether this machine has what this config needs: `git` and `make`,
 the Go and Rust toolchains when a build is going to happen, `gcloud` for `packs-gs`
 datasets and `gs://` publishing, `aws` for `packs-s3` datasets and `s3://` publishing, a
 listable `publish_uri` with today's credentials, the NVMe mount when `BENCH_ROOT` is left
 at its default, and free disk. Failures name both the missing thing and the config key that wants it.
+On a query campaign it also resolves the whole load model — the phase and every dataset's
+profile — so an unpaceable config fails here rather than at the first query leg.
 `campaign run` does this automatically unless `--no-preflight` is passed.
 
 ### `campaign publish <results-dir> [dest-root] [flags]`
@@ -112,12 +118,11 @@ ignored: a misspelled key fails in the first second of the campaign, naming itse
 | `repo` | string | `https://github.com/stellar/stellar-rpc.git` | Where stellar-rpc comes from: a git URL or an **absolute** local path to a git repository (relative paths are refused — they would depend on the invocation cwd). The persistent build clone at `$BENCH_ROOT/src` is cloned/fetched from it each campaign; `repo` itself is never modified. To benchmark local work-in-progress, point it at a local checkout — only committed state is benchmarkable. |
 | `ref` | string | `feature/full-history` | Git ref to benchmark, resolved inside `$BENCH_ROOT/src` after fetching `repo`'s branches and tags. Built into `$BENCH_ROOT/bin/stellar-rpc-<sha>`. |
 | `ingest` | string | — (required) | `cold` \| `hot` \| `both` \| `none`. |
-| `query` | bool | — (required) | Run the query suites after ingest. Query-cold runs against each dataset's frozen pack root; query-hot needs the hot DB a hot ingest leaves behind, so it only runs when `ingest` is `hot` or `both` (otherwise the runner notes that it is running the cold suite only). |
+| `query` | bool | — (required) | Run the query suites after ingest. Query-cold runs against each dataset's frozen pack root; query-hot needs the hot DB a hot ingest leaves behind, so it only runs when `ingest` is `hot` or `both` (otherwise the runner notes that it is running the cold suite only). Each suite emits **one leg per endpoint type** — see [Query load](#query-load-open-loop-paced-rps). |
 | `close_interval` | string | `"0"` | `bench-ingest hot --close-interval`: a Go duration (`"2s"`, `"1s"`, `"600ms"`) for phase pacing, or `"0"` for unpaced catch-up. |
 | `runs` | int ≥ 1 | `5` | Repetitions per (dataset, chunk) cell. |
-| `query_concurrency` | int array | `[1, 4, 16]` | Query concurrency sweep; every entry ≥ 1. |
-| `cold_iters` | int ≥ 1 | `100` | `bench-query cold --iters`. |
-| `hot_iters` | int ≥ 1 | `200` | `bench-query hot --iters`. |
+| `query_duration` | string | `"60s"` | `bench-query --duration`: how long each query leg holds its paced load. A Go duration greater than zero. |
+| `phase` | int | `0` (unset) | Which goal phase's RPS floors the query legs target: `1` \| `2` \| `3`. Consulted only when `query = true`. Left unset, the phase is derived by matching `close_interval` against a phase block time in [`docs/targets.json`](../docs/targets.json); set both and they must agree. |
 | `workers` | int ≥ 1 | `1` | `bench-ingest cold --workers`. |
 | `hot_num_ledgers` | int ≥ 0 | `0` | Cap the hot ingest at this many ledgers; `0` = the whole range. A capped ingest also caps the hot query sampler (`--sample-ledgers`), so it stays inside what was ingested. |
 | `publish_uri` | string | `""` | Object-storage root to publish the finished bundle to; must be `gs://` or `s3://`. Empty = no publish. The bundle lands at `<publish_uri>/<run_id>/`. |
@@ -127,7 +132,7 @@ Each `[[dataset]]` table:
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `name` | string | `[A-Za-z0-9._-]+`, unique across the config. Names the golden directory, the leg ids, and the converter's unit ids. |
+| `name` | string | `[A-Za-z0-9._-]+`, unique across the config. Names the golden directory, the leg ids, and the converter's unit ids. On a query campaign it also picks the load profile — see [Query load](#query-load-open-loop-paced-rps). |
 | `kind` | string | `packs-local` \| `packs-gs` \| `packs-s3` \| `bsb-s3` \| `fixture`. |
 | `location` | string | Meaning depends on the kind (below). Invalid for `fixture`. |
 | `chunks` | int array | Chunk IDs to benchmark; at least one, non-negative, no duplicates. |
@@ -168,9 +173,9 @@ one-to-one — lowercase the name, and give the value TOML's type instead of a s
 | `QUERY=yes` / `QUERY=no` | `query = true` / `query = false` | A real bool now. |
 | `CLOSE_INTERVAL=2s` | `close_interval = "2s"` | Still a string; `"0"` for unpaced. |
 | `RUNS=5` | `runs = 5` | |
-| `QC=1,4,16` | `query_concurrency = [1, 4, 16]` | Comma string → int array. |
-| `COLD_ITERS=100` | `cold_iters = 100` | |
-| `HOT_ITERS=200` | `hot_iters = 200` | |
+| `QC=1,4,16` | — | Gone: the query suites are open-loop now. See [Query load](#query-load-open-loop-paced-rps). |
+| `COLD_ITERS=100` | — | Gone with `QC`: a leg runs for `query_duration`, not for a count. |
+| `HOT_ITERS=200` | — | Same. |
 | `WORKERS=1` | `workers = 1` | |
 | `HOT_NUM_LEDGERS=0` | `hot_num_ledgers = 0` | |
 | `PUBLISH_URI=gs://…` | `publish_uri = "gs://…"` | |
@@ -211,14 +216,54 @@ Two configs bash accepted are now rejected: a repeated chunk ID within a dataset
 produced two legs with the same id and the same `--out` directory, the second quietly
 overwriting the first) and any key outside the table above.
 
+## Query load: open-loop, paced RPS
+
+The query suites measure latency **at a rate**, not at a concurrency level: each leg
+drives an open-loop arrival rate for `query_duration` and reports what the RPC node did
+under it. The rates are not a knob — they come from
+[`docs/targets.json`](../docs/targets.json), this repo's single source of truth for the
+goal, and no floor is hardcoded in the runner.
+
+Three things decide a leg's rate ladder:
+
+- **Endpoint type.** `ledgers`, `txpage`, `txhash`, `events` each have their own floor, so
+  a single invocation can no longer sweep all four. Every (dataset, chunk, rep) cell
+  therefore produces **four legs per tier**, in that order:
+  `query-{cold,hot}-<dataset>-c<chunk>-<type>-run<R>`.
+- **Dataset profile.** The dataset name minus a trailing `-<per-ledger tx count>` is the
+  `query_load.profiles` key: `sac-6000` → `sac`, `soroswap-1500` → `soroswap`. A dataset
+  whose name has no profile is refused before the campaign starts, naming both.
+- **Phase.** `phase = 1|2|3`, or derived from a `close_interval` that is a phase's block
+  time (`"2s"` → phase 1, `"1s"` → 2, `"600ms"` → 3). When both are set they must agree —
+  pacing ledgers at one phase while measuring another phase's read targets is not a phase
+  run. A query campaign with neither is refused.
+
+Each leg then sweeps `query_load.ladder` (`0.5×`, `1×`, `2×`) around that cell's floor and
+passes the result as one `--target-rps` list, so the plan reads:
+
+```
+$ …/stellar-rpc-<sha> bench-query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
+    --types=txhash --target-rps=500,1000,2000 --duration=60s --out=…
+```
+
+`--targets <path>` on `run`, `plan`, and `preflight` overrides which targets file is read;
+by default the runner walks up from the working directory to the `docs/targets.json` of
+the checkout it is running from. `preflight` resolves the whole load model, so a bad
+profile or an unresolvable phase fails in seconds rather than at the first query leg.
+
 ## Compatibility floor
 
-The runner requires a stellar-rpc ref whose bench subcommands **write `invocation.json`
-into every `--out` directory** — stellar-rpc#907 (`6f35679f`) or any descendant of it.
-That commit is merged into `feature/full-history`, so the default
-`ref = "feature/full-history"` satisfies the floor. Older refs produce bundles without
-per-invocation manifests, which the converter accepts but with weaker provenance (see
-`SCHEMA.md` § Inputs).
+The runner requires a stellar-rpc ref whose bench subcommands:
+
+- **write `invocation.json` into every `--out` directory** — stellar-rpc#907 (`6f35679f`)
+  or any descendant of it. Older refs produce bundles without per-invocation manifests,
+  which the converter accepts but with weaker provenance (see `SCHEMA.md` § Inputs).
+- **accept `bench-query --target-rps` and `--duration`** — the open-loop query model. The
+  runner emits neither `--query-concurrency` nor `--iters` any more, so a ref that only
+  knows the closed-loop flags fails every query leg immediately.
+
+Both are on `feature/full-history`, so the default `ref = "feature/full-history"`
+satisfies the floor.
 
 ## `$BENCH_ROOT` layout
 
@@ -325,8 +370,9 @@ contract:
 │   ├── driver.csv, hot.csv, *.csv           # ← written by stellar-rpc bench subcommands
 │   ├── invocation.json                      # ← written by stellar-rpc bench subcommands
 │   └── leg.json                             # ← written by the campaign CLI (THIS repo)
-└── query-{cold,hot}-<dataset>-c<chunk>-run<R>/
-    └── …same shape…
+└── query-{cold,hot}-<dataset>-c<chunk>-<type>-run<R>/
+    └── …same shape…                         #   one dir per endpoint type: ledgers,
+                                             #   txpage, txhash, events
 ```
 
 Who owns what:

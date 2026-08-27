@@ -1,6 +1,8 @@
 # Golden-test campaign: both ingest suites and both query suites, two reps per
 # cell, over two chunks of a fetched pack tree and a generated fixture — enough
 # shape to pin step ordering, dependencies, and argv without being unreadable.
+# The dataset names carry their load profiles (sac, soroswap) and close_interval
+# is phase 1's block time, so the CLI can resolve query rates for it too.
 name = "golden"
 ingest = "both"
 query = true
@@ -10,13 +12,13 @@ hot_num_ledgers = 50000
 publish_uri = "gs://bucket/results"
 
 [[dataset]]
-name = "packs"
+name = "sac-6000"
 kind = "packs-gs"
 location = "gs://bucket/cold"
 chunks = [1, 2]
 
 [[dataset]]
-name = "fix"
+name = "soroswap-1500"
 kind = "fixture"
 ledgers = 10000
 chunks = [1, 2]

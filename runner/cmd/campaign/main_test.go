@@ -33,6 +33,13 @@ func TestParseArgs(t *testing.T) {
 			set:  map[string]string{"dry-run": "true"},
 		},
 		{
+			name: "targets path on plan",
+			sub:  "plan",
+			args: []string{"cfg.toml", "--targets", "/repo/docs/targets.json"},
+			pos:  []string{"cfg.toml"},
+			set:  map[string]string{"targets": "/repo/docs/targets.json"},
+		},
+		{
 			name: "flag between two positionals",
 			sub:  "publish",
 			args: []string{"results", "--force", "dest"},
@@ -143,6 +150,122 @@ func TestPlanCmd(t *testing.T) {
 		}
 		if stderr.Len() != 0 {
 			t.Errorf("stderr = %q, want empty", stderr.String())
+		}
+	})
+}
+
+// queryConfig is a query campaign over one sac-profile dataset, with the
+// phase-deciding keys left to each case to fill in.
+func queryConfig(extra string) string {
+	return `
+name = "cli"
+ingest = "cold"
+query = true
+runs = 1
+` + extra + `
+
+[[dataset]]
+name = "sac-6000"
+kind = "packs-local"
+location = "/packs/sac"
+chunks = [1]
+`
+}
+
+// TestPlanCmdQueryLoad covers the one thing the CLI layer adds to a plan: the
+// RPS ladders, resolved out of this checkout's docs/targets.json.
+func TestPlanCmdQueryLoad(t *testing.T) {
+	planFor := func(t *testing.T, src string, args ...string) (int, string, string) {
+		t.Helper()
+		t.Setenv("BENCH_ROOT", t.TempDir())
+		cfg := filepath.Join(t.TempDir(), "campaign.toml")
+		if err := os.WriteFile(cfg, []byte(src), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		var stdout, stderr bytes.Buffer
+		code := dispatch(append([]string{"plan", cfg}, args...), &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+
+	t.Run("a phase block time as close_interval picks that phase", func(t *testing.T) {
+		code, stdout, stderr := planFor(t, queryConfig(`close_interval = "600ms"`))
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
+		}
+		for _, want := range []string{
+			"== query-cold-sac-6000-c1-ledgers-run1\n",
+			"--types=ledgers --target-rps=0.835,1.67,3.34 --duration=60s",
+			"--types=txhash --target-rps=500,1000,2000 --duration=60s",
+		} {
+			if !strings.Contains(stdout, want) {
+				t.Errorf("stdout missing %q, got:\n%s", want, stdout)
+			}
+		}
+	})
+
+	t.Run("an explicit phase paces an unpaced campaign", func(t *testing.T) {
+		code, stdout, stderr := planFor(t, queryConfig("phase = 2\nquery_duration = \"120s\""))
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
+		}
+		if want := "--types=txhash --target-rps=250,500,1000 --duration=120s"; !strings.Contains(stdout, want) {
+			t.Errorf("stdout missing %q, got:\n%s", want, stdout)
+		}
+	})
+
+	t.Run("a phase and a close_interval that disagree are refused", func(t *testing.T) {
+		code, _, stderr := planFor(t, queryConfig("phase = 1\nclose_interval = \"600ms\""))
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2", code)
+		}
+		for _, want := range []string{"phase = 1", "close_interval '600ms' is phase 3's block time"} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+			}
+		}
+	})
+
+	t.Run("no phase anywhere says how to set one", func(t *testing.T) {
+		code, _, stderr := planFor(t, queryConfig(""))
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2", code)
+		}
+		for _, want := range []string{"query = true needs a phase", "phase = 1|2|3", "targets.json"} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+			}
+		}
+	})
+
+	t.Run("a dataset with no load profile names itself", func(t *testing.T) {
+		src := strings.Replace(queryConfig("phase = 1"), `name = "sac-6000"`, `name = "pubnet-63"`, 1)
+		code, _, stderr := planFor(t, src)
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2", code)
+		}
+		for _, want := range []string{"dataset 'pubnet-63'", "load profile 'pubnet'", "known profiles:"} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+			}
+		}
+	})
+
+	t.Run("--targets picks the file to read the floors from", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "targets.json")
+		code, _, stderr := planFor(t, queryConfig("phase = 1"), "--targets", missing)
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2", code)
+		}
+		if !strings.Contains(stderr, missing) {
+			t.Errorf("stderr = %q, want it to name %s", stderr, missing)
+		}
+	})
+
+	t.Run("a campaign with no query legs reads no targets file", func(t *testing.T) {
+		src := strings.Replace(queryConfig(""), "query = true", "query = false", 1)
+		code, _, stderr := planFor(t, src, "--targets", filepath.Join(t.TempDir(), "absent.json"))
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr: %s)", code, stderr)
 		}
 	})
 }

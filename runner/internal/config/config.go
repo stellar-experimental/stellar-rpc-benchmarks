@@ -27,8 +27,7 @@ const (
 	DefaultRef           = "feature/full-history"
 	DefaultCloseInterval = "0"
 	DefaultRuns          = 5
-	DefaultColdIters     = 100
-	DefaultHotIters      = 200
+	DefaultQueryDuration = "60s"
 	DefaultWorkers       = 1
 )
 
@@ -49,20 +48,25 @@ const minFixtureLedgers = 10000
 
 // Config is a whole campaign config file.
 type Config struct {
-	Name             string    `toml:"name"`
-	Repo             string    `toml:"repo"`
-	Ref              string    `toml:"ref"`
-	Ingest           string    `toml:"ingest"`
-	Query            bool      `toml:"query"`
-	CloseInterval    string    `toml:"close_interval"`
-	Runs             int       `toml:"runs"`
-	QueryConcurrency []int     `toml:"query_concurrency"`
-	ColdIters        int       `toml:"cold_iters"`
-	HotIters         int       `toml:"hot_iters"`
-	Workers          int       `toml:"workers"`
-	HotNumLedgers    int       `toml:"hot_num_ledgers"`
-	PublishURI       string    `toml:"publish_uri"`
-	Datasets         []Dataset `toml:"dataset"`
+	Name          string `toml:"name"`
+	Repo          string `toml:"repo"`
+	Ref           string `toml:"ref"`
+	Ingest        string `toml:"ingest"`
+	Query         bool   `toml:"query"`
+	CloseInterval string `toml:"close_interval"`
+	Runs          int    `toml:"runs"`
+	// QueryDuration is how long each query leg holds its paced load, as a Go
+	// duration. Every query leg is open-loop: it drives a fixed arrival rate for
+	// this long rather than a fixed number of iterations.
+	QueryDuration string `toml:"query_duration"`
+	// Phase is the goal phase whose RPS floors the query legs target. 0 means
+	// unset, in which case a query campaign derives it by matching
+	// close_interval against a phase block time in docs/targets.json.
+	Phase         int       `toml:"phase"`
+	Workers       int       `toml:"workers"`
+	HotNumLedgers int       `toml:"hot_num_ledgers"`
+	PublishURI    string    `toml:"publish_uri"`
+	Datasets      []Dataset `toml:"dataset"`
 }
 
 // Dataset is one [[dataset]] table: a named pack tree and the chunks of it
@@ -84,14 +88,12 @@ var reName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // on top of it leaves absent keys at their default and lets present keys win.
 func defaults() Config {
 	return Config{
-		Repo:             DefaultRepo,
-		Ref:              DefaultRef,
-		CloseInterval:    DefaultCloseInterval,
-		Runs:             DefaultRuns,
-		QueryConcurrency: []int{1, 4, 16},
-		ColdIters:        DefaultColdIters,
-		HotIters:         DefaultHotIters,
-		Workers:          DefaultWorkers,
+		Repo:          DefaultRepo,
+		Ref:           DefaultRef,
+		CloseInterval: DefaultCloseInterval,
+		Runs:          DefaultRuns,
+		QueryDuration: DefaultQueryDuration,
+		Workers:       DefaultWorkers,
 	}
 }
 
@@ -154,8 +156,6 @@ func (c *Config) validate() error {
 		value int
 	}{
 		{"runs", c.Runs},
-		{"cold_iters", c.ColdIters},
-		{"hot_iters", c.HotIters},
 		{"workers", c.Workers},
 	} {
 		if f.value < 1 {
@@ -165,13 +165,11 @@ func (c *Config) validate() error {
 	if c.HotNumLedgers < 0 {
 		return fmt.Errorf("config: hot_num_ledgers must be an integer >= 0 (got '%d')", c.HotNumLedgers)
 	}
-	if len(c.QueryConcurrency) == 0 {
-		return errors.New("config: query_concurrency must list at least one concurrency level")
+	if err := validateQueryDuration(c.QueryDuration); err != nil {
+		return err
 	}
-	for _, qc := range c.QueryConcurrency {
-		if qc < 1 {
-			return fmt.Errorf("config: query_concurrency entries must be integers >= 1 (got '%d')", qc)
-		}
+	if c.Phase < 0 || c.Phase > 3 {
+		return fmt.Errorf("config: phase must be 1|2|3, or 0 to derive it from close_interval (got '%d')", c.Phase)
 	}
 	if c.PublishURI != "" && !strings.HasPrefix(c.PublishURI, "gs://") && !strings.HasPrefix(c.PublishURI, "s3://") {
 		return fmt.Errorf("config: publish_uri must be a gs:// or s3:// URI (got '%s')", c.PublishURI)
@@ -220,6 +218,14 @@ func validateCloseInterval(s string) error {
 	d, err := time.ParseDuration(s)
 	if err != nil || d < 0 {
 		return fmt.Errorf("config: close_interval must be a Go duration or 0 (got '%s')", s)
+	}
+	return nil
+}
+
+func validateQueryDuration(s string) error {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("config: query_duration must be a positive Go duration (got '%s')", s)
 	}
 	return nil
 }
@@ -288,10 +294,10 @@ func (d *Dataset) validate(seen map[string]bool) error {
 	return nil
 }
 
-// The three helpers below are the metadata.json compatibility layer: the
-// manifest is a cross-repo contract with converter/convert.py, and it records
-// these fields in the shapes the bash runner wrote. Keep them here so the
-// quirks live in one place.
+// The two helpers below are the metadata.json compatibility layer: the manifest
+// is a cross-repo contract with converter/convert.py, and it records these
+// fields in the shapes the bash runner wrote. Keep them here so the quirks live
+// in one place.
 
 // QueryString renders query as metadata.json records it: the bash config key
 // took the strings "yes" and "no".
@@ -300,16 +306,6 @@ func (c *Config) QueryString() string {
 		return "yes"
 	}
 	return "no"
-}
-
-// QueryConcurrencyString renders the concurrency sweep as metadata.json
-// records it: a comma-separated list, e.g. "1,4,16".
-func (c *Config) QueryConcurrencyString() string {
-	parts := make([]string, len(c.QueryConcurrency))
-	for i, qc := range c.QueryConcurrency {
-		parts[i] = strconv.Itoa(qc)
-	}
-	return strings.Join(parts, ",")
 }
 
 // LocationString renders the dataset's location as metadata.json records it.

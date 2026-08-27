@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,8 +28,16 @@ const (
 	KindPublish = "publish"
 )
 
-// queryTypes is the query type list every bench-query invocation sweeps.
-const queryTypes = "--types=ledgers,txpage,txhash,events"
+// queryTypes are the endpoint types the query suites benchmark, in the order
+// their legs run. Each type gets a leg of its own because the rate it is paced
+// at differs per type, and one invocation drives one rate.
+var queryTypes = []string{"ledgers", "txpage", "txhash", "events"}
+
+// QueryTypes is queryTypes for callers that have to resolve a rate per type
+// before they can build a plan. It is a copy: the leg order is the plan's.
+func QueryTypes() []string {
+	return slices.Clone(queryTypes)
+}
 
 // Inputs carries everything about the environment that Build would otherwise
 // have to discover for itself. Keeping them in a struct is what makes Build
@@ -39,6 +48,15 @@ type Inputs struct {
 	BuiltCommit string // full sha the ref resolved to, or the ref itself in placeholder mode
 	Sha8        string // 8-hex short sha ("deadbeef" placeholder when unresolvable)
 	Stamp       string // UTC, e.g. 20260101T000000Z
+	// QueryRates is the arrival rate every query leg is paced at: dataset name →
+	// query type → the RPS ladder for that cell. The CLI resolves it from
+	// docs/targets.json before calling Build, which is what keeps the phase
+	// floors out of this package and Build pure. Nil when the campaign has no
+	// query legs.
+	QueryRates map[string]map[string][]float64
+	// QueryDuration is how long each query leg holds its rate, as a Go duration.
+	// Empty when the campaign has no query legs.
+	QueryDuration string
 }
 
 // Step is one unit of scheduling, skipping, and failure. Argv is a *list* of
@@ -149,12 +167,16 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	}
 	if queryCold {
 		forEachCell(cfg, func(d *config.Dataset, chunk, rep int) {
-			p.Steps = append(p.Steps, queryColdLeg(p, in, cfg, d, chunk, rep))
+			for _, qtype := range queryTypes {
+				p.Steps = append(p.Steps, queryColdLeg(p, in, d, chunk, rep, qtype))
+			}
 		})
 	}
 	if queryHot {
 		forEachCell(cfg, func(d *config.Dataset, chunk, rep int) {
-			p.Steps = append(p.Steps, queryHotLeg(p, in, cfg, d, chunk, rep))
+			for _, qtype := range queryTypes {
+				p.Steps = append(p.Steps, queryHotLeg(p, in, cfg, d, chunk, rep, qtype))
+			}
 		})
 	}
 
@@ -357,8 +379,8 @@ func ingestHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	}
 }
 
-func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int) Step {
-	id := fmt.Sprintf("query-cold-%s-c%d-run%d", d.Name, chunk, rep)
+func queryColdLeg(p *Plan, in Inputs, d *config.Dataset, chunk, rep int, qtype string) Step {
+	id := fmt.Sprintf("query-cold-%s-c%d-%s-run%d", d.Name, chunk, qtype, rep)
 	out := filepath.Join(p.ResultsDir, id)
 	return Step{
 		ID:    id,
@@ -368,9 +390,9 @@ func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 			p.Bin, "bench-query", "cold",
 			"--cold-dir=" + datasetRoot(in, d),
 			"--start-chunk=" + strconv.Itoa(chunk), "--num-chunks=1",
-			queryTypes,
-			"--query-concurrency=" + cfg.QueryConcurrencyString(),
-			"--iters=" + strconv.Itoa(cfg.ColdIters),
+			"--types=" + qtype,
+			"--target-rps=" + targetRPS(in, d, qtype),
+			"--duration=" + in.QueryDuration,
 			"--out=" + out,
 		}},
 		OutDir: out,
@@ -378,16 +400,17 @@ func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	}
 }
 
-func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int) Step {
-	id := fmt.Sprintf("query-hot-%s-c%d-run%d", d.Name, chunk, rep)
+func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int, qtype string) Step {
+	id := fmt.Sprintf("query-hot-%s-c%d-%s-run%d", d.Name, chunk, qtype, rep)
 	out := filepath.Join(p.ResultsDir, id)
 	hot := hotDir(in, d, chunk)
 	argv := []string{
 		p.Bin, "bench-query", "hot",
 		"--hot-dir=" + hot, "--chunk=" + strconv.Itoa(chunk),
-		queryTypes,
-		"--query-concurrency=" + cfg.QueryConcurrencyString(),
-		"--iters=" + strconv.Itoa(cfg.HotIters), "--warmup=20",
+		"--types=" + qtype,
+		"--target-rps=" + targetRPS(in, d, qtype),
+		"--duration=" + in.QueryDuration,
+		"--warmup=20",
 	}
 	// A capped hot ingest leaves a truncated DB; keep the query sampler inside
 	// what was ingested.
@@ -410,6 +433,19 @@ func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chun
 			fmt.Sprintf("ingest-hot-%s-c%d-run%d", d.Name, chunk, cfg.Runs),
 		},
 	}
+}
+
+// targetRPS renders one cell's ladder as bench-query's --target-rps value: the
+// rates in ladder order, comma-separated. The 'f' format with the shortest
+// round-tripping precision is what bench-query itself spells its per-rate CSV
+// rows with, so the two sides name the same rate the same way.
+func targetRPS(in Inputs, d *config.Dataset, qtype string) string {
+	rates := in.QueryRates[d.Name][qtype]
+	parts := make([]string, len(rates))
+	for i, r := range rates {
+		parts[i] = strconv.FormatFloat(r, 'f', -1, 64)
+	}
+	return strings.Join(parts, ",")
 }
 
 // datasetRoot is the local cold pack root a dataset converges on: its own

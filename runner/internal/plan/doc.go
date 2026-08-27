@@ -8,8 +8,10 @@
 // what makes the plan committable as a golden fixture and lets dry-run, resume,
 // and progress reporting be plain consumers of it.
 //
-// Step ordering and argv are ported from the bash campaign runner this package
-// replaces. The flags and their order are copied exactly: the bench
-// subcommands are a cross-repo contract with stellar-rpc, and a stable argv
-// keeps the golden plan meaningful.
+// Step ordering and argv follow the bench subcommands' own flags, which are a
+// cross-repo contract with stellar-rpc; a stable argv is what keeps the golden
+// plan meaningful. The query suites emit one leg per endpoint type, because
+// each type is paced at its own arrival rate and one bench-query invocation
+// drives one rate — the rates themselves arrive through [Inputs], already
+// resolved from docs/targets.json.
 package plan

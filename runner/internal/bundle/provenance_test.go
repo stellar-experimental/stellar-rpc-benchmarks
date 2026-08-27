@@ -92,6 +92,7 @@ func machineInput(t *testing.T, benchRoot, bin string) MachineInput {
 		BuiltCommit: "deadbeefcafebabe",
 		BinPath:     bin,
 		BenchRoot:   benchRoot,
+		QueryPhase:  1,
 		Hardware: Hardware{
 			InstanceType: "i4i.4xlarge",
 			InstanceID:   "i-0123456789abcdef0",
@@ -115,8 +116,8 @@ func TestWriteMachineMetadata(t *testing.T) {
 		"ref: feature/full-history (deadbeefcafebabe)",
 		"binary: " + in.BinPath + " (commit deadbeefcafebabe)",
 		"stellar-rpc-v2 v23.0.0",
-		"campaign: golden · ingest: both · query: yes · runs: 5 · concurrency: 1,4,16",
-		"cold-iters: 100 · hot-iters: 200 · close-interval: 2s · workers: 1 · hot-num-ledgers: 50000",
+		"campaign: golden · ingest: both · query: yes · runs: 5 · query-duration: 60s · query-phase: 1",
+		"close-interval: 2s · workers: 1 · hot-num-ledgers: 50000",
 		"fsync probe: ",
 	} {
 		if !strings.Contains(got, want) {

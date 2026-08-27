@@ -40,7 +40,8 @@ cold_out_dir=
 hot_dir=
 close_interval=
 types=ledgers,txpage,txhash,events
-concurrency=1
+target_rps=1
+duration=
 for arg in "$@"; do
 	case $arg in
 	--out=*) out=${arg#--out=} ;;
@@ -49,7 +50,8 @@ for arg in "$@"; do
 	--hot-dir=*) hot_dir=${arg#--hot-dir=} ;;
 	--close-interval=*) close_interval=${arg#--close-interval=} ;;
 	--types=*) types=${arg#--types=} ;;
-	--query-concurrency=*) concurrency=${arg#--query-concurrency=} ;;
+	--target-rps=*) target_rps=${arg#--target-rps=} ;;
+	--duration=*) duration=${arg#--duration=} ;;
 	esac
 done
 
@@ -69,6 +71,9 @@ write_invocation() {
 		echo '  "flags": {'
 		if [ -n "$close_interval" ]; then
 			printf '    "close-interval": "%s",\n' "$close_interval"
+		fi
+		if [ -n "$duration" ]; then
+			printf '    "duration": "%s",\n' "$duration"
 		fi
 		printf '    "out": "%s"\n' "$out"
 		echo '  },'
@@ -174,15 +179,26 @@ case "$sub $tier" in
 "bench-query cold" | "bench-query hot")
 	mkdir -p "$out"
 	csv_start "$out/driver.csv"
-	csv_row "$out/driver.csv" 'open,1,0,5000,5000,5000,5000,5000'
-	# The comma-separated --types and --query-concurrency lists are split on
-	# purpose: one per-type CSV, one column set per concurrency level.
+	csv_row "$out/driver.csv" "open,1,0,5000,5000,5000,5000,5000"
+	# One leg drives one endpoint type at a ladder of arrival rates, so the
+	# comma-separated --target-rps list becomes one row set per rate: the
+	# scheduled and service latencies in the per-type CSV, and the wall,
+	# achieved rate, dispatch lag, and shed count in the driver. The rate token
+	# is copied out of argv verbatim — the row names must spell it exactly as
+	# the runner asked for it, which is how the converter pairs the two.
 	IFS=,
 	for qt in $types; do
 		csv_start "$out/$qt.csv"
-		for w in $concurrency; do
-			csv_row "$out/driver.csv" "${qt}_c${w},1,0,1000000,1000000,1000000,1000000,1000000"
-			csv_row "$out/$qt.csv" "total_c${w},100,100,900000,9000,11000,13000,20000"
+		for rps in $target_rps; do
+			# The achieved rate rides in the duration columns x1000, as an int.
+			millirps=$(awk -v r="$rps" 'BEGIN { printf "%d", r * 1000 }')
+			csv_row "$out/driver.csv" "${qt}_r${rps},1,0,1000000,1000000,1000000,1000000,1000000"
+			csv_row "$out/driver.csv" \
+				"${qt}_r${rps}_millirps,1,0,$millirps,$millirps,$millirps,$millirps,$millirps"
+			csv_row "$out/driver.csv" "${qt}_r${rps}_lag,100,100,100000,500,800,1000,1200"
+			csv_row "$out/driver.csv" "${qt}_r${rps}_shed,1,0,0,0,0,0,0"
+			csv_row "$out/$qt.csv" "total_r${rps},100,100,900000,9000,11000,13000,20000"
+			csv_row "$out/$qt.csv" "service_r${rps},100,100,500000,5000,6000,7000,9000"
 		done
 	done
 	unset IFS

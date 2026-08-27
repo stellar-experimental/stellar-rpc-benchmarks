@@ -40,18 +40,22 @@ type MetadataInput struct {
 	RunID       string
 	BuiltCommit string
 	Resumed     bool
-	Hardware    Hardware
-	Hostname    string
-	StartedAt   string // RFC3339-like UTC, 2026-07-31T22:00:00Z
-	FinishedAt  string // "" on the up-front write
-	Status      string // StatusRunning / StatusFinished / StatusFailed
+	// QueryPhase is the goal phase the query legs were paced against, resolved
+	// by the CLI from the config and docs/targets.json. 0 on a campaign with no
+	// query legs, and omitted from the manifest then.
+	QueryPhase int
+	Hardware   Hardware
+	Hostname   string
+	StartedAt  string // RFC3339-like UTC, 2026-07-31T22:00:00Z
+	FinishedAt string // "" on the up-front write
+	Status     string // StatusRunning / StatusFinished / StatusFailed
 }
 
 // metadataFile is the write-side of the manifest. It is a separate type from
 // Metadata (the read side, which models only what the runner consumes) because
 // this one is the contract: field order is declaration order, and the quirks
-// the bash writer had — "yes"/"no", the comma-string concurrency, the fields
-// that vanish when empty — live in these tags and in config's *String helpers.
+// the bash writer had — "yes"/"no", the fields that vanish when empty — live in
+// these tags and in config's *String helpers.
 type metadataFile struct {
 	SchemaVersion int               `json:"schema_version"`
 	RunID         string            `json:"run_id"`
@@ -65,19 +69,20 @@ type metadataFile struct {
 }
 
 type campaignMetadata struct {
-	Name             string `json:"name"`
-	ConfigFile       string `json:"config_file"`
-	Ref              string `json:"ref"`
-	BuiltCommit      string `json:"built_commit"`
-	Ingest           string `json:"ingest"`
-	Query            string `json:"query"`
-	CloseInterval    string `json:"close_interval"`
-	Runs             int    `json:"runs"`
-	QueryConcurrency string `json:"query_concurrency"`
-	ColdIters        int    `json:"cold_iters"`
-	HotIters         int    `json:"hot_iters"`
-	Workers          int    `json:"workers"`
-	HotNumLedgers    int    `json:"hot_num_ledgers"`
+	Name          string `json:"name"`
+	ConfigFile    string `json:"config_file"`
+	Ref           string `json:"ref"`
+	BuiltCommit   string `json:"built_commit"`
+	Ingest        string `json:"ingest"`
+	Query         string `json:"query"`
+	CloseInterval string `json:"close_interval"`
+	Runs          int    `json:"runs"`
+	QueryDuration string `json:"query_duration"`
+	// QueryPhase is absent on a campaign with no query legs, where no phase was
+	// resolved and recording 0 would read as a phase.
+	QueryPhase    int `json:"query_phase,omitempty"`
+	Workers       int `json:"workers"`
+	HotNumLedgers int `json:"hot_num_ledgers"`
 	// Resumed is present only on resumed bundles, matching bash's del().
 	Resumed bool `json:"resumed,omitempty"`
 }
@@ -112,20 +117,19 @@ func marshalMetadata(in MetadataInput) ([]byte, error) {
 		SchemaVersion: SchemaVersion,
 		RunID:         in.RunID,
 		Campaign: campaignMetadata{
-			Name:             cfg.Name,
-			ConfigFile:       in.ConfigFile,
-			Ref:              cfg.Ref,
-			BuiltCommit:      in.BuiltCommit,
-			Ingest:           cfg.Ingest,
-			Query:            cfg.QueryString(),
-			CloseInterval:    cfg.CloseInterval,
-			Runs:             cfg.Runs,
-			QueryConcurrency: cfg.QueryConcurrencyString(),
-			ColdIters:        cfg.ColdIters,
-			HotIters:         cfg.HotIters,
-			Workers:          cfg.Workers,
-			HotNumLedgers:    cfg.HotNumLedgers,
-			Resumed:          in.Resumed,
+			Name:          cfg.Name,
+			ConfigFile:    in.ConfigFile,
+			Ref:           cfg.Ref,
+			BuiltCommit:   in.BuiltCommit,
+			Ingest:        cfg.Ingest,
+			Query:         cfg.QueryString(),
+			CloseInterval: cfg.CloseInterval,
+			Runs:          cfg.Runs,
+			QueryDuration: cfg.QueryDuration,
+			QueryPhase:    in.QueryPhase,
+			Workers:       cfg.Workers,
+			HotNumLedgers: cfg.HotNumLedgers,
+			Resumed:       in.Resumed,
 		},
 		Datasets:   make([]datasetMetadata, 0, len(cfg.Datasets)),
 		Hardware:   in.Hardware,

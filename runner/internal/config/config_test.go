@@ -61,9 +61,8 @@ ingest = "hot"
 query = false
 close_interval = "2s"
 runs = 3
-query_concurrency = [2, 8]
-cold_iters = 50
-hot_iters = 60
+query_duration = "90s"
+phase = 2
 workers = 4
 hot_num_ledgers = 1000
 publish_uri = "s3://bucket/bench"
@@ -102,11 +101,11 @@ chunks = [0]
 	if cfg.Runs != 3 {
 		t.Errorf("runs = %d, want 3", cfg.Runs)
 	}
-	if !slices.Equal(cfg.QueryConcurrency, []int{2, 8}) {
-		t.Errorf("query_concurrency = %v, want [2 8]", cfg.QueryConcurrency)
+	if cfg.QueryDuration != "90s" {
+		t.Errorf("query_duration = %q, want 90s", cfg.QueryDuration)
 	}
-	if cfg.ColdIters != 50 || cfg.HotIters != 60 {
-		t.Errorf("iters = %d/%d, want 50/60", cfg.ColdIters, cfg.HotIters)
+	if cfg.Phase != 2 {
+		t.Errorf("phase = %d, want 2", cfg.Phase)
 	}
 	if cfg.Workers != 4 {
 		t.Errorf("workers = %d, want 4", cfg.Workers)
@@ -157,14 +156,11 @@ func TestLoadMinimalConfigAppliesDefaults(t *testing.T) {
 	if cfg.Runs != 5 {
 		t.Errorf("runs = %d, want 5", cfg.Runs)
 	}
-	if !slices.Equal(cfg.QueryConcurrency, []int{1, 4, 16}) {
-		t.Errorf("query_concurrency = %v, want [1 4 16]", cfg.QueryConcurrency)
+	if cfg.QueryDuration != DefaultQueryDuration {
+		t.Errorf("query_duration = %q, want %q", cfg.QueryDuration, DefaultQueryDuration)
 	}
-	if cfg.ColdIters != 100 {
-		t.Errorf("cold_iters = %d, want 100", cfg.ColdIters)
-	}
-	if cfg.HotIters != 200 {
-		t.Errorf("hot_iters = %d, want 200", cfg.HotIters)
+	if cfg.Phase != 0 {
+		t.Errorf("phase = %d, want 0 (unset)", cfg.Phase)
 	}
 	if cfg.Workers != 1 {
 		t.Errorf("workers = %d, want 1", cfg.Workers)
@@ -188,6 +184,9 @@ func TestLoadAcceptedConfigs(t *testing.T) {
 		{"sub-second close_interval", withTop(`close_interval = "600ms"`)},
 		{"compound close_interval", withTop(`close_interval = "1m30s"`)},
 		{"gs publish uri", withTop(`publish_uri = "gs://bucket/prefix"`)},
+		{"sub-minute query_duration", withTop(`query_duration = "30s"`)},
+		{"compound query_duration", withTop(`query_duration = "2m30s"`)},
+		{"explicit phase", withTop("phase = 3")},
 		{"chunk id zero", strings.Replace(minimal, "chunks = [7]", "chunks = [0, 1]", 1)},
 		{"fixture whole chunk", `
 name = "f"
@@ -310,14 +309,39 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{"runs must be an integer >= 1", "0"},
 		},
 		{
-			name: "negative cold_iters",
-			src:  withTop("cold_iters = -1"),
-			want: []string{"cold_iters must be an integer >= 1", "-1"},
+			name: "retired query_concurrency key",
+			src:  withTop("query_concurrency = [1, 4, 16]"),
+			want: []string{"unknown key", "query_concurrency"},
 		},
 		{
-			name: "zero hot_iters",
-			src:  withTop("hot_iters = 0"),
-			want: []string{"hot_iters must be an integer >= 1", "0"},
+			name: "retired cold_iters key",
+			src:  withTop("cold_iters = 100"),
+			want: []string{"unknown key", "cold_iters"},
+		},
+		{
+			name: "unparsable query_duration",
+			src:  withTop(`query_duration = "60 seconds"`),
+			want: []string{"query_duration must be a positive Go duration", "60 seconds"},
+		},
+		{
+			name: "zero query_duration",
+			src:  withTop(`query_duration = "0"`),
+			want: []string{"query_duration must be a positive Go duration", "0"},
+		},
+		{
+			name: "negative query_duration",
+			src:  withTop(`query_duration = "-30s"`),
+			want: []string{"query_duration must be a positive Go duration", "-30s"},
+		},
+		{
+			name: "phase above the goal range",
+			src:  withTop("phase = 4"),
+			want: []string{"phase must be 1|2|3", "4"},
+		},
+		{
+			name: "negative phase",
+			src:  withTop("phase = -1"),
+			want: []string{"phase must be 1|2|3", "-1"},
 		},
 		{
 			name: "zero workers",
@@ -328,16 +352,6 @@ func TestLoadRejects(t *testing.T) {
 			name: "negative hot_num_ledgers",
 			src:  withTop("hot_num_ledgers = -5"),
 			want: []string{"hot_num_ledgers must be an integer >= 0", "-5"},
-		},
-		{
-			name: "empty query_concurrency",
-			src:  withTop("query_concurrency = []"),
-			want: []string{"query_concurrency must list at least one concurrency level"},
-		},
-		{
-			name: "zero query_concurrency entry",
-			src:  withTop("query_concurrency = [1, 0]"),
-			want: []string{"query_concurrency entries must be integers >= 1", "0"},
 		},
 		{
 			name: "bad publish_uri scheme",
@@ -517,7 +531,6 @@ func TestMetadataMappings(t *testing.T) {
 name = "map"
 ingest = "both"
 query = true
-query_concurrency = [1, 4, 16]
 
 [[dataset]]
 name = "local"
@@ -539,20 +552,10 @@ chunks = [0]
 	if got := cfg.QueryString(); got != "no" {
 		t.Errorf("QueryString() = %q, want no", got)
 	}
-	if got := cfg.QueryConcurrencyString(); got != "1,4,16" {
-		t.Errorf("QueryConcurrencyString() = %q, want 1,4,16", got)
-	}
 	if got := cfg.Datasets[0].LocationString(); got != "/data/packs" {
 		t.Errorf("LocationString() = %q, want /data/packs", got)
 	}
 	if got := cfg.Datasets[1].LocationString(); got != "20000" {
 		t.Errorf("fixture LocationString() = %q, want 20000", got)
-	}
-}
-
-func TestQueryConcurrencyStringSingleEntry(t *testing.T) {
-	cfg := load(t, withTop("query_concurrency = [8]"))
-	if got := cfg.QueryConcurrencyString(); got != "8" {
-		t.Errorf("QueryConcurrencyString() = %q, want 8", got)
 	}
 }
