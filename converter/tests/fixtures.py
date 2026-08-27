@@ -123,6 +123,34 @@ def _hot_phases(u, run):
     return [(s,) + _scale(b, run) for s, b in specs]
 
 
+# The query legs' report contract (stellar-rpc bench-query): one CSV per swept
+# type carrying a total_c<W> row, plus driver.csv with each cell's wall and the
+# setup rows. Only a cold leg evicts, so only its driver carries that row.
+QUERY_TYPES = ("ledgers", "txpage", "txhash", "events")
+QUERY_CONC = (1, 4)
+
+
+def _query_files(tier, run):
+    files = {}
+    driver = [("open", 1, 1, 60_000_000, 60_000_000, 60_000_000, 60_000_000, 60_000_000)]
+    if tier == "cold":
+        driver.append(("evict", len(QUERY_TYPES) * len(QUERY_CONC), 6, 4000, 500, 600, 700, 700))
+    for i, qt in enumerate(QUERY_TYPES):
+        rows = []
+        for w in QUERY_CONC:
+            n = 100 * w
+            # Cold reads cost more than hot ones, and the tail grows with the
+            # worker count — enough shape to read, all well inside 500 ms.
+            base = (900_000 if tier == "cold" else 90_000) * (i + 1)
+            p99 = base * 3 + w * 1000 + run
+            rows.append((f"total_c{w}", n, n * 10, base * n, base, base * 2, p99, p99 * 2))
+            driver.append((f"{qt}_c{w}", 1, n, base * n // w, 0, 0, 0, 0))
+        files[qt] = rows
+    driver.append(("peak_rss_bytes", 1, 0, 900_000_000, 0, 0, 0, 0))
+    files["driver"] = driver
+    return files
+
+
 def _write_invocation(d, subcommand, close_interval):
     # Mirrors stellar-rpc's writer (invocation.go, #907): camelCase keys,
     # written for failed runs too (then with an `error` field).
@@ -144,11 +172,12 @@ def _write_invocation(d, subcommand, close_interval):
 
 
 def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
-                          drop_pace=None, close_interval=None):
+                          drop_pace=None, close_interval=None, queries=False):
     """Create a campaign-layout bundle under `root`. `drop_pace` = {unit: {runs}}
     omits the pace_lag row from those hot runs (to exercise zero-fill).
     `close_interval` overrides the recorded pace (a Go duration string);
-    default is "2s" when paced, "0" when unpaced."""
+    default is "2s" when paced, "0" when unpaced. `queries` adds the cold and
+    hot query legs, as a campaign dispatched with query = yes produces."""
     os.makedirs(root, exist_ok=True)
     drop_pace = drop_pace or {}
     if close_interval is None:
@@ -170,6 +199,15 @@ def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
             _write_csv(os.path.join(hdir, "hot.csv"), _hot_phases(u, r))
             _write_invocation(hdir, "bench-ingest hot", close_interval)
 
+            if not queries:
+                continue
+            for tier in ("cold", "hot"):
+                qdir = os.path.join(root, f"query-{tier}-{u}-run{r}")
+                os.makedirs(qdir, exist_ok=True)
+                for name, rows in _query_files(tier, r).items():
+                    _write_csv(os.path.join(qdir, f"{name}.csv"), rows)
+                _write_invocation(qdir, f"bench-query {tier}", close_interval)
+
     # Untimed dataset-preparation ingests — must be skipped, not converted.
     for u in units:
         gdir = os.path.join(root, f"golden-{u}")
@@ -184,7 +222,8 @@ def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
             "name": "phase1-synthetic-minspec",
             "config_file": "phase1-synthetic-minspec.cfg",
             "ref": "", "built_commit": COMMIT,
-            "ingest": "both", "query": "no", "close_interval": close_interval,
+            "ingest": "both", "query": "yes" if queries else "no",
+            "close_interval": close_interval,
             "runs": reps, "query_concurrency": "1,4",
             "cold_iters": 100, "hot_iters": 200, "workers": 1, "hot_num_ledgers": 100,
         },

@@ -137,6 +137,9 @@ section { margin-top: 64px; }
 .sec-num { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: var(--accent); letter-spacing: 0.08em; }
 h2 { font-size: 23px; font-weight: 700; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
 .sec-intro { color: var(--ink-2); max-width: 46em; }
+/* A named block inside a section — the read-path target under Queries. Sits
+   below h2 in weight so a section keeps exactly one headline. */
+.sub-h { font-size: 17px; font-weight: 650; letter-spacing: -0.005em; margin: 40px 0 6px; }
 p { max-width: 46em; }
 p strong { font-weight: 650; color: var(--ink); }
 code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; background: color-mix(in srgb, var(--ink) 6%, transparent); padding: 1px 5px; border-radius: 4px; }

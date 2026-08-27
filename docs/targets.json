@@ -7,6 +7,8 @@
     "send_tx_p99_ns": 10000000,
     "get_tx_p99_ns": 10000000
   },
+  "query_p99_note": "Read-path design target, one number for every phase: no query cell (type x tier x concurrency) may exceed this p99. It sits outside fixed_estimates because it is not a slice of the E2E formula — the read benchmarks judge against it directly.",
+  "query_p99_target_ns": 500000000,
   "phases": [
     {
       "phase": 1,

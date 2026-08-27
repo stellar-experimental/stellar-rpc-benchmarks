@@ -565,6 +565,132 @@
   }
   function verNum(s, re) { const m = (s || "").match(re); return m ? m[1] : ""; }
 
+  // The run's check for one section, matched on applies_to. A run can carry
+  // several — a paced campaign that also swept queries is judged on keeping up
+  // AND on the read-path target — so checks_all is the list and checks is its
+  // first entry. Runs published before the list carry only the single object,
+  // hence the fallback: never read a verdict by position.
+  function checkFor(D, section) {
+    const all = Array.isArray(D.checks_all) ? D.checks_all : (D.checks ? [D.checks] : []);
+    return all.find(c => c && c.applies_to === section) || null;
+  }
+
+  // ---- shared query rendering ----
+  // Both layouts sweep the same cell grid (type × tier × concurrency, per unit),
+  // so the three query figures are built once here and pointed at whichever
+  // figure ids and unit the calling renderer owns. o.unit() is read on every
+  // draw, so a caller with a unit picker just re-invokes the returned function.
+  const QT_LABEL = {
+    ledgers: "ledgers (range scan)", txpage: "txpage (paged tx walk)",
+    txhash: "txhash (single lookup)", events: "events (one page)",
+  };
+  const qtLabel = qt => QT_LABEL[qt] || qt;
+
+  // Query types and concurrency levels, discovered from the data so a run that
+  // swept a different set still renders.
+  function queryGrid(Q, units) {
+    const firstTier = Q && (Q.cold || Q.hot) ? (Q.cold || Q.hot) : {};
+    const firstUnit = firstTier[units[0]] || {};
+    const QT = Object.keys(firstUnit).filter(k => k !== "setup");
+    const someQt = QT[0] ? firstUnit[QT[0]] : {};
+    const CONC = Object.keys(someQt).filter(k => /^c\d+$/.test(k)).sort((a, b) => +a.slice(1) - +b.slice(1));
+    const TIERS = ["cold", "hot"].filter(t => Q && Q[t]);
+    return { QT, CONC, TIERS };
+  }
+
+  // ids: [latency, p99-vs-concurrency, throughput]. Returns the draw function.
+  function queryFigs(o) {
+    const { Q, QT, CONC, TIERS, C, ids } = o;
+    const tierColor = t => (t === "cold" ? C.cold : C.hot);
+    const cell = (tier, qt, cc) => Q[tier][o.unit()][qt][cc];
+    const lat = () => {
+      const rows = QT.map(qt => ({
+        label: qt, sub: qtLabel(qt).replace(qt + " ", "").replace(/[()]/g, ""),
+        lanes: TIERS.map(tier => {
+          const q = cell(tier, qt, CONC[0]);
+          return { name: tier + " tier (" + CONC[0] + ")", color: tierColor(tier), pts: { p50: q.p50.m, p90: q.p90.m, p99: q.p99.m, max: q.max.m }, spread: `${fmtNs(q.p99.lo)} – ${fmtNs(q.p99.hi)}` };
+        }),
+      }));
+      dotRangeChart(ids[0] + "-body", rows);
+      legend(ids[0] + "-legend", [...TIERS.map(t => ({ label: t + " tier", color: tierColor(t) })), { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" }]);
+      tableView(ids[0], ["Query type", "Tier", "p50", "p90", "p99", "max", "p99 spread"],
+        QT.flatMap(qt => TIERS.map(tier => { const q = cell(tier, qt, CONC[0]); return [qtLabel(qt), tier, fmtNs(q.p50.m), fmtNs(q.p90.m), fmtNs(q.p99.m), fmtNs(q.max.m), `${fmtNs(q.p99.lo)} – ${fmtNs(q.p99.hi)}`]; })));
+    };
+    const p99 = () => {
+      const panels = QT.map(qt => ({ title: qt, series: TIERS.map(tier => ({ name: tier + " p99", color: tierColor(tier), vals: CONC.map(cc => cell(tier, qt, cc).p99.m) })) }));
+      linePanels(ids[1] + "-body", panels, { fmt: fmtNs, fmtTick: fmtNsAxis, xLabels: CONC });
+      legend(ids[1] + "-legend", TIERS.map(t => ({ label: t + " p99", color: tierColor(t), line: true })));
+      tableView(ids[1], ["Query type", "Tier", ...CONC.map(c => c + " p99")],
+        QT.flatMap(qt => TIERS.map(tier => [qtLabel(qt), tier, ...CONC.map(cc => fmtNs(cell(tier, qt, cc).p99.m))])));
+    };
+    const tp = () => {
+      const panels = QT.map(qt => ({ title: qt, series: TIERS.map(tier => ({ name: tier + " ops/s", color: tierColor(tier), vals: CONC.map(cc => cell(tier, qt, cc).ops_s.m) })) }));
+      linePanels(ids[2] + "-body", panels, { fmt: fmtInt, xLabels: CONC });
+      legend(ids[2] + "-legend", TIERS.map(t => ({ label: t + " ops/s", color: tierColor(t), line: true })));
+      const top = CONC[CONC.length - 1];
+      tableView(ids[2], ["Query type", "Tier", ...CONC, "events/s @ " + top],
+        QT.flatMap(qt => TIERS.map(tier => {
+          const q = cell(tier, qt, top);
+          return [qtLabel(qt), tier, ...CONC.map(cc => fmtInt(cell(tier, qt, cc).ops_s.m)), q.items_s ? fmtInt(q.items_s.m) : "—"];
+        })));
+    };
+    return () => { lat(); p99(); tp(); };
+  }
+
+  // Worst unit for a (type, tier, concurrency) cell — the cell a target table
+  // judges, since one unit over the line fails the run. `overCount` is how many
+  // units breach, not just the worst: a cell can be missed by several at once,
+  // and reporting only the worst would hide the rest.
+  function worstQueryCell(Q, units, tier, qt, cc, thr) {
+    let w = null, overCount = 0;
+    for (const u of units) {
+      const c = Q[tier][u][qt][cc];
+      if (!w || c.p99.m > w.cell.p99.m) w = { cell: c, unit: u };
+      if (thr != null && c.p99.m > thr) overCount++;
+    }
+    return { ...w, overCount };
+  }
+
+  // Query target table: rows are type · tier, columns the concurrency sweep,
+  // each cell the worst unit's median-run p99 against the threshold.
+  function queryTargetTable(tableId, footId, o) {
+    const { Q, QT, CONC, TIERS, C, units, thr } = o;
+    const t = document.getElementById(tableId);
+    if (!t) return { over: [], breaches: 0 };
+    const tr = document.createElement("tr");
+    ["Query type · tier", ...CONC.map(c => c + " p99")].forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
+    t.appendChild(tr);
+    const over = [];
+    let breaches = 0, unitBreaches = 0;
+    for (const qt of QT) for (const tier of TIERS) {
+      const r = document.createElement("tr");
+      const name = document.createElement("td");
+      const tag = document.createElement("span"); tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
+      name.appendChild(tag); name.appendChild(document.createTextNode(`${qt} · ${tier}`)); r.appendChild(name);
+      for (const cc of CONC) {
+        const w = worstQueryCell(Q, units, tier, qt, cc, thr);
+        const td = document.createElement("td");
+        td.textContent = fmtMs(w.cell.p99.m) + " ms";
+        // Name the worst unit, and say when it is not the only one over.
+        const extra = w.overCount > 1 ? ` +${w.overCount - 1} more` : "";
+        const note = document.createElement("span"); note.className = "cell-note"; note.textContent = ` (${w.unit}${extra})`; td.appendChild(note);
+        const ok = document.createElement("span");
+        if (w.cell.p99.m > thr) { ok.className = "cell-warn"; ok.textContent = " ▲"; breaches++; unitBreaches += w.overCount; }
+        else if (w.cell.p99.hi > thr) { ok.className = "cell-ok"; ok.textContent = " ✓†"; over.push(`${qt} · ${tier} · ${cc} on ${w.unit} (worst run ${fmtMs(w.cell.p99.hi)} ms)`); }
+        else { ok.className = "cell-ok"; ok.textContent = " ✓"; }
+        td.appendChild(ok); r.appendChild(td);
+      }
+      t.appendChild(r);
+    }
+    const foot = document.getElementById(footId);
+    if (foot) {
+      foot.textContent = over.length
+        ? "✓ = median-run p99 within the budget for every unit. † = passes at the median but at least one run exceeded it: " + over.join("; ") + "."
+        : "✓ = median-run p99 within the budget for every unit, including each cell's min–max spread.";
+    }
+    return { over, breaches, unitBreaches };
+  }
+
   function mastheadHTML(D) {
     const ds = D.dataset, mac = D.machine || {}, b = D.build || {}, camp = D.campaign || {};
     const um = ds.unit_meta || {};
@@ -834,22 +960,16 @@
     const cold = D.ingest_cold, hot = D.ingest_hot, Q = D.queries, gold = D.golden || {};
     const PH = phaseState(D);   // phase targets, campaign runs only (null otherwise)
     // discover query types + concurrency levels from data (degrade gracefully)
-    const firstTier = Q && (Q.cold || Q.hot) ? (Q.cold || Q.hot) : {};
-    const firstUnit = firstTier[CH[0]] || {};
-    const QT = Object.keys(firstUnit).filter(k => k !== "setup");
-    const QT_LABEL = {
-      ledgers: "ledgers (20-ledger range)", txpage: "txpage (20-tx page)",
-      txhash: "txhash (single lookup)", events: "events (filtered query)",
-    };
-    const someQt = QT[0] ? firstUnit[QT[0]] : {};
-    const CONC = Object.keys(someQt).filter(k => /^c\d+$/.test(k)).sort((a, b) => +a.slice(1) - +b.slice(1));
-    const thr = D.checks && D.checks.threshold_ns ? D.checks.threshold_ns : 500e6;
+    const { QT, CONC, TIERS } = queryGrid(Q, CH);
+    const qCheck = checkFor(D, "queries");
+    const thr = qCheck && qCheck.threshold_ns ? qCheck.threshold_ns : 500e6;
+    const qLabel = qCheck ? qCheck.label : "query p99 target";
 
     const chunkSub = c => `${fmtK(um[c].events)} ev`;
 
     // ---- banner (data-driven pass/fail from checks) ----
     let total = 0, pass = 0, worst = null;
-    for (const qt of QT) for (const tier of ["cold", "hot"]) for (const cc of CONC) {
+    for (const qt of QT) for (const tier of TIERS) for (const cc of CONC) {
       let w = null;
       for (const c of CH) { const cell = Q[tier][c][qt][cc]; if (!w || cell.p99.m > w.cell.p99.m) w = { cell, c, tier, qt, cc }; }
       total++;
@@ -865,7 +985,7 @@
       <div class="banner">
         <div class="banner-figure">${pass}<span class="of"> / ${total}</span></div>
         <div class="banner-copy">
-          <div class="lead">Design-target cells ${pass === total ? "pass" : "checked"}: ${esc(D.checks ? D.checks.label : "query p99 target")} in every type × tier × concurrency cell. <span class="chip">${pass === total ? "✓ PASS" : pass + "/" + total}</span></div>
+          <div class="lead">Design-target cells ${pass === total ? "pass" : "checked"}: ${esc(qLabel)} in every type × tier × concurrency cell. <span class="chip">${pass === total ? "✓ PASS" : pass + "/" + total}</span></div>
           <p>Worst cell: ${esc(worstTxt)}${worst && worst.cell.p99.m <= thr ? ", within budget" : ""}. Every other cell clears the target with more headroom. Details in §7.</p>
         </div>
       </div>
@@ -923,7 +1043,7 @@
     </section>
 
     <section id="target">
-      <div class="sec-head"><span class="sec-num">07</span><h2>Design-target check — ${esc(D.checks ? D.checks.label : "query p99")}</h2></div>
+      <div class="sec-head"><span class="sec-num">07</span><h2>Design-target check — ${esc(qLabel)}</h2></div>
       <p class="sec-intro">Each cell shows the worst chunk's median-run p99 for that query type, tier, and concurrency. The design target is met when p99 ≤ ${fmtMs(thr)} ms.</p>
       <div class="target-table-wrap"><table class="target" id="target-table"></table></div>
       <p id="target-footnote" style="color:var(--muted); font-size:12.5px; margin-top:10px"></p>
@@ -1101,33 +1221,7 @@
 
     /* ---- query section (chunk-scoped) ---- */
     let curChunk = CH[CH.length - 1];
-    function fig51() {
-      const rows = QT.map(qt => ({
-        label: qt, sub: (QT_LABEL[qt] || qt).replace(qt + " ", "").replace(/[()]/g, ""),
-        lanes: ["cold", "hot"].map(tier => {
-          const cell = Q[tier][curChunk][qt][CONC[0]];
-          return { name: tier + " tier (" + CONC[0] + ")", color: tier === "cold" ? C.cold : C.hot, pts: { p50: cell.p50.m, p90: cell.p90.m, p99: cell.p99.m, max: cell.max.m }, spread: `${fmtNs(cell.p99.lo)} – ${fmtNs(cell.p99.hi)}` };
-        }),
-      }));
-      dotRangeChart("fig51-body", rows);
-      legend("fig51-legend", [{ label: "cold tier", color: C.cold }, { label: "hot tier", color: C.hot }, { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" }]);
-      tableView("fig51", ["Query type", "Tier", "p50", "p90", "p99", "max", "p99 spread (5 runs)"],
-        QT.flatMap(qt => ["cold", "hot"].map(tier => { const cell = Q[tier][curChunk][qt][CONC[0]]; return [QT_LABEL[qt] || qt, tier, fmtNs(cell.p50.m), fmtNs(cell.p90.m), fmtNs(cell.p99.m), fmtNs(cell.max.m), `${fmtNs(cell.p99.lo)} – ${fmtNs(cell.p99.hi)}`]; })));
-    }
-    function fig52() {
-      const panels = QT.map(qt => ({ title: qt, series: ["cold", "hot"].map(tier => ({ name: tier + " p99", color: tier === "cold" ? C.cold : C.hot, vals: CONC.map(cc => Q[tier][curChunk][qt][cc].p99.m) })) }));
-      linePanels("fig52-body", panels, { fmt: fmtNs, fmtTick: fmtNsAxis, xLabels: CONC });
-      legend("fig52-legend", [{ label: "cold p99", color: C.cold, line: true }, { label: "hot p99", color: C.hot, line: true }]);
-      tableView("fig52", ["Query type", "Tier", ...CONC.map(c => c + " p99")],
-        QT.flatMap(qt => ["cold", "hot"].map(tier => [QT_LABEL[qt] || qt, tier, ...CONC.map(cc => fmtNs(Q[tier][curChunk][qt][cc].p99.m))])));
-    }
-    function fig53() {
-      const panels = QT.map(qt => ({ title: qt, series: ["cold", "hot"].map(tier => ({ name: tier + " ops/s", color: tier === "cold" ? C.cold : C.hot, vals: CONC.map(cc => Q[tier][curChunk][qt][cc].ops_s.m) })) }));
-      linePanels("fig53-body", panels, { fmt: fmtInt, xLabels: CONC });
-      legend("fig53-legend", [{ label: "cold ops/s", color: C.cold, line: true }, { label: "hot ops/s", color: C.hot, line: true }]);
-      tableView("fig53", ["Query type", "Tier", ...CONC, "events/s @ " + CONC[CONC.length - 1]],
-        QT.flatMap(qt => ["cold", "hot"].map(tier => { const q = Q[tier][curChunk][qt]; const ev = q[CONC[CONC.length - 1]].items_s ? fmtInt(q[CONC[CONC.length - 1]].items_s.m) : "—"; return [QT_LABEL[qt] || qt, tier, ...CONC.map(cc => fmtInt(q[cc].ops_s.m)), ev]; })));
-    }
+    const drawQueries = queryFigs({ Q, QT, CONC, TIERS, C, ids: ["fig51", "fig52", "fig53"], unit: () => curChunk });
     (function chunkFilter() {
       const holder = document.getElementById("chunk-filter");
       for (const c of CH) {
@@ -1139,12 +1233,12 @@
           curChunk = c;
           holder.querySelectorAll(".chunk-btn").forEach(x => x.setAttribute("aria-pressed", "false"));
           b.setAttribute("aria-pressed", "true");
-          fig51(); fig52(); fig53();
+          drawQueries();
         });
         holder.appendChild(b);
       }
     })();
-    fig51(); fig52(); fig53();
+    drawQueries();
 
     // chunk-5000-style anomaly note: find the densest-tail hot cell outlier automatically
     (function queryNote() {
@@ -1182,7 +1276,7 @@
     /* ---- fig 6.2 least-stable cells ---- */
     (function fig62() {
       const cells = [];
-      for (const tier of ["cold", "hot"]) for (const c of CH) for (const qt of QT) for (const cc of CONC) {
+      for (const tier of TIERS) for (const c of CH) for (const qt of QT) for (const cc of CONC) {
         const cell = Q[tier][c][qt][cc]; const p = cell.p99, p50 = cell.p50;
         cells.push({ tier, c, qt, cc, spread: (p.hi - p.lo) / p.m * 100, p99: p.m, lo: p.lo, hi: p.hi, p50spread: (p50.hi - p50.lo) / p50.m * 100 });
       }
@@ -1200,35 +1294,7 @@
     })();
 
     /* ---- design-target table ---- */
-    (function targetTable() {
-      const t = document.getElementById("target-table");
-      const tr = document.createElement("tr");
-      ["Query type · tier", ...CONC.map(c => c + " p99")].forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
-      t.appendChild(tr);
-      const over = [];
-      for (const qt of QT) for (const tier of ["cold", "hot"]) {
-        const r = document.createElement("tr");
-        const name = document.createElement("td");
-        const tag = document.createElement("span"); tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
-        name.appendChild(tag); name.appendChild(document.createTextNode(`${qt} · ${tier}`)); r.appendChild(name);
-        for (const cc of CONC) {
-          let worstCell = null;
-          for (const c of CH) { const cell = Q[tier][c][qt][cc]; if (!worstCell || cell.p99.m > worstCell.cell.p99.m) worstCell = { cell, c }; }
-          const td = document.createElement("td");
-          td.textContent = fmtMs(worstCell.cell.p99.m) + " ms";
-          const note = document.createElement("span"); note.className = "cell-note"; note.textContent = ` (${worstCell.c})`; td.appendChild(note);
-          const ok = document.createElement("span");
-          if (worstCell.cell.p99.m > thr) { ok.className = "cell-warn"; ok.textContent = " ▲"; }
-          else if (worstCell.cell.p99.hi > thr) { ok.className = "cell-ok"; ok.textContent = " ✓†"; over.push(`${qt} · ${tier} · ${cc} on ${worstCell.c} (worst run ${fmtMs(worstCell.cell.p99.hi)} ms)`); }
-          else { ok.className = "cell-ok"; ok.textContent = " ✓"; }
-          td.appendChild(ok); r.appendChild(td);
-        }
-        t.appendChild(r);
-      }
-      document.getElementById("target-footnote").textContent = over.length
-        ? "✓ = median-run p99 within the budget for every chunk. † = passes at the median but at least one of the five runs exceeded it: " + over.join("; ") + "."
-        : "✓ = median-run p99 within the budget for every chunk, including each cell's min–max spread.";
-    })();
+    queryTargetTable("target-table", "target-footnote", { Q, QT, CONC, TIERS, C, units: CH, thr });
 
     document.getElementById("machine-metadata").textContent = (D.machine && D.machine.raw || "").trim();
   }
@@ -1273,24 +1339,33 @@
     // disappears and the following sections renumber.
     const showVariance = reps > 1;
     const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
+    // Queries gate off the same way: a campaign run with query = no carries no
+    // queries block, so the whole section disappears and the rest renumber.
+    const Q = D.queries;
+    const qGrid = Q ? queryGrid(Q, ORDER) : null;
+    const hasQueries = !!(qGrid && qGrid.QT.length && qGrid.CONC.length && qGrid.TIERS.length);
+    const qCheck = checkFor(D, "queries");
+    const qThr = qCheck && qCheck.threshold_ns ? qCheck.threshold_ns : 500e6;
     let secN = 2;
     const secNum = () => String(++secN).padStart(2, "0");
     const secCold = hasCold ? secNum() : null;
     const secHot = secNum();
+    const secQueries = hasQueries ? secNum() : null;
     const secVariance = showVariance ? secNum() : null;
     const secTarget = secNum();
     const secMethod = secNum();
     const PH = phaseState(D);
     // Judged budget: the selected phase's block time on phase-aware runs, else
-    // this run's checks (legacy behavior, 600 ms fallback). Null means no
+    // this run's keep-up check (legacy behavior, 600 ms fallback). Null means no
     // keep-up budget applies (unpaced campaign run with no phase selected).
-    const checksNs = D.checks && D.checks.interval_ns ? D.checks.interval_ns : null;
+    const keepCheck = checkFor(D, "ingest_hot");
+    const checksNs = keepCheck && keepCheck.interval_ns ? keepCheck.interval_ns : null;
     const interval = PH ? (PH.sel ? PH.sel.block_time_ns : checksNs) : (checksNs || 600e6);
     const intervalMs = interval ? interval / MS : null;
     const intervalTxt = interval ? fmtNsAxis(interval) : "";
     const bannerLabel = PH && PH.sel
       ? `Phase ${PH.sel.phase} block model (${intervalTxt})`
-      : (D.checks ? D.checks.label : "block model");
+      : (keepCheck ? keepCheck.label : "block model");
     const floor = interval ? 1e9 / interval : null;   // ledgers/s a block interval demands
     // Dataset-generation pace — a property of the run, never of the selected phase.
     const genNs = PH ? (PH.closeNs || null) : interval;
@@ -1411,6 +1486,24 @@
         "Per-ledger lag = max(commit − due, 0) over every committed ledger (" + medRuns + "). On-time ledgers count as zero, so p50 = 0 means on schedule at least half the time. Dashed line = one close interval; lag ÷ close interval = ledgers behind tip.")
         + `<p id="pace-readout-full" class="sec-intro"></p>` : ""}
     </section>
+    ${hasQueries ? `
+    <section id="queries">
+      <div class="sec-head"><span class="sec-num">${secQueries}</span><h2>Queries — cold vs hot tier</h2></div>
+      <p class="sec-intro">The read side of the same stores the sections above filled. Every query runs through the daemon's read facade, so each one resolves its serving tier as a served request does. Cold cells drop the dataset's artifacts from the OS page cache before measuring; hot cells warm first, because a warm cache is the hot tier's steady state. Pick a profile to scope the figures.</p>
+      <div class="filter-row" id="profile-filter"><span class="filter-lab">${esc(ds.unit_label)}</span></div>
+      ${figHTML("figq1", `Fig ${+secQueries}.1`, "Per-operation latency at " + (qGrid.CONC[0] || "c1") + " — cold vs hot", "figq1-legend", `Single-worker per-op latency percentiles (${medRuns}; log scale).`)}
+      ${figHTML("figq2", `Fig ${+secQueries}.2`, "Tail latency vs concurrency — p99", "figq2-legend", `p99 per-op latency as the worker count grows (${medRuns}; log scale, shared across panels).`)}
+      ${figHTML("figq3", `Fig ${+secQueries}.3`, "Throughput vs concurrency — completed ops/s", "figq3-legend", `Closed-loop throughput per cell (ops ÷ cell wall, ${medRuns}; log scale, shared across panels).`)}
+      <figure class="fig" id="figq4">
+        <div class="fig-head"><div><span class="fig-no">Fig ${+secQueries}.4</span><span class="fig-title">Per-cell setup and event-scan detail</span></div></div>
+        <div class="fig-body"><div class="tv-scroll"><table class="data" id="query-setup-table" style="width:100%"></table></div></div>
+        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> builds the read fixture, and <code>evict</code> drops the cold artifacts from the page cache once per cell — a hot leg has nothing to evict, so the row is absent. Event counts are the events one page actually returned.</figcaption>
+      </figure>
+      <h3 class="sub-h">Read-path target — ${esc(qCheck ? qCheck.label : "query p99")}</h3>
+      <p class="sec-intro">Each cell is the worst profile's median-run p99 for that query type, tier, and concurrency. The target is met when p99 ≤ ${fmtMs(qThr)} ms.</p>
+      <div class="target-table-wrap"><table class="target" id="query-target-table"></table></div>
+      <p id="query-target-footnote" style="color:var(--muted); font-size:12.5px; margin-top:10px"></p>
+    </section>` : ""}
     ${showVariance ? `
     <section id="variance">
       <div class="sec-head"><span class="sec-num">${secVariance}</span><h2>Run-to-run variance</h2></div>
@@ -1754,6 +1847,78 @@
         });
         t.appendChild(r);
       });
+    })();
+
+    /* ---- query section (profile-scoped) ---- */
+    if (hasQueries) (function queries() {
+      const { QT, CONC, TIERS } = qGrid;
+      let curProfile = ORDER[0];
+      const draw = queryFigs({ Q, QT, CONC, TIERS, C, ids: ["figq1", "figq2", "figq3"], unit: () => curProfile });
+      const holder = document.getElementById("profile-filter");
+      for (const p of ORDER) {
+        const b = document.createElement("button");
+        b.className = "chunk-btn"; b.setAttribute("aria-pressed", String(p === curProfile));
+        b.appendChild(document.createTextNode(disp(p) + " "));
+        const s = document.createElement("small"); s.textContent = "· " + sub(p); b.appendChild(s);
+        b.addEventListener("click", () => {
+          curProfile = p;
+          holder.querySelectorAll(".chunk-btn").forEach(x => x.setAttribute("aria-pressed", "false"));
+          b.setAttribute("aria-pressed", "true");
+          draw();
+        });
+        holder.appendChild(b);
+      }
+      draw();
+
+      // Setup rows and the event-scan detail, per profile and tier. Setup keys
+      // differ by tier (only a cold leg evicts), so the columns are the union of
+      // what the run actually recorded.
+      (function setupTable() {
+        const keys = [];
+        for (const tier of TIERS) for (const p of ORDER) {
+          const st = (Q[tier][p] || {}).setup || {};
+          for (const k of Object.keys(st)) if (!keys.includes(k)) keys.push(k);
+        }
+        const top = CONC[CONC.length - 1];
+        const t = document.getElementById("query-setup-table");
+        const head = [ds.unit_label, "Tier", ...keys, `events / page @ ${top}`, `events/s @ ${top}`];
+        const tr = document.createElement("tr");
+        head.forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
+        t.appendChild(tr);
+        for (const p of ORDER) for (const tier of TIERS) {
+          const st = (Q[tier][p] || {}).setup || {};
+          const ev = (Q[tier][p] || {}).events, evCell = ev && ev[top];
+          const cells = [disp(p), tier];
+          for (const k of keys) {
+            const v = st[k];
+            // peak_rss_bytes carries bytes in the duration field; everything
+            // else is a real duration.
+            cells.push(!v ? "—" : k === "peak_rss_bytes" ? trim(v.m / 2 ** 20) + " MiB" : fmtNs(v.m));
+          }
+          // items_r is the per-run raw count; with one rep it is one number.
+          cells.push(evCell && evCell.items_r ? evCell.items_r.join(" / ") : "—");
+          cells.push(evCell && evCell.items_s ? fmtInt(evCell.items_s.m) : "—");
+          const r = document.createElement("tr");
+          cells.forEach(v => { const td = document.createElement("td"); td.textContent = v; r.appendChild(td); });
+          t.appendChild(r);
+        }
+      })();
+
+      const { breaches, unitBreaches } = queryTargetTable("query-target-table", "query-target-footnote",
+        { Q, QT, CONC, TIERS, C, units: ORDER, thr: qThr });
+      const total = QT.length * TIERS.length * CONC.length;
+      const foot = document.getElementById("query-target-footnote");
+      if (foot) {
+        // A cell is missed when any unit misses it, so the two counts differ
+        // whenever more than one unit is over in the same cell. State both, or
+        // a hand count of the run's breaches will not reconcile with the table.
+        const perUnit = unitBreaches > breaches ? ` (${unitBreaches} ${ds.unit_label.toLowerCase()}-cells in all)` : "";
+        const verdict = document.createElement("strong");
+        verdict.textContent = breaches === 0
+          ? `All ${total} cells meet the target. `
+          : `${total - breaches} of ${total} cells meet the target; ${breaches} exceed it${perUnit}. `;
+        foot.prepend(verdict);
+      }
     })();
 
     document.getElementById("machine-metadata").textContent = (D.machine && D.machine.raw || "").trim();

@@ -99,6 +99,9 @@ function checkKind(kind, doc, group, data) {
   // Hot-only runs (ingest = "hot") hide the cold section and its three
   // figures, plus the cold-vs-hot rate figure in the hot section.
   if (kind === "synthetic" && !data.ingest_cold) { exp.sections -= 1; exp.minFigures -= 4; exp.minSvgs -= 4; }
+  // A synthetic run that swept queries gains the queries section: three charted
+  // figures plus the setup/event table (a figure with no SVG).
+  if (kind === "synthetic" && data.queries) { exp.sections += 1; exp.minFigures += 4; exp.minSvgs += 3; }
   const report = doc.getElementById("report");
   const sections = report.querySelectorAll("section").length;
   check(group, `${exp.sections} sections rendered`, sections === exp.sections, sections);
@@ -121,6 +124,63 @@ function checkKind(kind, doc, group, data) {
   check(group, "phase guide present", !!guide && /IngestLedger/.test(txt(guide)), guide ? "no IngestLedger" : "missing");
   const f42 = txt(doc.querySelector("#fig42-tv"));
   check(group, "all phases in fig42 table", /extract/.test(f42) && /commit \(fsync\)/.test(f42) && /apply/.test(f42), f42.slice(0, 160));
+  if (kind === "synthetic") checkSyntheticQueries(doc, group, data);
+}
+
+/* A synthetic run that carries a queries block must render the section: both
+   tiers, every swept type, the whole concurrency sweep, the setup rows, and the
+   read-path target table. A run without queries must render none of it. */
+function checkSyntheticQueries(doc, group, D) {
+  const sec = doc.getElementById("queries");
+  if (!D.queries) { check(group, "no queries section without a queries block", !sec, "section present"); return; }
+  check(group, "queries section present", !!sec, "missing");
+  if (!sec) return;
+  const tiers = Object.keys(D.queries);
+  const unit = D.dataset.unit_order[0];
+  const types = Object.keys(D.queries[tiers[0]][unit]).filter((k) => k !== "setup");
+  const concs = Object.keys(D.queries[tiers[0]][unit][types[0]]).filter((k) => /^c\d+$/.test(k));
+
+  const p99tv = txt(doc.querySelector("#figq2-tv"));
+  check(group, "every query type in the p99 table", types.every((t) => p99tv.includes(t)), p99tv.slice(0, 160));
+  check(group, "both tiers in the p99 table", tiers.every((t) => p99tv.includes(t)), p99tv.slice(0, 160));
+  check(group, "whole concurrency sweep in the p99 table", concs.every((c) => p99tv.includes(c + " p99")), p99tv.slice(0, 200));
+  check(group, "three query charts drawn", sec.querySelectorAll("svg").length >= 3, sec.querySelectorAll("svg").length + " svgs");
+  const picker = sec.querySelectorAll("#profile-filter .chunk-btn").length;
+  check(group, "one profile button per unit", picker === D.dataset.unit_order.length, picker + " buttons");
+
+  // Setup rows: `open` on both tiers, `evict` on cold only.
+  const setup = txt(doc.getElementById("query-setup-table"));
+  check(group, "setup table names open", /open/.test(setup), setup.slice(0, 160));
+  const coldHasEvict = tiers.includes("cold") && D.queries.cold[unit].setup && D.queries.cold[unit].setup.evict;
+  if (coldHasEvict) check(group, "setup table names evict (cold)", /evict/.test(setup), setup.slice(0, 160));
+  check(group, "events per page column filled", /events \/ page/.test(setup), setup.slice(0, 200));
+
+  // Read-path target table: one row per type × tier, one column per level.
+  const rows = sec.querySelectorAll("#query-target-table tr").length;
+  check(group, "query target table populated", rows === types.length * tiers.length + 1, rows + " rows");
+  const foot = txt(doc.getElementById("query-target-footnote"));
+  check(group, "query target verdict states cells met", /\d+ cells meet the target|of \d+ cells meet the target/.test(foot), foot.slice(0, 160));
+
+  // The verdict must reconcile with a hand count of the run's own breaches. A
+  // cell is judged by its worst unit, so several units can be over inside one
+  // cell — the table names the worst and flags the rest, and the footnote
+  // carries both counts. Recompute both from the data and pin them.
+  const thr = ((D.checks_all || [D.checks || {}]).find((c) => c && c.applies_to === "queries") || {}).threshold_ns || 500e6;
+  let cellBreaches = 0, unitBreaches = 0;
+  for (const qt of types) for (const tier of tiers) for (const cc of concs) {
+    const over = D.dataset.unit_order.filter((u) => D.queries[tier][u][qt][cc].p99.m > thr).length;
+    if (over) { cellBreaches++; unitBreaches += over; }
+  }
+  const total = types.length * tiers.length * concs.length;
+  const expected = cellBreaches === 0
+    ? `All ${total} cells meet the target.`
+    : `${total - cellBreaches} of ${total} cells meet the target; ${cellBreaches} exceed it`;
+  check(group, "verdict count matches a hand count of breaching cells", foot.includes(expected), foot.slice(0, 200));
+  if (unitBreaches > cellBreaches) {
+    check(group, "verdict also reports the per-unit breach count", foot.includes(`(${unitBreaches} `), foot.slice(0, 200));
+    check(group, "a multi-unit breach is marked '+N more' in its cell",
+      /\+\d+ more/.test(txt(doc.getElementById("query-target-table"))), "no +N more marker");
+  }
 }
 
 /* Expected phase-goal verdict, derived from the run data the same way the
