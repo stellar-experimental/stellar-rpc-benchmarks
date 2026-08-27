@@ -51,7 +51,8 @@ runner-build: ## Build the Go campaign runner
 runner-test: ## Vet and test the Go campaign runner
 	cd runner && go vet ./... && go test ./...
 
-smoke: ## Run the jsdom viewer smoke test (needs node; installs deps on first run)
+smoke: ## Generate the fixture runs, then run the jsdom viewer smoke test (needs node)
+	python3 tests/smoke/gen-fixtures.py
 	npm --prefix tests/smoke install --silent
 	npm --prefix tests/smoke test
 

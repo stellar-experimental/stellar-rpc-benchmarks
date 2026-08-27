@@ -9,28 +9,42 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DOCS = path.resolve(HERE, "..", "..", "docs");
+const FIXTURES = path.join(HERE, "fixtures");
 const ORIGIN = "http://viewer.local";
 
 const MIME = { ".json": "application/json", ".js": "text/javascript", ".css": "text/css", ".html": "text/html" };
 
-function fetchShim(input) {
-  const u = new URL(input, ORIGIN + "/");
-  const file = path.join(DOCS, decodeURIComponent(u.pathname));
-  return new Promise((resolve) => {
-    fs.readFile(file, "utf8", (err, body) => {
-      if (err) {
-        resolve({ ok: false, status: 404, headers: { get: () => null }, text: async () => "", json: async () => { throw new Error("404 " + u.pathname); } });
-        return;
-      }
-      resolve({
-        ok: true, status: 200,
-        headers: { get: (h) => (h.toLowerCase() === "content-type" ? MIME[path.extname(file)] || "text/plain" : null) },
-        text: async () => body,
-        json: async () => JSON.parse(body),
+const body200 = (body, ext) => ({
+  ok: true, status: 200,
+  headers: { get: (h) => (h.toLowerCase() === "content-type" ? MIME[ext] || "text/plain" : null) },
+  text: async () => body,
+  json: async () => JSON.parse(body),
+});
+
+/* `overlay` maps a request path ("runs/<id>.json") to a body served instead of
+   the file under docs/. Everything not named in it falls through to docs/, so
+   the manifest runs load byte-identically with or without one. */
+function makeFetch(overlay) {
+  return function (input) {
+    const u = new URL(input, ORIGIN + "/");
+    const rel = decodeURIComponent(u.pathname).replace(/^\/+/, "");
+    if (overlay && Object.prototype.hasOwnProperty.call(overlay, rel)) {
+      return Promise.resolve(body200(overlay[rel], ".json"));
+    }
+    const file = path.join(DOCS, rel);
+    return new Promise((resolve) => {
+      fs.readFile(file, "utf8", (err, body) => {
+        if (err) {
+          resolve({ ok: false, status: 404, headers: { get: () => null }, text: async () => "", json: async () => { throw new Error("404 " + u.pathname); } });
+          return;
+        }
+        resolve(body200(body, path.extname(file)));
       });
     });
-  });
+  };
 }
+
+const fetchShim = makeFetch(null);
 
 async function loadViewer(query, opts = {}) {
   const page = opts.page || "index.html";
@@ -49,7 +63,7 @@ async function loadViewer(query, opts = {}) {
   });
   const { window } = dom;
   // Environment stubs jsdom lacks (layout + media queries + fetch).
-  window.fetch = fetchShim;
+  window.fetch = opts.fetch || fetchShim;
   window.matchMedia = window.matchMedia || ((q) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
   Object.defineProperty(window.HTMLElement.prototype, "clientWidth", { get() { return 880; }, configurable: true });
   Object.defineProperty(window.Element.prototype, "getBoundingClientRect", {
@@ -295,6 +309,50 @@ for (const run of manifest.runs) {
     doc.getElementById("summary-link").getAttribute("href"));
   checkKind(run.kind, doc, group, runJSON(run.id));
   checkSanity(run.kind, doc, group, runJSON(run.id));
+  window.close();
+}
+
+/* ---------------- generated fixture runs (tests/smoke/fixtures) ---------------- */
+/* Shapes the converter can emit that no committed run carries yet — today the
+   open-loop (paced-RPS) queries block. `make smoke` regenerates them with
+   gen-fixtures.py; they are never committed and never reach docs/runs/, which
+   is the published site. Served through a fetch overlay: the run file itself,
+   plus a manifest with its entry appended so the viewer resolves ?run=<id>
+   rather than silently falling back to the first real run. */
+const fixtureFiles = fs.existsSync(FIXTURES)
+  ? fs.readdirSync(FIXTURES).filter((f) => f.endsWith(".json")).sort() : [];
+check("fixtures", "generated fixture runs present (run gen-fixtures.py)", fixtureFiles.length > 0, fixtureFiles.length + " files");
+for (const file of fixtureFiles) {
+  const raw = fs.readFileSync(path.join(FIXTURES, file), "utf8");
+  const D = JSON.parse(raw);
+  const group = `fixture:${D.run_id}`;
+  console.log(`\n=== ${D.run_id} (${D.dataset.kind}, generated fixture) ===`);
+  const entry = { id: D.run_id, name: D.run_name, date: D.run_date, kind: D.dataset.kind, path: `runs/${D.run_id}.json` };
+  const overlay = {
+    [`runs/${D.run_id}.json`]: raw,
+    "runs/index.json": JSON.stringify({ ...manifest, runs: [...manifest.runs, entry] }),
+  };
+  const { window, errors } = await loadViewer(`?run=${D.run_id}`, { fetch: makeFetch(overlay) });
+  const doc = window.document;
+  const report = doc.getElementById("report");
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "masthead rendered", !!report.querySelector(".masthead"), "missing");
+  // Guards the manifest overlay: without the entry the viewer would render the
+  // first real run under the fixture's deep link and everything below would pass.
+  const h1 = txt(doc.querySelector("#report h1"));
+  check(group, "the fixture run is what rendered", h1.includes(D.run_name.slice(0, 20)), h1);
+  check(group, "no error box", !report.querySelector(".error-box"), txt(report.querySelector(".error-box")));
+  const sections = report.querySelectorAll("section").length;
+  check(group, "the other sections still render", sections >= 5, sections + " sections");
+  // The fixture is only worth loading if it really carries the new shape.
+  const someQt = Object.values(Object.values(D.queries.hot)[0]).find((v) => v && v.verdict_1x);
+  check(group, "fixture carries r-cells + a 1x verdict", !!(D.campaign.query_load && someQt), "not the RPS shape");
+  // TODO(viewer-rps): the viewer keys its queries section off c<W> concurrency
+  // levels, finds none in an r<rate> block, and gates the whole section off —
+  // which is the correct degrade-gracefully behavior, not a pass. When the RPS
+  // renderer lands, replace this with the real assertions (section present, the
+  // rate ladder charted, achieved vs target, the 1x verdict per cell).
+  check(group, "queries section absent (viewer predates the r-cell shape)", !doc.getElementById("queries"), "present");
   window.close();
 }
 
