@@ -466,6 +466,15 @@ def match_phase(close_interval_ns):
     return None
 
 
+def phase_by_number(n):
+    """The phase table entry numbered n, or None for anything else (including
+    None and a number no phase carries)."""
+    for p in PHASE_TARGETS:
+        if p["phase"] == n:
+            return p
+    return None
+
+
 def format_interval(ns):
     """Short human label for a close interval: "2 s", "1.5 s", "600 ms"."""
     if ns >= 1_000_000_000 and ns % 100_000_000 == 0:
@@ -808,6 +817,7 @@ def build_queries(results_dir, layout, unit, reps, tier):
 
 # ------------------------------------------------------- query load verdicts
 _PROFILE_TAIL = re.compile(r"-\d+$")
+_RATE_KEY = re.compile(r"^r\d+(?:\.\d+)?$")
 
 
 def query_profile(unit):
@@ -822,9 +832,14 @@ def query_profile(unit):
 
 
 def rps_cells(qout):
-    """The rate cells of one qtype entry (a verdict sibling is not one)."""
+    """The rate cells of one qtype entry, keyed r<rate>.
+
+    The key match carries the weight: verdict_1x is a sibling of the cells that
+    also carries target_rps, so matching on that field alone would count the
+    verdict as a cell on any second pass over converted data.
+    """
     return {k: v for k, v in qout.items()
-            if isinstance(v, dict) and "target_rps" in v}
+            if _RATE_KEY.match(k) and isinstance(v, dict) and "target_rps" in v}
 
 
 def has_rps_cells(queries):
@@ -1173,18 +1188,25 @@ def convert(args):
     matched_phase = None
     if layout == "campaign":
         matched_phase = match_phase(close_interval_ns)
-        if matched_phase is not None:
-            campaign["phase"] = matched_phase["phase"]
+        # The campaign's GOAL phase. A paced campaign names it with its pace; an
+        # unpaced one (a cold-only query run has nothing to pace) states it in
+        # the manifest instead, as campaign.query_phase. The runner refuses a
+        # config where the two disagree, so the pace wins here without a check.
+        goal_phase = matched_phase or phase_by_number(
+            (metadata or {}).get("campaign", {}).get("query_phase"))
+        if goal_phase is not None:
+            campaign["phase"] = goal_phase["phase"]
         campaign["phase_targets"] = PHASE_TARGETS
         # RPS query cells are judged against the load-model floors, which are
-        # per phase: embed the table (as phase_targets is) and, when the pace
-        # names a phase, attach each qtype's verdict at its 1x cell.
+        # per phase: embed the table (as phase_targets is) and, when the run
+        # has a goal phase, attach each qtype's verdict at its 1x cell.
         if has_rps_cells(queries):
             campaign["query_load"] = QUERY_LOAD
-            if matched_phase is not None:
-                attach_query_verdicts(queries, matched_phase)
+            if goal_phase is not None:
+                attach_query_verdicts(queries, goal_phase)
             else:
-                warn("no phase matches the close interval; query load verdicts omitted")
+                warn("no phase from the close interval or manifest query_phase; "
+                     "query load verdicts omitted")
     if metadata:
         mc = metadata.get("campaign", {})
         if mc.get("name"):

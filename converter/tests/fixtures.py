@@ -316,7 +316,8 @@ def _rps_driver_rows(tier, qt, run, rates):
 
 
 def build_rps_bundle(root, reps=2, close_interval="600ms", dataset=RPS_DATASET,
-                     rates=None, sched_p99=None, svc_p99=None, mean_page=None):
+                     rates=None, sched_p99=None, svc_p99=None, mean_page=None,
+                     query_phase="auto"):
     """Campaign bundle with ONE unit (<dataset>-c1) whose query legs use the
     RPS-era per-qtype dirs. The ingest legs, metadata.json and machine metadata
     mirror build_campaign_bundle, so the whole convert() pipeline runs.
@@ -324,12 +325,19 @@ def build_rps_bundle(root, reps=2, close_interval="600ms", dataset=RPS_DATASET,
     Timing columns scale with the run number (median_low of the 2-rep default is
     the run-1 value); the count-carrying rows (millirps, shed) do not, so the
     achieved rate reads the same in every rep.
+
+    `query_phase` is the manifest's campaign.query_phase, the goal phase the
+    runner resolved. "auto" derives it from the pace (what a paced campaign
+    records); pass an int for an unpaced campaign that stated `phase` outright,
+    or 0 to omit the key the way the runner's omitempty does.
     """
     rates = dict(RPS_RATES if rates is None else rates)
     sched_p99 = dict({q: RPS_SCHED_P99_NS for q in rates}, **(sched_p99 or {}))
     svc_p99 = dict({q: RPS_SERVICE_P99_NS for q in rates}, **(svc_p99 or {}))
     mean_page = dict({q: RPS_MEAN_PAGE_NS for q in rates}, **(mean_page or {}))
     paced = close_interval not in ("0", "")
+    if query_phase == "auto":
+        query_phase = {"2s": 1, "1s": 2, "600ms": 3}.get(close_interval, 0)
     unit = f"{dataset}-c1"
     os.makedirs(root, exist_ok=True)
     for r in range(1, reps + 1):
@@ -356,15 +364,21 @@ def build_rps_bundle(root, reps=2, close_interval="600ms", dataset=RPS_DATASET,
                            _rps_driver_rows(tier, qt, r, rates))
                 _write_invocation(qdir, f"bench-query {tier}", close_interval)
 
+    campaign = {
+        "name": "rps-query-load", "config_file": "rps-query-load.toml",
+        "ref": "", "built_commit": COMMIT,
+        "ingest": "both", "query": "yes", "close_interval": close_interval,
+        "runs": reps, "query_duration": "60s",
+        "workers": 1, "hot_num_ledgers": 100,
+    }
+    if query_phase:
+        # omitempty: a campaign with no query legs resolves no phase, and a
+        # recorded 0 would read as one.
+        campaign["query_phase"] = query_phase
     metadata = {
         "schema_version": 1,
         "run_id": f"rps-{dataset}-b32bc9be-20260826T010000Z",
-        "campaign": {
-            "name": "rps-query-load", "config_file": "rps-query-load.toml",
-            "ref": "", "built_commit": COMMIT,
-            "ingest": "both", "query": "yes", "close_interval": close_interval,
-            "runs": reps, "query_rps_ladder": "0.5,1,2",
-        },
+        "campaign": campaign,
         "datasets": [{"name": dataset, "kind": "packs-local",
                       "location": f"/data/{dataset}/packs/cold", "chunks": [1]}],
         "hardware": {

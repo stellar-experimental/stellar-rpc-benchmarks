@@ -74,10 +74,18 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   duration, e.g. "2s"/"600ms"/"0"), else the hot
                                            //   invocation.json --close-interval flag. Absent when
                                            //   no manifest records it (legacy bundles).
-    "phase": 1,                            // optional; campaign layout only. The phase whose
-                                           //   block time equals close_interval_ns exactly
-                                           //   (2 s → 1, 1 s → 2, 600 ms → 3). Absent when the
-                                           //   pace matches no phase or the run is unpaced.
+    "phase": 1,                            // optional; campaign layout only. The campaign's GOAL
+                                           //   phase: the phase whose block time equals
+                                           //   close_interval_ns exactly (2 s → 1, 1 s → 2,
+                                           //   600 ms → 3), else the manifest's
+                                           //   campaign.query_phase when it names a phase (an
+                                           //   unpaced query campaign has no pace to read it
+                                           //   from). Absent when neither says. The pace wins if
+                                           //   both do — but the runner refuses a config where
+                                           //   they disagree, so they should not.
+                                           //   `checks` is NOT derived from this: block_keepup
+                                           //   comes from close_interval_ns alone, so an unpaced
+                                           //   run with a phase still earns no keep-up check.
     "phase_targets": [ { … }, … ],         // campaign layout only; the full three-phase target
                                            //   table, copied verbatim at convert time — see
                                            //   "Phase 1/2/3 performance targets" below.
@@ -88,9 +96,14 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   budgets) — see "queries" below.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
-    "config": { … }                        // optional; remaining metadata.json campaign knobs
-                                           //   (ingest/query/runs/query_concurrency/cold_iters/
-                                           //   hot_iters/workers/hot_num_ledgers/ref/built_commit)
+    "config": { … }                        // optional; remaining metadata.json campaign knobs,
+                                           //   passed through opaquely — read a key, never the
+                                           //   shape. Open-loop bundles carry ingest/query/runs/
+                                           //   query_duration/query_phase/workers/hot_num_ledgers/
+                                           //   ref/built_commit; closed-loop ones carry
+                                           //   query_concurrency/cold_iters/hot_iters in place of
+                                           //   query_duration/query_phase. Both generations exist
+                                           //   among the published runs.
   },
   "checks":                                 // this run's PRIMARY pass/fail semantics AS DATA
     { "kind": "query_p99_threshold", "threshold_ns": 500000000,
@@ -289,7 +302,8 @@ open-loop field (`service`, `wall`, `achieved_rps`, `dispatch_lag`, `shed`,
 `mean_page_ns`) is omitted with a converter warning when its row is missing from any
 rep — never zero-filled, so an `r`-array is always one entry per rep.
 
-`verdict_1x` is emitted for campaign-layout runs whose pace matches a phase. The 1×
+`verdict_1x` is emitted for campaign-layout runs that have a goal phase (see
+`campaign.phase` — the pace, else the manifest's `query_phase`). The 1×
 cell is the one paced at the phase's RPS floor for that profile and endpoint — the
 ladder's 0.5×/2× cells are context around it — and it is matched by VALUE, so the
 token's spelling never has to be guessed. The profile key is the dataset MODEL name:
@@ -298,7 +312,7 @@ the unit id minus its `-c<chunk>` suffix and minus the trailing per-ledger tx co
 (getTransaction's additional in-RPC p99 budget) and `page_budget` (getEvents' MEAN
 page-latency budget, which a sequential subscriber accumulates as lag) are **separate
 verdicts** — render them as their own columns and never fold them into `pass`. The
-whole object is omitted, with a warning, when the run matches no phase, the profile is
+whole object is omitted, with a warning, when the run has no goal phase, the profile is
 unknown to `targets.json`, or no cell sits at the floor; the data still converts.
 
 ## Manifest — `docs/runs/index.json`
@@ -360,8 +374,10 @@ additive, so manifest-less bundles convert unchanged:
 
 - **`metadata.json`** at the bundle root (schema_version 1) — the campaign runner's record.
   Source of truth for run identity (`run_id` → default `run_id`; `started_at` → default
-  `run_date`), the `campaign` config (incl. `close_interval` → `campaign.close_interval_ns`),
-  the structured `hardware` object, and `hostname`. `datasets[].kind` is the dataset
+  `run_date`), the `campaign` config (incl. `close_interval` → `campaign.close_interval_ns`,
+  and `query_phase` — the goal phase the runner resolved, which is what gives an UNPACED
+  query campaign its `campaign.phase` and its query verdicts), the structured `hardware`
+  object, and `hostname`. `datasets[].kind` is the dataset
   **transport** (`packs-local|packs-gs|packs-s3|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
   campaign display order. `finished_at` is absent until the campaign finishes (the runner
   writes the manifest up front), and `campaign.resumed` appears only on a bundle built

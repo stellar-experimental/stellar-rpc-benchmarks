@@ -200,6 +200,77 @@ class RpsVerdictOmissionTests(unittest.TestCase):
                             for w in warnings))
 
 
+class RpsExplicitPhaseTests(unittest.TestCase):
+    """An unpaced campaign has no pace to read a phase from — a cold-only query
+    run has nothing to pace — so the manifest states the goal phase outright as
+    campaign.query_phase, and the verdicts come from that."""
+    # the sac phase-1 floors x the 0.5/1/2 ladder
+    PHASE1_RATES = {"ledgers": ["0.25", "0.5", "1"], "txpage": ["7.5", "15", "30"],
+                    "txhash": ["150", "300", "600"], "events": ["1.5", "3", "6"]}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.data, cls.warnings, _ = build_and_convert(
+            close_interval="0", query_phase=1, rates=cls.PHASE1_RATES)
+        cls.cold = cls.data["queries"]["cold"][UNIT]
+
+    def test_clean_and_structurally_valid(self):
+        self.assertEqual(self.warnings, [])
+        self.assertEqual(convert.validate_run(self.data, reps=2), [])
+
+    def test_phase_from_the_manifest(self):
+        self.assertEqual(self.data["campaign"]["close_interval_ns"], 0)
+        self.assertEqual(self.data["campaign"]["phase"], 1)
+
+    def test_verdicts_at_the_phase1_floors(self):
+        for qt, rate in (("ledgers", "r0.5"), ("txpage", "r15"),
+                         ("txhash", "r300"), ("events", "r3")):
+            self.assertEqual(self.cold[qt]["verdict_1x"]["rate"], rate)
+        # phase 1's page budget is the loosest of the three
+        self.assertEqual(self.cold["events"]["verdict_1x"]["page_budget"]["budget_ns"],
+                         333_000_000)
+
+    def test_unpaced_still_earns_no_keepup_check(self):
+        # The goal phase judges the READ path; it does not invent a block model
+        # for a run that paced nothing.
+        self.assertEqual([c["kind"] for c in self.data["checks_all"]],
+                         ["query_p99_threshold"])
+
+    def test_neither_pace_nor_manifest_phase(self):
+        data, warnings, _ = build_and_convert(close_interval="0", query_phase=0)
+        self.assertNotIn("phase", data["campaign"])
+        self.assertNotIn("verdict_1x", data["queries"]["cold"][UNIT]["txhash"])
+        self.assertTrue(any("query_phase" in w and "verdicts omitted" in w
+                            for w in warnings))
+        self.assertEqual(convert.validate_run(data, reps=2), [])
+
+    def test_the_pace_wins_over_the_manifest(self):
+        # The runner refuses a config where the two disagree; if one ever
+        # reaches here, the measured pace is the truth.
+        data, _, _ = build_and_convert(close_interval="600ms", query_phase=1)
+        self.assertEqual(data["campaign"]["phase"], 3)
+        self.assertEqual(
+            data["queries"]["cold"][UNIT]["txhash"]["verdict_1x"]["rate"], "r1000")
+
+
+class RpsCellScanTests(unittest.TestCase):
+    """rps_cells must survive a second pass over already-converted data: the
+    verdict is a sibling of the rate cells and carries target_rps too."""
+    def test_verdict_is_not_a_cell(self):
+        data, _, _ = build_and_convert()
+        qout = data["queries"]["cold"][UNIT]["txhash"]
+        self.assertIn("verdict_1x", qout)
+        self.assertEqual(list(convert.rps_cells(qout)), ["r500", "r1000", "r2000"])
+        self.assertTrue(convert.has_rps_cells(data["queries"]))
+
+    def test_only_rate_keys_count(self):
+        cell = {"target_rps": 1.0}
+        self.assertEqual(
+            list(convert.rps_cells({"r1": cell, "r0.5": cell,
+                                    "verdict_1x": cell, "setup_r1": cell})),
+            ["r1", "r0.5"])
+
+
 class RpsRateTokenTests(unittest.TestCase):
     """Fractional rates must survive verbatim as cell keys and parse back."""
     @classmethod
