@@ -179,7 +179,10 @@ func TestLoadAcceptedConfigs(t *testing.T) {
 		src  string
 	}{
 		{"query false", strings.Replace(minimal, "query = true", "query = false", 1)},
-		{"ingest none", strings.Replace(minimal, `ingest = "both"`, `ingest = "none"`, 1)},
+		{"ingest none, datasets only", strings.NewReplacer(
+			`ingest = "both"`, `ingest = "none"`,
+			"query = true", "query = false",
+		).Replace(minimal)},
 		{"bare zero close_interval", withTop(`close_interval = "0"`)},
 		{"sub-second close_interval", withTop(`close_interval = "600ms"`)},
 		{"compound close_interval", withTop(`close_interval = "1m30s"`)},
@@ -292,6 +295,24 @@ func TestLoadRejects(t *testing.T) {
 			name: "bad ingest",
 			src:  strings.Replace(minimal, `ingest = "both"`, `ingest = "warm"`, 1),
 			want: []string{"ingest must be cold|hot|both|none", "warm"},
+		},
+		{
+			name: "query without cold ingest (hot)",
+			src:  strings.Replace(minimal, `ingest = "both"`, `ingest = "hot"`, 1),
+			want: []string{
+				"query = true needs the cold store a cold ingest builds",
+				"ingest = cold or both",
+				"hot",
+			},
+		},
+		{
+			name: "query without ingest (none)",
+			src:  strings.Replace(minimal, `ingest = "both"`, `ingest = "none"`, 1),
+			want: []string{
+				"query = true needs the cold store a cold ingest builds",
+				"ingest = cold or both",
+				"none",
+			},
 		},
 		{
 			name: "unparsable close_interval",

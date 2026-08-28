@@ -134,8 +134,11 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 		Tarball:       "/tmp/bench-results-" + runID + ".tgz",
 	}
 
-	// Query-hot needs the hot DB a hot ingest leaves behind, so it only runs
-	// when this campaign also ingests hot.
+	// Both query suites read a database this campaign builds. Query-cold needs
+	// the cold store a cold ingest leaves behind, which config validation makes
+	// sure of, so every query campaign ingests cold; query-hot needs the hot DB
+	// a hot ingest leaves behind, so the hot half is the optional one and only
+	// runs when this campaign also ingests hot.
 	ingestCold := cfg.Ingest == "cold" || cfg.Ingest == "both"
 	ingestHot := cfg.Ingest == "hot" || cfg.Ingest == "both"
 	queryCold := cfg.Query
@@ -168,7 +171,7 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	if queryCold {
 		forEachCell(cfg, func(d *config.Dataset, chunk, rep int) {
 			for _, qtype := range queryTypes {
-				p.Steps = append(p.Steps, queryColdLeg(p, in, d, chunk, rep, qtype))
+				p.Steps = append(p.Steps, queryColdLeg(p, in, cfg, d, chunk, rep, qtype))
 			}
 		})
 	}
@@ -328,8 +331,8 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 func ingestColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int) Step {
 	id := fmt.Sprintf("ingest-cold-%s-c%d-run%d", d.Name, chunk, rep)
 	out := filepath.Join(p.ResultsDir, id)
-	scratch := filepath.Join(in.BenchRoot, "scratch", d.Name, strconv.Itoa(chunk))
-	return Step{
+	scratch := coldDir(in, d, chunk)
+	step := Step{
 		ID:    id,
 		Kind:  KindLeg,
 		Timed: true,
@@ -342,12 +345,20 @@ func ingestColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, ch
 			"--out=" + out,
 		}},
 		OutDir: out,
-		// Nothing reads the cold scratch DB afterwards, so it goes away as
-		// soon as the rep is done instead of squatting until the next rep.
-		PreClean:  []string{scratch},
-		PostClean: []string{scratch},
-		Needs:     []string{"build", "dataset-" + d.Name},
+		// The cold store is wiped before each rep, so every rep is timed
+		// against bare ground. Every rep of a cell builds the same chunk, so
+		// the store the last rep leaves behind is the whole store — and that
+		// is what the cell's cold query suite reads.
+		PreClean: []string{scratch},
+		Needs:    []string{"build", "dataset-" + d.Name},
 	}
+	// With no query suite nothing reads that store afterwards, so it goes away
+	// as soon as the rep is done instead of squatting for the rest of the
+	// campaign. When there is one, the cell's last cold query leg frees it.
+	if !cfg.Query {
+		step.PostClean = []string{scratch}
+	}
+	return step
 }
 
 func ingestHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int) Step {
@@ -379,16 +390,21 @@ func ingestHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	}
 }
 
-func queryColdLeg(p *Plan, in Inputs, d *config.Dataset, chunk, rep int, qtype string) Step {
+func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int, qtype string) Step {
 	id := fmt.Sprintf("query-cold-%s-c%d-%s-run%d", d.Name, chunk, qtype, rep)
 	out := filepath.Join(p.ResultsDir, id)
-	return Step{
+	cold := coldDir(in, d, chunk)
+	step := Step{
 		ID:    id,
 		Kind:  KindLeg,
 		Timed: true,
 		Argv: [][]string{{
 			p.Bin, "bench-query", "cold",
-			"--cold-dir=" + datasetRoot(in, d),
+			// The store this campaign's own cold ingest built, not the cold
+			// tree banked inside the golden dataset: that one was frozen by
+			// another binary, and the on-disk index format is allowed to
+			// change under it.
+			"--cold-dir=" + cold,
 			"--start-chunk=" + strconv.Itoa(chunk), "--num-chunks=1",
 			"--types=" + qtype,
 			"--target-rps=" + targetRPS(in, d, qtype),
@@ -396,8 +412,24 @@ func queryColdLeg(p *Plan, in Inputs, d *config.Dataset, chunk, rep int, qtype s
 			"--out=" + out,
 		}},
 		OutDir: out,
-		Needs:  []string{"build", "dataset-" + d.Name},
+		// The dependency is on the *last* cold-ingest rep of this cell, not on
+		// this leg's own rep number: each rep wipes and rebuilds the cold
+		// store, so only the final rep's success guarantees a whole store to
+		// query.
+		Needs: []string{
+			"build",
+			"dataset-" + d.Name,
+			fmt.Sprintf("ingest-cold-%s-c%d-run%d", d.Name, chunk, cfg.Runs),
+		},
 	}
+	// The store is freed as soon as the last leg that reads it succeeds — the
+	// last query type of the last rep — so peak disk stays bounded to the
+	// campaign's cells. A leg that fails keeps its store for diagnosis,
+	// because post-cleaning only runs on success.
+	if rep == cfg.Runs && qtype == queryTypes[len(queryTypes)-1] {
+		step.PostClean = []string{cold}
+	}
+	return step
 }
 
 func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int, qtype string) Step {
@@ -460,6 +492,12 @@ func datasetRoot(in Inputs, d *config.Dataset) string {
 
 func hotDir(in Inputs, d *config.Dataset, chunk int) string {
 	return filepath.Join(in.BenchRoot, "hot", d.Name, strconv.Itoa(chunk))
+}
+
+// coldDir is where a cell's cold ingest builds its cold store, and what the
+// cell's cold query legs read.
+func coldDir(in Inputs, d *config.Dataset, chunk int) string {
+	return filepath.Join(in.BenchRoot, "scratch", d.Name, strconv.Itoa(chunk))
 }
 
 // derefLedgers is the fixture ledger count; config validation guarantees

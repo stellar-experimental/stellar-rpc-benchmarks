@@ -150,9 +150,6 @@
       "pre_clean": [
         "/bench/scratch/sac-6000/1"
       ],
-      "post_clean": [
-        "/bench/scratch/sac-6000/1"
-      ],
       "needs": [
         "build",
         "dataset-sac-6000"
@@ -178,9 +175,6 @@
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run2",
       "pre_clean": [
-        "/bench/scratch/sac-6000/1"
-      ],
-      "post_clean": [
         "/bench/scratch/sac-6000/1"
       ],
       "needs": [
@@ -210,9 +204,6 @@
       "pre_clean": [
         "/bench/scratch/sac-6000/2"
       ],
-      "post_clean": [
-        "/bench/scratch/sac-6000/2"
-      ],
       "needs": [
         "build",
         "dataset-sac-6000"
@@ -238,9 +229,6 @@
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run2",
       "pre_clean": [
-        "/bench/scratch/sac-6000/2"
-      ],
-      "post_clean": [
         "/bench/scratch/sac-6000/2"
       ],
       "needs": [
@@ -270,9 +258,6 @@
       "pre_clean": [
         "/bench/scratch/soroswap-1500/1"
       ],
-      "post_clean": [
-        "/bench/scratch/soroswap-1500/1"
-      ],
       "needs": [
         "build",
         "dataset-soroswap-1500"
@@ -298,9 +283,6 @@
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run2",
       "pre_clean": [
-        "/bench/scratch/soroswap-1500/1"
-      ],
-      "post_clean": [
         "/bench/scratch/soroswap-1500/1"
       ],
       "needs": [
@@ -330,9 +312,6 @@
       "pre_clean": [
         "/bench/scratch/soroswap-1500/2"
       ],
-      "post_clean": [
-        "/bench/scratch/soroswap-1500/2"
-      ],
       "needs": [
         "build",
         "dataset-soroswap-1500"
@@ -358,9 +337,6 @@
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run2",
       "pre_clean": [
-        "/bench/scratch/soroswap-1500/2"
-      ],
-      "post_clean": [
         "/bench/scratch/soroswap-1500/2"
       ],
       "needs": [
@@ -593,7 +569,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=ledgers",
@@ -605,7 +581,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -617,7 +594,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txpage",
@@ -629,7 +606,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -641,7 +619,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txhash",
@@ -653,7 +631,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -665,7 +644,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=events",
@@ -677,7 +656,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -689,7 +669,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=ledgers",
@@ -701,7 +681,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run2",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -713,7 +694,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txpage",
@@ -725,7 +706,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run2",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -737,7 +719,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txhash",
@@ -749,7 +731,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run2",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -761,7 +744,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=events",
@@ -771,9 +754,13 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run2",
+      "post_clean": [
+        "/bench/scratch/sac-6000/1"
+      ],
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c1-run2"
       ]
     },
     {
@@ -785,7 +772,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=ledgers",
@@ -797,7 +784,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -809,7 +797,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txpage",
@@ -821,7 +809,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -833,7 +822,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txhash",
@@ -845,7 +834,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -857,7 +847,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=events",
@@ -869,7 +859,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run1",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -881,7 +872,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=ledgers",
@@ -893,7 +884,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run2",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -905,7 +897,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txpage",
@@ -917,7 +909,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run2",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -929,7 +922,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txhash",
@@ -941,7 +934,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run2",
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -953,7 +947,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/sac-6000",
+          "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=events",
@@ -963,9 +957,13 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run2",
+      "post_clean": [
+        "/bench/scratch/sac-6000/2"
+      ],
       "needs": [
         "build",
-        "dataset-sac-6000"
+        "dataset-sac-6000",
+        "ingest-cold-sac-6000-c2-run2"
       ]
     },
     {
@@ -977,7 +975,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=ledgers",
@@ -989,7 +987,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1001,7 +1000,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txpage",
@@ -1013,7 +1012,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1025,7 +1025,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txhash",
@@ -1037,7 +1037,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1049,7 +1050,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=events",
@@ -1061,7 +1062,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1073,7 +1075,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=ledgers",
@@ -1085,7 +1087,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run2",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1097,7 +1100,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txpage",
@@ -1109,7 +1112,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run2",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1121,7 +1125,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=txhash",
@@ -1133,7 +1137,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run2",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1145,7 +1150,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
           "--num-chunks=1",
           "--types=events",
@@ -1155,9 +1160,13 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run2",
+      "post_clean": [
+        "/bench/scratch/soroswap-1500/1"
+      ],
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c1-run2"
       ]
     },
     {
@@ -1169,7 +1178,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=ledgers",
@@ -1181,7 +1190,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1193,7 +1203,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txpage",
@@ -1205,7 +1215,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1217,7 +1228,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txhash",
@@ -1229,7 +1240,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1241,7 +1253,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=events",
@@ -1253,7 +1265,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run1",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1265,7 +1278,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=ledgers",
@@ -1277,7 +1290,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run2",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1289,7 +1303,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txpage",
@@ -1301,7 +1315,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run2",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1313,7 +1328,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=txhash",
@@ -1325,7 +1340,8 @@
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run2",
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {
@@ -1337,7 +1353,7 @@
           "/bench/bin/stellar-rpc-deadbeef",
           "bench-query",
           "cold",
-          "--cold-dir=/bench/golden/soroswap-1500",
+          "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
           "--num-chunks=1",
           "--types=events",
@@ -1347,9 +1363,13 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run2",
+      "post_clean": [
+        "/bench/scratch/soroswap-1500/2"
+      ],
       "needs": [
         "build",
-        "dataset-soroswap-1500"
+        "dataset-soroswap-1500",
+        "ingest-cold-soroswap-1500-c2-run2"
       ]
     },
     {

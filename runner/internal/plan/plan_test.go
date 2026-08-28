@@ -255,9 +255,12 @@ func TestSuiteOrdering(t *testing.T) {
 	}
 }
 
+// hotConfig is a hot-suite campaign. It ingests both tiers because query =
+// true needs the cold store a cold ingest builds; the assertions below are all
+// about the hot legs.
 const hotConfig = `
 name = "hot"
-ingest = "hot"
+ingest = "both"
 query = true
 runs = 1
 hot_num_ledgers = %d
@@ -343,6 +346,64 @@ chunks = [3]
 	}
 }
 
+// TestColdQueryReadsTheCampaignsColdStore pins the fix for the golden dataset's
+// banked cold tree being unreadable by a newer binary: a cold query leg reads
+// the store this campaign's own cold ingest built, waits for the last rep that
+// wrote it, and the last leg that reads it frees it.
+func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
+	p := buildGolden(t)
+	seen, cleaners := 0, 0
+	for _, s := range p.Steps {
+		if strings.HasPrefix(s.ID, "ingest-cold-") {
+			if s.PostClean != nil {
+				t.Errorf("%s post_clean = %v, want none — the cold query suite reads that store", s.ID, s.PostClean)
+			}
+			continue
+		}
+		if !strings.HasPrefix(s.ID, "query-cold-") {
+			continue
+		}
+		seen++
+		// runs = 2, so every rep — not just rep 2 — waits on rep 2. The ingest
+		// legs are per cell, not per query type, so the type drops off the id.
+		rest := strings.TrimPrefix(s.ID, "query-cold-")
+		cell, rep, _ := strings.Cut(rest, "-run")
+		qtype := cell[strings.LastIndex(cell, "-")+1:]
+		cell = cell[:strings.LastIndex(cell, "-")]
+		for _, want := range []string{"build", "ingest-cold-" + cell + "-run2"} {
+			if !slices.Contains(s.Needs, want) {
+				t.Errorf("%s needs %v, want it to include %q", s.ID, s.Needs, want)
+			}
+		}
+		// cell is <dataset>-c<chunk>; split on the last "-c" so a dataset name
+		// containing "-c" cannot mislead the path.
+		i := strings.LastIndex(cell, "-c")
+		cold := "/bench/scratch/" + cell[:i] + "/" + cell[i+2:]
+		if !slices.Contains(s.Argv[0], "--cold-dir="+cold) {
+			t.Errorf("%s argv = %v, want --cold-dir=%s", s.ID, s.Argv[0], cold)
+		}
+		if slices.ContainsFunc(s.Argv[0], func(a string) bool { return strings.HasPrefix(a, "--cold-dir=/bench/golden/") }) {
+			t.Errorf("%s argv = %v, want no --cold-dir under the golden dataset root", s.ID, s.Argv[0])
+		}
+		last := rep == "2" && qtype == queryTypes[len(queryTypes)-1]
+		switch {
+		case last:
+			cleaners++
+			if want := []string{cold}; !slices.Equal(s.PostClean, want) {
+				t.Errorf("%s post_clean = %v, want %v — the last reader frees the store", s.ID, s.PostClean, want)
+			}
+		case s.PostClean != nil:
+			t.Errorf("%s post_clean = %v, want none — later legs still read that store", s.ID, s.PostClean)
+		}
+	}
+	if seen != 32 { // 2 datasets x 2 chunks x 2 reps x 4 query types
+		t.Errorf("found %d query-cold steps, want 32", seen)
+	}
+	if cleaners != 4 { // one per cell: 2 datasets x 2 chunks
+		t.Errorf("%d cold query legs post-clean, want 4 — one per cell", cleaners)
+	}
+}
+
 func TestNotes(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -355,12 +416,6 @@ func TestNotes(t *testing.T) {
 			ingest: "cold",
 			query:  true,
 			want:   []string{"query = true with ingest = cold leaves no hot DB — running the cold query suite only"},
-		},
-		{
-			name:   "query with no ingest gets the same note",
-			ingest: "none",
-			query:  true,
-			want:   []string{"query = true with ingest = none leaves no hot DB — running the cold query suite only"},
 		},
 		{
 			name:   "datasets-only campaign says so",

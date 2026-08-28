@@ -148,6 +148,14 @@ func (c *Config) validate() error {
 		}
 		return fmt.Errorf("config: ingest must be cold|hot|both|none (got '%s')", got)
 	}
+	// Both query suites read a database this campaign builds: the cold suite
+	// reads the cold store the cold ingest leaves behind (the golden dataset's
+	// banked cold tree is not read — it was frozen by another binary, and the
+	// on-disk index format is allowed to change under it), and the hot suite
+	// reads the hot DB. So query = true needs at least a cold ingest.
+	if c.Query && c.Ingest != "cold" && c.Ingest != "both" {
+		return fmt.Errorf("config: query = true needs the cold store a cold ingest builds: use ingest = cold or both (got '%s')", c.Ingest)
+	}
 	if err := validateCloseInterval(c.CloseInterval); err != nil {
 		return err
 	}
