@@ -102,6 +102,26 @@ const EXPECT = {
   synthetic: { sections: 7, requiredIds: ["target"], minFigures: 7, minSvgs: 7 },
 };
 
+/* Which query-cell generation a run carries (SCHEMA "Query cells: two
+   generations"): "closed" = a c<W> concurrency sweep, "open" = r<rate> paced
+   legs, null = no queries. A run carries one or the other, never both. */
+const CONC_KEY = /^c\d+$/;
+const RATE_KEY = /^r\d+(\.\d+)?$/;
+const qEntry = (D) => {
+  const tier = Object.keys(D.queries || {})[0];
+  const unit = D.dataset.unit_order[0];
+  const e = ((D.queries || {})[tier] || {})[unit] || {};
+  const qt = Object.keys(e).filter((k) => k !== "setup")[0];
+  return qt ? e[qt] : {};
+};
+const rateKeys = (qout) => Object.keys(qout).filter((k) => RATE_KEY.test(k)).sort((a, b) => +a.slice(1) - +b.slice(1));
+function queryShape(D) {
+  if (!D.queries) return null;
+  const e = qEntry(D);
+  if (Object.keys(e).some((k) => CONC_KEY.test(k))) return "closed";
+  return rateKeys(e).length ? "open" : null;
+}
+
 function checkKind(kind, doc, group, data) {
   const reps = data.campaign.reps;
   const base = EXPECT[kind];
@@ -113,9 +133,15 @@ function checkKind(kind, doc, group, data) {
   // Hot-only runs (ingest = "hot") hide the cold section and its three
   // figures, plus the cold-vs-hot rate figure in the hot section.
   if (kind === "synthetic" && !data.ingest_cold) { exp.sections -= 1; exp.minFigures -= 4; exp.minSvgs -= 4; }
-  // A synthetic run that swept queries gains the queries section: three charted
-  // figures plus the setup/event table (a figure with no SVG).
-  if (kind === "synthetic" && data.queries) { exp.sections += 1; exp.minFigures += 4; exp.minSvgs += 3; }
+  // A synthetic run that swept queries gains the queries section. Both cell
+  // generations draw three charts; the closed-loop sweep adds one table figure
+  // (setup/event scan), the open-loop one adds two (the 1x verdict table as
+  // well). checkSyntheticQueries pins the exact per-section counts.
+  if (kind === "synthetic" && data.queries) {
+    exp.sections += 1;
+    exp.minFigures += queryShape(data) === "open" ? 5 : 4;
+    exp.minSvgs += 3;
+  }
   const report = doc.getElementById("report");
   const sections = report.querySelectorAll("section").length;
   check(group, `${exp.sections} sections rendered`, sections === exp.sections, sections);
@@ -141,14 +167,26 @@ function checkKind(kind, doc, group, data) {
   if (kind === "synthetic") checkSyntheticQueries(doc, group, data);
 }
 
-/* A synthetic run that carries a queries block must render the section: both
-   tiers, every swept type, the whole concurrency sweep, the setup rows, and the
-   read-path target table. A run without queries must render none of it. */
+/* A synthetic run that carries a queries block must render the section. The two
+   cell generations render entirely different sections, so the shape decides
+   which assertions apply. A run without queries must render none of it. */
 function checkSyntheticQueries(doc, group, D) {
   const sec = doc.getElementById("queries");
   if (!D.queries) { check(group, "no queries section without a queries block", !sec, "section present"); return; }
   check(group, "queries section present", !!sec, "missing");
   if (!sec) return;
+  const shape = queryShape(D);
+  // Exact per-section counts, both generations: three charts either way, plus
+  // the table figures each shape adds.
+  const figs = sec.querySelectorAll("figure.fig").length;
+  const svgs = sec.querySelectorAll("svg").length;
+  const wantFigs = shape === "open" ? 5 : 4;
+  check(group, `queries section emits exactly ${wantFigs} figures (${shape}-loop)`, figs === wantFigs, figs + " figures");
+  check(group, "queries section emits exactly 3 charts", svgs === 3, svgs + " svgs");
+  const picker = sec.querySelectorAll("#profile-filter .chunk-btn").length;
+  check(group, "one profile button per unit", picker === D.dataset.unit_order.length, picker + " buttons");
+  if (shape === "open") { checkOpenLoopQueries(doc, sec, group, D); return; }
+
   const tiers = Object.keys(D.queries);
   const unit = D.dataset.unit_order[0];
   const types = Object.keys(D.queries[tiers[0]][unit]).filter((k) => k !== "setup");
@@ -158,10 +196,6 @@ function checkSyntheticQueries(doc, group, D) {
   check(group, "every query type in the p99 table", types.every((t) => p99tv.includes(t)), p99tv.slice(0, 160));
   check(group, "both tiers in the p99 table", tiers.every((t) => p99tv.includes(t)), p99tv.slice(0, 160));
   check(group, "whole concurrency sweep in the p99 table", concs.every((c) => p99tv.includes(c + " p99")), p99tv.slice(0, 200));
-  check(group, "three query charts drawn", sec.querySelectorAll("svg").length >= 3, sec.querySelectorAll("svg").length + " svgs");
-  const picker = sec.querySelectorAll("#profile-filter .chunk-btn").length;
-  check(group, "one profile button per unit", picker === D.dataset.unit_order.length, picker + " buttons");
-
   // Setup rows: `open` on both tiers, `evict` on cold only.
   const setup = txt(doc.getElementById("query-setup-table"));
   check(group, "setup table names open", /open/.test(setup), setup.slice(0, 160));
@@ -195,6 +229,101 @@ function checkSyntheticQueries(doc, group, D) {
     check(group, "a multi-unit breach is marked '+N more' in its cell",
       /\+\d+ more/.test(txt(doc.getElementById("query-target-table"))), "no +N more marker");
   }
+}
+
+/* The open-loop (paced-RPS) queries section. Everything asserted here is
+   recomputed from the run's own data — the fixture's breach count, its
+   saturated rung and its rates all follow from the JSON, so a regenerated
+   fixture with different numbers still gates the same properties. */
+const ENDPOINT = { txhash: "getTransaction", txpage: "getTransactions", ledgers: "getLedgers", events: "getEvents" };
+// Mirrors the viewer's rate formatting (docs/app.js fmtRps).
+const fmtRps = (v) => v >= 100 ? Math.round(v).toLocaleString("en-US")
+  : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2));
+const SATURATED = 0.95;
+
+function checkOpenLoopQueries(doc, sec, group, D) {
+  const secTxt = txt(sec);
+  const tiers = Object.keys(D.queries);
+  const units = D.dataset.unit_order;
+  const types = Object.keys(D.queries[tiers[0]][units[0]]).filter((k) => k !== "setup");
+
+  // Human endpoint names everywhere; the CSV's machine names nowhere.
+  check(group, "endpoint display names rendered", types.every((t) => !ENDPOINT[t] || secTxt.includes(ENDPOINT[t])),
+    types.map((t) => ENDPOINT[t]).join(","));
+  const rawTokens = secTxt.match(/\btxhash\b|\btxpage\b|\br\d+(?:\.\d+)?\b/g) || [];
+  check(group, "no raw CSV tokens in the rendered section", rawTokens.length === 0, rawTokens.slice(0, 6).join(","));
+
+  // Verdict table: one row per endpoint × profile × tier, and one chip per
+  // budget the run actually judged — headline, plus getTransaction's in-RPC
+  // budget and getEvents' page budget as separate verdicts.
+  const tbl = doc.getElementById("query-verdict-table");
+  check(group, "verdict table rendered", !!tbl, "missing");
+  if (!tbl) return;
+  let checks = 0, fails = 0, rows = 0;
+  const judged = [];
+  for (const qt of types) for (const u of units) for (const tier of tiers) {
+    const qout = ((D.queries[tier] || {})[u] || {})[qt];
+    if (!qout) continue;
+    const v = qout.verdict_1x;
+    const keys = rateKeys(qout);
+    if (!keys.length) continue;
+    rows++;
+    const key = v && v.rate && qout[v.rate] ? v.rate : keys[Math.floor((keys.length - 1) / 2)];
+    judged.push({ qt, u, tier, cell: qout[key], v });
+    for (const ok of [v ? v.pass : null, v && v.in_rpc ? v.in_rpc.pass : null,
+      v && v.page_budget ? v.page_budget.pass : null]) {
+      if (ok === null) continue;
+      checks++; if (!ok) fails++;
+    }
+  }
+  check(group, `verdict table has one row per endpoint × profile × tier (${rows})`,
+    tbl.querySelectorAll("tr").length === rows + 1, tbl.querySelectorAll("tr").length + " rows");
+  const chipFails = tbl.querySelectorAll(".q-fail").length;
+  const chipPass = tbl.querySelectorAll(".q-pass").length;
+  check(group, `breach chips match a hand count of the run's 1× verdicts (${fails})`,
+    chipFails === fails, chipFails + " ▲ chips, expected " + fails);
+  check(group, `passing chips match the hand count (${checks - fails})`,
+    chipPass === checks - fails, chipPass + " ✓ chips");
+  const foot = txt(doc.getElementById("query-verdict-footnote"));
+  const wantFoot = fails === 0
+    ? `All ${checks} checks pass at the 1× rate.`
+    : `${checks - fails} of ${checks} checks pass at the 1× rate; ${fails} breach.`;
+  check(group, "verdict footnote reconciles with the chips", foot.includes(wantFoot), foot.slice(0, 200));
+  // The three budgets are separate columns, never folded into one verdict.
+  const heads = [...tbl.querySelectorAll("th")].map(txt);
+  check(group, "in-RPC and mean-page budgets are their own columns",
+    heads.some((h) => /In-RPC p99/.test(h)) && heads.some((h) => /Mean page/.test(h)), heads.join(" | "));
+
+  // Saturation at the top rung is legible: the ladder names the shortfall and
+  // both the offered and served rates for the profile the picker opens on.
+  const first = units[0];
+  const sat = [];
+  for (const qt of types) for (const tier of tiers) {
+    const qout = ((D.queries[tier] || {})[first] || {})[qt] || {};
+    for (const k of rateKeys(qout)) {
+      const c = qout[k], target = c.target_rps != null ? c.target_rps : +k.slice(1);
+      if (c.achieved_rps && c.achieved_rps.m < target * SATURATED) sat.push({ qt, tier, target, got: c.achieved_rps.m });
+    }
+  }
+  const ladder = txt(doc.querySelector("#figq2-tv"));
+  const marks = (ladder.match(/% under target/g) || []).length;
+  check(group, `ladder flags every saturated rung of the opening profile (${sat.length})`, marks === sat.length, marks + " flagged");
+  check(group, "ladder shows the saturated rung's offered and served rates",
+    sat.length === 0 || sat.every((s) => ladder.includes(fmtRps(s.target) + " rps") && ladder.includes(fmtRps(s.got) + " rps")),
+    ladder.slice(0, 200));
+  // Every rung of every endpoint × tier is listed, labelled by multiplier.
+  const rungRows = judged.filter((j) => j.u === first).length;
+  check(group, "ladder table lists 1× for every endpoint × tier of the profile",
+    (ladder.match(/1×/g) || []).length >= rungRows, ladder.slice(0, 160));
+
+  // Latency detail at 1×: the scheduled distribution plus the in-RPC column.
+  const detail = txt(doc.querySelector("#figq4-tv"));
+  check(group, "1× latency table carries p50/p90/p99/max + in-RPC p99",
+    /p50/.test(detail) && /p99/.test(detail) && /In-RPC p99/.test(detail), detail.slice(0, 160));
+  // Setup/event-scan table still works off `setup`.
+  const setup = txt(doc.getElementById("query-setup-table"));
+  check(group, "setup table names open", /open/.test(setup), setup.slice(0, 160));
+  check(group, "setup table carries the 1× event columns", /mean page 1×/.test(setup), setup.slice(0, 200));
 }
 
 /* Expected phase-goal verdict, derived from the run data the same way the
@@ -347,12 +476,8 @@ for (const file of fixtureFiles) {
   // The fixture is only worth loading if it really carries the new shape.
   const someQt = Object.values(Object.values(D.queries.hot)[0]).find((v) => v && v.verdict_1x);
   check(group, "fixture carries r-cells + a 1x verdict", !!(D.campaign.query_load && someQt), "not the RPS shape");
-  // TODO(viewer-rps): the viewer keys its queries section off c<W> concurrency
-  // levels, finds none in an r<rate> block, and gates the whole section off —
-  // which is the correct degrade-gracefully behavior, not a pass. When the RPS
-  // renderer lands, replace this with the real assertions (section present, the
-  // rate ladder charted, achieved vs target, the 1x verdict per cell).
-  check(group, "queries section absent (viewer predates the r-cell shape)", !doc.getElementById("queries"), "present");
+  check(group, "fixture detected as the open-loop shape", queryShape(D) === "open", queryShape(D));
+  checkSyntheticQueries(doc, group, D);
   window.close();
 }
 
