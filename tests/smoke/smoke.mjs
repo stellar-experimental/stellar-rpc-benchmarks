@@ -107,20 +107,42 @@ const EXPECT = {
    legs, null = no queries. A run carries one or the other, never both. */
 const CONC_KEY = /^c\d+$/;
 const RATE_KEY = /^r\d+(\.\d+)?$/;
-const qEntry = (D) => {
-  const tier = Object.keys(D.queries || {})[0];
-  const unit = D.dataset.unit_order[0];
-  const e = ((D.queries || {})[tier] || {})[unit] || {};
-  const qt = Object.keys(e).filter((k) => k !== "setup")[0];
-  return qt ? e[qt] : {};
-};
 const rateKeys = (qout) => Object.keys(qout).filter((k) => RATE_KEY.test(k)).sort((a, b) => +a.slice(1) - +b.slice(1));
+/* Every (tier, unit, qtype) entry the run recorded, walked the way the viewer's
+   queryGrid walks it. A run can be missing a whole (tier, unit) — the first
+   unit's cold query legs may have failed while the other units' ran — so the
+   grid is the union across all of them, never one corner's shape. */
+function qEntries(D) {
+  const out = [];
+  for (const tier of Object.keys(D.queries || {})) {
+    for (const u of D.dataset.unit_order) {
+      const e = ((D.queries || {})[tier] || {})[u] || {};
+      for (const qt of Object.keys(e)) if (qt !== "setup") out.push({ tier, u, qt, qout: e[qt] });
+    }
+  }
+  return out;
+}
+const qTypes = (D) => [...new Set(qEntries(D).map((e) => e.qt))];
+/* The first entry that carries cells: what decides the generation, and the
+   concurrency axis for a closed-loop run. */
+const qEntry = (D) => (qEntries(D).find((e) =>
+  Object.keys(e.qout).some((k) => CONC_KEY.test(k) || RATE_KEY.test(k))) || { qout: {} }).qout;
 function queryShape(D) {
   if (!D.queries) return null;
   const e = qEntry(D);
   if (Object.keys(e).some((k) => CONC_KEY.test(k))) return "closed";
   return rateKeys(e).length ? "open" : null;
 }
+/* The run's read-path latency target, and the rung a verdict table judges —
+   both read exactly the way docs/app.js reads them (checkFor / judgedRate). */
+const queryThr = (D) => ((D.checks_all || [D.checks || {}])
+  .find((c) => c && c.applies_to === "queries") || {}).threshold_ns || 500e6;
+const judgedKey = (qout) => {
+  const v = qout.verdict_1x;
+  if (v && v.rate && qout[v.rate]) return v.rate;
+  const ks = rateKeys(qout);
+  return ks.length ? ks[Math.floor((ks.length - 1) / 2)] : null;
+};
 
 function checkKind(kind, doc, group, data) {
   const reps = data.campaign.reps;
@@ -189,8 +211,8 @@ function checkSyntheticQueries(doc, group, D) {
 
   const tiers = Object.keys(D.queries);
   const unit = D.dataset.unit_order[0];
-  const types = Object.keys(D.queries[tiers[0]][unit]).filter((k) => k !== "setup");
-  const concs = Object.keys(D.queries[tiers[0]][unit][types[0]]).filter((k) => /^c\d+$/.test(k));
+  const types = qTypes(D);
+  const concs = Object.keys(qEntry(D)).filter((k) => /^c\d+$/.test(k));
 
   const p99tv = txt(doc.querySelector("#figq2-tv"));
   check(group, "every query type in the p99 table", types.every((t) => p99tv.includes(t)), p99tv.slice(0, 160));
@@ -199,7 +221,7 @@ function checkSyntheticQueries(doc, group, D) {
   // Setup rows: `open` on both tiers, `evict` on cold only.
   const setup = txt(doc.getElementById("query-setup-table"));
   check(group, "setup table names open", /open/.test(setup), setup.slice(0, 160));
-  const coldHasEvict = tiers.includes("cold") && D.queries.cold[unit].setup && D.queries.cold[unit].setup.evict;
+  const coldHasEvict = (((D.queries.cold || {})[unit] || {}).setup || {}).evict;
   if (coldHasEvict) check(group, "setup table names evict (cold)", /evict/.test(setup), setup.slice(0, 160));
   check(group, "events per page column filled", /events \/ page/.test(setup), setup.slice(0, 200));
 
@@ -213,10 +235,13 @@ function checkSyntheticQueries(doc, group, D) {
   // cell is judged by its worst unit, so several units can be over inside one
   // cell — the table names the worst and flags the rest, and the footnote
   // carries both counts. Recompute both from the data and pin them.
-  const thr = ((D.checks_all || [D.checks || {}]).find((c) => c && c.applies_to === "queries") || {}).threshold_ns || 500e6;
+  const thr = queryThr(D);
   let cellBreaches = 0, unitBreaches = 0;
   for (const qt of types) for (const tier of tiers) for (const cc of concs) {
-    const over = D.dataset.unit_order.filter((u) => D.queries[tier][u][qt][cc].p99.m > thr).length;
+    const over = D.dataset.unit_order.filter((u) => {
+      const c = (((D.queries[tier] || {})[u] || {})[qt] || {})[cc];
+      return c && c.p99.m > thr;
+    }).length;
     if (over) { cellBreaches++; unitBreaches += over; }
   }
   const total = types.length * tiers.length * concs.length;
@@ -245,7 +270,8 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   const secTxt = txt(sec);
   const tiers = Object.keys(D.queries);
   const units = D.dataset.unit_order;
-  const types = Object.keys(D.queries[tiers[0]][units[0]]).filter((k) => k !== "setup");
+  const types = qTypes(D);
+  const thr = queryThr(D);
 
   // Human endpoint names everywhere; the CSV's machine names nowhere.
   check(group, "endpoint display names rendered", types.every((t) => !ENDPOINT[t] || secTxt.includes(ENDPOINT[t])),
@@ -259,18 +285,24 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   const tbl = doc.getElementById("query-verdict-table");
   check(group, "verdict table rendered", !!tbl, "missing");
   if (!tbl) return;
-  let checks = 0, fails = 0, rows = 0;
+  let checks = 0, fails = 0, rows = 0, unfloored = 0;
   const judged = [];
   for (const qt of types) for (const u of units) for (const tier of tiers) {
     const qout = ((D.queries[tier] || {})[u] || {})[qt];
     if (!qout) continue;
     const v = qout.verdict_1x;
-    const keys = rateKeys(qout);
-    if (!keys.length) continue;
+    const key = judgedKey(qout);
+    if (!key) continue;
     rows++;
-    const key = v && v.rate && qout[v.rate] ? v.rate : keys[Math.floor((keys.length - 1) / 2)];
-    judged.push({ qt, u, tier, cell: qout[key], v });
-    for (const ok of [v ? v.pass : null, v && v.in_rpc ? v.in_rpc.pass : null,
+    if (!v) unfloored++;
+    const cell = qout[key] || {};
+    judged.push({ qt, u, tier, cell, v });
+    // A row with no phase floor still gets a headline chip — the viewer judges
+    // it on the latency target alone (docs/app.js openVerdictTable), so the
+    // hand count has to judge it the same way.
+    const p99 = v && v.p99_ns != null ? v.p99_ns : (cell.p99 || {}).m;
+    for (const ok of [p99 == null ? null : (v ? v.pass : p99 <= thr),
+      v && v.in_rpc ? v.in_rpc.pass : null,
       v && v.page_budget ? v.page_budget.pass : null]) {
       if (ok === null) continue;
       checks++; if (!ok) fails++;
@@ -289,6 +321,14 @@ function checkOpenLoopQueries(doc, sec, group, D) {
     ? `All ${checks} checks pass at the 1× rate.`
     : `${checks - fails} of ${checks} checks pass at the 1× rate; ${fails} breach.`;
   check(group, "verdict footnote reconciles with the chips", foot.includes(wantFoot), foot.slice(0, 200));
+  // Rows with no phase floor are named as such, in the table and in the footnote,
+  // so a reader never mistakes a target-only pass for a load-model one.
+  if (unfloored) {
+    const noted = [...tbl.querySelectorAll("tr")].slice(1).filter((r) => /\(no floor\)/.test(txt(r))).length;
+    check(group, `every unfloored row carries the (no floor) note (${unfloored})`, noted === unfloored, noted + " noted");
+    check(group, "footnote states the unfloored row count",
+      foot.includes(`${unfloored} of ${rows} rows carry no phase floor`), foot.slice(0, 260));
+  }
   // The three budgets are separate columns, never folded into one verdict.
   const heads = [...tbl.querySelectorAll("th")].map(txt);
   check(group, "in-RPC and mean-page budgets are their own columns",
@@ -443,11 +483,83 @@ for (const run of manifest.runs) {
 
 /* ---------------- generated fixture runs (tests/smoke/fixtures) ---------------- */
 /* Shapes the converter can emit that no committed run carries yet — today the
-   open-loop (paced-RPS) queries block. `make smoke` regenerates them with
-   gen-fixtures.py; they are never committed and never reach docs/runs/, which
-   is the published site. Served through a fetch overlay: the run file itself,
-   plus a manifest with its entry appended so the viewer resolves ?run=<id>
-   rather than silently falling back to the first real run. */
+   open-loop (paced-RPS) queries block, in three variations. `make smoke`
+   regenerates them with gen-fixtures.py; they are never committed and never
+   reach docs/runs/, which is the published site. Served through a fetch overlay:
+   the run file itself, plus a manifest with its entry appended so the viewer
+   resolves ?run=<id> rather than silently falling back to the first real run.
+
+   Everything the shared open-loop assertions cannot express — a fixture is built
+   for one property — lives here, keyed by run id. */
+const FIXTURE_CHECKS = {
+  "fixture-rps-phase3": (doc, group, D) => {
+    const es = qEntries(D);
+    check(group, "every endpoint × profile × tier carries a 1× verdict",
+      es.length > 0 && es.every((e) => e.qout.verdict_1x),
+      es.filter((e) => !e.qout.verdict_1x).length + " without a verdict");
+    check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
+  },
+
+  /* No phase floor: the run is paced off-phase and names no query_phase, so the
+     converter emits r-cells with no verdict_1x at all. The section must still
+     render and must judge every row on the latency target alone, saying so. */
+  "fixture-rps-unfloored": (doc, group, D) => {
+    const es = qEntries(D);
+    check(group, "no run phase and no 1× floor anywhere",
+      D.campaign.phase == null && es.every((e) => !e.qout.verdict_1x),
+      "phase " + D.campaign.phase);
+    const tbl = doc.getElementById("query-verdict-table");
+    const rows = [...tbl.querySelectorAll("tr")].slice(1);
+    check(group, "every verdict row is noted (no floor)",
+      rows.length > 0 && rows.every((r) => /\(no floor\)/.test(txt(r))), rows.length + " rows");
+    check(group, "no row claims a 1× floor", !rows.some((r) => /\(1× floor\)/.test(txt(r))), "floor note present");
+    // One headline chip per row, judged against the run's own query target.
+    const thr = queryThr(D);
+    const want = es.filter((e) => judgedKey(e.qout)).length;
+    const chips = tbl.querySelectorAll(".q-pass, .q-fail").length;
+    check(group, `one latency-target chip per row, no budget chips (${want})`, chips === want, chips + " chips");
+    const over = es.filter((e) => { const k = judgedKey(e.qout); return k && e.qout[k].p99.m > thr; }).length;
+    check(group, `breach chips match the ${Math.round(thr / 1e6)} ms target hand count (${over})`,
+      tbl.querySelectorAll(".q-fail").length === over, tbl.querySelectorAll(".q-fail").length + " ▲ chips");
+    // The three open-loop figures still draw, chart and table view alike.
+    for (const id of ["figq2", "figq3", "figq4"]) {
+      check(group, `${id} draws a chart and a table view`,
+        !!doc.querySelector(`#${id}-body svg`) && txt(doc.querySelector(`#${id}-tv`)).length > 20, "empty");
+    }
+  },
+
+  /* The regression for queryGrid probing one unit: the FIRST profile has hot
+     query legs only. The section must survive, keyed off the union of every
+     unit's legs, with the missing rows simply absent. */
+  "fixture-rps-partial": (doc, group, D) => {
+    const [first, second] = D.dataset.unit_order;
+    check(group, "fixture really is hot-only on the first profile",
+      !D.queries.cold[first] && !!D.queries.cold[second] && !!D.queries.hot[first],
+      "cold tier carries " + Object.keys(D.queries.cold).join(","));
+    check(group, "queries section survives the first profile's missing cold legs",
+      !!doc.getElementById("queries"), "section gone");
+    // Row labels are "<endpoint> · <profile> · <tier>"; read the name cell alone
+    // so the numbers in the next columns do not run into the tier word.
+    const labels = [...doc.querySelectorAll("#query-verdict-table tr")].slice(1)
+      .map((r) => txt(r.querySelector("td")));
+    const profilesOn = (tier) => [...new Set(labels.filter((s) => s.endsWith(" · " + tier))
+      .map((s) => s.split(" · ")[1]))];
+    const cold = profilesOn("cold"), hot = profilesOn("hot");
+    check(group, "both profiles have hot rows, only the second has cold rows",
+      hot.length === 2 && cold.length === 1 && cold[0] === hot[1],
+      `cold=[${cold.join(",")}] hot=[${hot.join(",")}]`);
+    const want = qEntries(D).filter((e) => judgedKey(e.qout)).length;
+    check(group, `verdict table drops the missing legs and nothing else (${want} rows)`,
+      labels.length === want, labels.length + " rows");
+    // The picker opens on the hot-only profile: its ladder must draw hot lanes
+    // and list no cold ones.
+    const ladder = txt(doc.querySelector("#figq2-tv"));
+    check(group, "opening profile's ladder lists hot lanes only",
+      /hot/.test(ladder) && !/cold/.test(ladder), ladder.slice(0, 200));
+    check(group, "opening profile still draws all three charts",
+      ["figq2", "figq3", "figq4"].every((id) => !!doc.querySelector(`#${id}-body svg`)), "a chart is missing");
+  },
+};
 const fixtureFiles = fs.existsSync(FIXTURES)
   ? fs.readdirSync(FIXTURES).filter((f) => f.endsWith(".json")).sort() : [];
 check("fixtures", "generated fixture runs present (run gen-fixtures.py)", fixtureFiles.length > 0, fixtureFiles.length + " files");
@@ -474,10 +586,13 @@ for (const file of fixtureFiles) {
   const sections = report.querySelectorAll("section").length;
   check(group, "the other sections still render", sections >= 5, sections + " sections");
   // The fixture is only worth loading if it really carries the new shape.
-  const someQt = Object.values(Object.values(D.queries.hot)[0]).find((v) => v && v.verdict_1x);
-  check(group, "fixture carries r-cells + a 1x verdict", !!(D.campaign.query_load && someQt), "not the RPS shape");
+  check(group, "fixture carries r-cells + the campaign ladder",
+    !!(D.campaign.query_load && qEntries(D).some((e) => rateKeys(e.qout).length)), "not the RPS shape");
   check(group, "fixture detected as the open-loop shape", queryShape(D) === "open", queryShape(D));
   checkSyntheticQueries(doc, group, D);
+  const extra = FIXTURE_CHECKS[D.run_id];
+  check(group, "fixture has its own assertions", !!extra, "no FIXTURE_CHECKS entry for " + D.run_id);
+  if (extra) extra(doc, group, D);
   window.close();
 }
 

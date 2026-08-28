@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 """Generate the viewer smoke test's synthetic run JSONs. Python 3 stdlib only.
 
-One fixture today: a phase-3 campaign whose query legs are the OPEN-LOOP
-(paced-RPS) shape — one leg dir per query type, one cell per target rate. It is
-built as a real results bundle in a tempdir and pushed through the real
+Every fixture here is the OPEN-LOOP (paced-RPS) query shape — one leg dir per
+query type, one cell per target rate — in a variation no committed run carries:
+
+  fixture-rps-phase3     two profiles, phase 3, mixed 1x verdicts.
+  fixture-rps-unfloored  one profile, paced at an interval that matches no
+                         phase and with no query_phase in the manifest, so the
+                         converter emits r-cells with NO verdict_1x and no
+                         campaign.phase — the viewer must judge the rows on the
+                         latency target alone and say so.
+  fixture-rps-partial    two profiles, phase 3, first profile's COLD query legs
+                         removed before conversion. The grid must still be
+                         discovered from the units that do have cold legs
+                         (docs/app.js queryGrid), and every consumer must render
+                         the gap rather than throw.
+
+Each is built as a real results bundle in a tempdir and pushed through the real
 `convert()`, so the smoke test loads exactly what the converter emits, not a
 hand-written JSON that can drift from it.
 
@@ -20,6 +33,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -33,16 +47,8 @@ import convert as C          # noqa: E402
 import fixtures as F         # noqa: E402
 
 OUT_DIR = os.path.join(HERE, "fixtures")
-FIXTURE_ID = "fixture-rps-phase3"
-FIXTURE_NAME = "Fixture — open-loop query load (phase 3)"
 FIXTURE_DATE = "2026-08-27"
 
-PHASE = 3                    # the close interval below is phase 3's block time
-CLOSE_INTERVAL = "600ms"
-REPS = 2
-# Two profiles: enough to exercise the profile picker, and soroswap's floors are
-# the ones that produce fractional rate tokens (r7.5, r30).
-UNITS = ["sac-6000-c1", "soroswap-1500-c1"]
 QTYPES = ["ledgers", "txpage", "txhash", "events"]
 
 ANSWERED = 100               # answered requests per leg
@@ -81,11 +87,12 @@ def rate_token(v):
     return str(int(v)) if float(v).is_integer() else repr(float(v))
 
 
-def ladder(profile, qt):
-    """This profile's phase-3 floor times the 0.5/1/2 ladder, as rate tokens.
-    Both come from docs/targets.json, so the middle rung IS the judged 1x cell."""
+def ladder(profile, qt, phase):
+    """This profile's floor for `phase` times the 0.5/1/2 ladder, as rate tokens.
+    Both come from docs/targets.json, so the middle rung IS the judged 1x cell
+    whenever the run has a goal phase to judge it against."""
     floors = C.QUERY_LOAD["profiles"][profile][C._QTYPE_RPS_KEY[qt]]
-    return [rate_token(floors[PHASE - 1] * x) for x in C.QUERY_LOAD["ladder"]]
+    return [rate_token(floors[phase - 1] * x) for x in C.QUERY_LOAD["ladder"]]
 
 
 def cell_spec(tier, profile, qt, i):
@@ -145,51 +152,60 @@ def driver_rows(qt, tokens, tier, profile, run):
     return rows
 
 
-def build_bundle(root):
-    """A two-unit phase-3 campaign bundle: ingest cold + hot legs from the
-    converter's own fixture builders, query legs in the per-qtype RPS shape."""
-    for u in UNITS:
+def dataset_entry(unit):
+    """The metadata.json datasets entry for a campaign unit id (<name>-c<chunk>)."""
+    name, chunk = re.match(r"^(.+)-c(\d+)$", unit).groups()
+    return {"name": name, "kind": "packs-local",
+            "location": f"/data/{name}/packs/cold", "chunks": [int(chunk)]}
+
+
+def build_bundle(root, spec):
+    """One campaign bundle: ingest cold + hot legs from the converter's own
+    fixture builders, query legs in the per-qtype RPS shape.
+
+    A unit named in `drop_cold_query` gets no cold query legs at all — the
+    partial-coverage shape a failed or skipped cold sweep leaves behind."""
+    units, reps = spec["units"], spec["reps"]
+    close, no_cold_q = spec["close_interval"], set(spec.get("drop_cold_query", ()))
+    for u in units:
         profile = C.query_profile(u)
-        for r in range(1, REPS + 1):
+        for r in range(1, reps + 1):
             cdir = os.path.join(root, f"ingest-cold-{u}-run{r}")
             os.makedirs(cdir, exist_ok=True)
             F._write_csv(os.path.join(cdir, "driver.csv"), F._cold_driver(u, r))
             for name, rows in F._cold_files(u, r).items():
                 F._write_csv(os.path.join(cdir, f"{name}.csv"), rows)
-            F._write_invocation(cdir, "bench-ingest cold", CLOSE_INTERVAL)
+            F._write_invocation(cdir, "bench-ingest cold", close)
 
             hdir = os.path.join(root, f"ingest-hot-{u}-run{r}")
             os.makedirs(hdir, exist_ok=True)
             F._write_csv(os.path.join(hdir, "driver.csv"), F._hot_driver(u, r, paced=True))
             F._write_csv(os.path.join(hdir, "hot.csv"), F._hot_phases(u, r))
-            F._write_invocation(hdir, "bench-ingest hot", CLOSE_INTERVAL)
+            F._write_invocation(hdir, "bench-ingest hot", close)
 
             for tier in ("cold", "hot"):
+                if tier == "cold" and u in no_cold_q:
+                    continue
                 for qt in QTYPES:
-                    tokens = ladder(profile, qt)
+                    tokens = ladder(profile, qt, spec["ladder_phase"])
                     qdir = os.path.join(root, f"query-{tier}-{u}-{qt}-run{r}")
                     os.makedirs(qdir, exist_ok=True)
                     F._write_csv(os.path.join(qdir, f"{qt}.csv"),
                                  qtype_rows(qt, tokens, tier, profile, r))
                     F._write_csv(os.path.join(qdir, "driver.csv"),
                                  driver_rows(qt, tokens, tier, profile, r))
-                    F._write_invocation(qdir, f"bench-query {tier}", CLOSE_INTERVAL)
+                    F._write_invocation(qdir, f"bench-query {tier}", close)
 
     metadata = {
         "schema_version": 1,
-        "run_id": FIXTURE_ID,
+        "run_id": spec["id"],
         "campaign": {
-            "name": FIXTURE_NAME, "config_file": "fixture-rps-phase3.toml",
+            "name": spec["name"], "config_file": spec["id"] + ".toml",
             "ref": "", "built_commit": F.COMMIT,
-            "ingest": "both", "query": "yes", "close_interval": CLOSE_INTERVAL,
-            "runs": REPS, "query_rps_ladder": ",".join(str(x) for x in C.QUERY_LOAD["ladder"]),
+            "ingest": "both", "query": "yes", "close_interval": close,
+            "runs": reps, "query_rps_ladder": ",".join(str(x) for x in C.QUERY_LOAD["ladder"]),
         },
-        "datasets": [
-            {"name": "sac-6000", "kind": "packs-local",
-             "location": "/data/sac-6000/packs/cold", "chunks": [1]},
-            {"name": "soroswap-1500", "kind": "packs-local",
-             "location": "/data/soroswap-1500/packs/cold", "chunks": [1]},
-        ],
+        "datasets": [dataset_entry(u) for u in units],
         "hardware": {
             "instance_type": "m6id.2xlarge", "instance_id": "i-0123456789abcdef0",
             "uname": "Linux 6.8.0-1015-aws x86_64", "cpus": 8, "mem_total_kb": 32000000,
@@ -212,47 +228,54 @@ def rate_cells(qout):
             if k != "verdict_1x" and isinstance(v, dict) and "target_rps" in v}
 
 
+def qtype_entries(D):
+    """Every (tier, unit, qtype, entry) the run recorded, gaps and all."""
+    for tier, units in D["queries"].items():
+        for unit, entry in units.items():
+            for qt, qout in entry.items():
+                if qt != "setup":
+                    yield tier, unit, qt, qout
+
+
 def verdict_failures(D):
     """Every (tier, unit, qtype) whose 1x verdict breaches some budget, with the
     axis that broke — the run's whole verdict picture in one comparable set."""
     out = set()
-    for tier, units in D["queries"].items():
-        for unit, entry in units.items():
-            for qt, qout in entry.items():
-                if qt == "setup":
-                    continue
-                v = qout["verdict_1x"]
-                for axis, ok in [("p99", v["pass"]),
-                                 ("in_rpc", v.get("in_rpc", {}).get("pass", True)),
-                                 ("page_budget", v.get("page_budget", {}).get("pass", True))]:
-                    if not ok:
-                        out.add((tier, unit, qt, axis))
+    for tier, unit, qt, qout in qtype_entries(D):
+        v = qout["verdict_1x"]
+        for axis, ok in [("p99", v["pass"]),
+                         ("in_rpc", v.get("in_rpc", {}).get("pass", True)),
+                         ("page_budget", v.get("page_budget", {}).get("pass", True))]:
+            if not ok:
+                out.add((tier, unit, qt, axis))
     return out
 
 
-def check(D):
-    """Pin the shape and the verdicts the smoke test is here to exercise. Any
-    drift in the converter or in targets.json breaks generation, not the viewer."""
-    assert D["campaign"]["phase"] == PHASE, D["campaign"].get("phase")
-    assert D["campaign"]["query_load"]["profiles"], "campaign.query_load missing"
-    assert D["dataset"]["unit_order"] == UNITS, D["dataset"]["unit_order"]
-    for u in UNITS:
+def check_common(D, spec):
+    """What every fixture must carry: the unit list, per-unit counts, and a full
+    ladder of well-formed rate cells wherever a (tier, unit, qtype) exists."""
+    assert D["dataset"]["unit_order"] == spec["units"], D["dataset"]["unit_order"]
+    for u in spec["units"]:
         meta = D["dataset"]["unit_meta"][u]
         assert all(k in meta for k in ("ledgers", "txs", "events")), meta
-
+    assert D["campaign"]["query_load"]["profiles"], "campaign.query_load missing"
     want = {"target_rps", "achieved_rps", "service", "dispatch_lag", "shed"}
-    for tier in ("cold", "hot"):
-        for u in UNITS:
-            for qt in QTYPES:
-                qout = D["queries"][tier][u][qt]
-                cells = rate_cells(qout)
-                assert len(cells) == len(C.QUERY_LOAD["ladder"]), (tier, u, qt, list(cells))
-                for key, cell in cells.items():
-                    missing = want - set(cell)
-                    assert not missing, (tier, u, qt, key, sorted(missing))
-                v = qout.get("verdict_1x")
-                assert v, f"no verdict_1x on {tier}/{u}/{qt}"
-                assert v["target_rps"] == float(v["rate"][1:]), v
+    for tier, unit, qt, qout in qtype_entries(D):
+        cells = rate_cells(qout)
+        assert len(cells) == len(C.QUERY_LOAD["ladder"]), (tier, unit, qt, list(cells))
+        for key, cell in cells.items():
+            missing = want - set(cell)
+            assert not missing, (tier, unit, qt, key, sorted(missing))
+
+
+def check_phase3(D, spec):
+    """Pin the shape and the verdicts the smoke test is here to exercise. Any
+    drift in the converter or in targets.json breaks generation, not the viewer."""
+    assert D["campaign"]["phase"] == spec["phase"], D["campaign"].get("phase")
+    for tier, unit, qt, qout in qtype_entries(D):
+        v = qout.get("verdict_1x")
+        assert v, f"no verdict_1x on {tier}/{unit}/{qt}"
+        assert v["target_rps"] == float(v["rate"][1:]), v
 
     # The three designed breaches, and nothing else.
     expected = {
@@ -271,6 +294,105 @@ def check(D):
         assert cell["p99"]["m"] > 2 * knee["p99"]["m"], (cell["p99"], knee["p99"])
 
 
+def check_unfloored(D, spec):
+    """No phase means no floor: every rate cell still converts, and not one of
+    them earns a verdict_1x for the viewer to judge against."""
+    assert D["campaign"].get("phase") is None, D["campaign"].get("phase")
+    assert D["campaign"]["close_interval_ns"] > 0, "the fixture is paced, just off-phase"
+    for tier, unit, qt, qout in qtype_entries(D):
+        assert "verdict_1x" not in qout, f"unexpected verdict on {tier}/{unit}/{qt}"
+    # The viewer labels rungs by multiplier off the campaign ladder when no floor
+    # names them, so the two lengths have to agree.
+    assert len(C.QUERY_LOAD["ladder"]) == len(
+        rate_cells(D["queries"]["hot"][spec["units"][0]]["ledgers"])), "ladder length"
+    assert (D["checks"] or {}).get("applies_to"), "a paced run still earns a check"
+
+
+def check_partial(D, spec):
+    """The first unit has hot query legs only; the second has both tiers. The
+    grid the viewer discovers has to come from the union, not from unit one."""
+    first, second = spec["units"][0], spec["units"][1]
+    assert first not in D["queries"]["cold"], "cold legs were meant to be dropped"
+    assert second in D["queries"]["cold"], sorted(D["queries"]["cold"])
+    assert first in D["queries"]["hot"] and second in D["queries"]["hot"], \
+        sorted(D["queries"]["hot"])
+    assert D["campaign"]["phase"] == spec["phase"], D["campaign"].get("phase")
+    for qt in QTYPES:
+        assert D["queries"]["hot"][first][qt].get("verdict_1x"), qt
+        assert D["queries"]["cold"][second][qt].get("verdict_1x"), qt
+
+
+SPECS = [
+    {
+        "id": "fixture-rps-phase3",
+        "name": "Fixture — open-loop query load (phase 3)",
+        # Two profiles: enough to exercise the profile picker, and soroswap's
+        # floors are the ones that produce fractional rate tokens (r7.5, r30).
+        "units": ["sac-6000-c1", "soroswap-1500-c1"],
+        "reps": 2,
+        "close_interval": "600ms",   # phase 3's block time
+        "phase": 3,
+        "ladder_phase": 3,
+        "check": check_phase3,
+    },
+    {
+        "id": "fixture-rps-unfloored",
+        "name": "Fixture — open-loop query load, no phase floor",
+        "units": ["sac-6000-c1"],
+        "reps": 1,
+        "close_interval": "450ms",   # matches no phase, and no query_phase either
+        "phase": None,
+        "ladder_phase": 3,
+        "check": check_unfloored,
+        # The converter says so itself when it drops the verdicts; that warning
+        # IS the shape under test.
+        "allow_warnings": [r"^no phase from the close interval"],
+    },
+    {
+        "id": "fixture-rps-partial",
+        "name": "Fixture — open-loop query load, hot-only first profile",
+        "units": ["sac-6000-c1", "soroswap-1500-c1"],
+        "reps": 1,
+        "close_interval": "600ms",
+        "phase": 3,
+        "ladder_phase": 3,
+        "drop_cold_query": ["sac-6000-c1"],
+        "check": check_partial,
+        "allow_warnings": [r"^missing run dir: query-cold-sac-6000-c1-run\d+$"],
+    },
+]
+
+
+def generate(spec, out_dir):
+    with tempfile.TemporaryDirectory(prefix="rps-fixture-") as tmp:
+        bundle = build_bundle(os.path.join(tmp, "results"), spec)
+        # convert() rewrites index.json beside its output: convert into the
+        # tempdir and copy only the run JSON out.
+        staging = os.path.join(tmp, "out")
+        # Warnings accumulate in a module global across conversions.
+        C._warnings.clear()
+        # convert() narrates the paths it wrote, all of them inside the tempdir —
+        # swallow that and report what actually landed instead.
+        with contextlib.redirect_stdout(io.StringIO()):
+            D = C.convert(argparse.Namespace(
+                results_dir=bundle, run_id=spec["id"], run_name=spec["name"],
+                run_date=FIXTURE_DATE, dataset_kind="synthetic", unit_facts=None,
+                source_gcs=None, source_uri=None, notes=None, description=None,
+                out_dir=staging))
+        # Only the warnings this fixture is built to provoke are tolerated; any
+        # other one means the bundle is missing rows.
+        allowed = [re.compile(p) for p in spec.get("allow_warnings", [])]
+        stray = [w for w in C._warnings if not any(p.search(w) for p in allowed)]
+        if stray:
+            raise SystemExit(f"converter warnings on {spec['id']} "
+                             "(the bundle is missing rows):\n  " + "\n  ".join(stray))
+        check_common(D, spec)
+        spec["check"](D, spec)
+        dest = os.path.join(out_dir, f"{spec['id']}.json")
+        shutil.copyfile(os.path.join(staging, f"{spec['id']}.json"), dest)
+    return D, dest
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out-dir", default=OUT_DIR)
@@ -282,29 +404,12 @@ def main():
     with open(os.path.join(args.out_dir, ".gitignore"), "w") as f:
         f.write("# Generated by tests/smoke/gen-fixtures.py — never committed.\n*.json\n")
 
-    with tempfile.TemporaryDirectory(prefix="rps-fixture-") as tmp:
-        bundle = build_bundle(os.path.join(tmp, "results"))
-        # convert() rewrites index.json beside its output: convert into the
-        # tempdir and copy only the run JSON out.
-        staging = os.path.join(tmp, "out")
-        # convert() narrates the paths it wrote, all of them inside the tempdir —
-        # swallow that and report what actually landed instead.
-        with contextlib.redirect_stdout(io.StringIO()):
-            D = C.convert(argparse.Namespace(
-                results_dir=bundle, run_id=FIXTURE_ID, run_name=FIXTURE_NAME,
-                run_date=FIXTURE_DATE, dataset_kind="synthetic", unit_facts=None,
-                source_gcs=None, source_uri=None, notes=None, description=None,
-                out_dir=staging))
-        if C._warnings:
-            raise SystemExit("converter warnings (the bundle is missing rows):\n  "
-                             + "\n  ".join(C._warnings))
-        check(D)
-        dest = os.path.join(args.out_dir, f"{FIXTURE_ID}.json")
-        shutil.copyfile(os.path.join(staging, f"{FIXTURE_ID}.json"), dest)
-
-    print(f"wrote {dest} ({os.path.getsize(dest) / 1024:.0f} KiB)")
-    print(f"  phase={PHASE} units={UNITS} reps={REPS} qtypes={QTYPES}")
-    print(f"  1x breaches: {sorted(verdict_failures(D))}")
+    for spec in SPECS:
+        D, dest = generate(spec, args.out_dir)
+        print(f"wrote {dest} ({os.path.getsize(dest) / 1024:.0f} KiB)")
+        print(f"  phase={D['campaign'].get('phase')} units={spec['units']} "
+              f"reps={spec['reps']} qtypes={QTYPES}")
+        print(f"  1x breaches: {sorted(verdict_failures(D)) if spec['phase'] else 'n/a (no floor)'}")
 
 
 if __name__ == "__main__":
