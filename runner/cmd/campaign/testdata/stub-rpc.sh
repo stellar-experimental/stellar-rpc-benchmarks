@@ -36,6 +36,7 @@ fi
 
 out=
 pack_dir=
+cold_dir=
 cold_out_dir=
 hot_dir=
 close_interval=
@@ -46,6 +47,7 @@ for arg in "$@"; do
 	case $arg in
 	--out=*) out=${arg#--out=} ;;
 	--pack-dir=*) pack_dir=${arg#--pack-dir=} ;;
+	--cold-dir=*) cold_dir=${arg#--cold-dir=} ;;
 	--cold-out-dir=*) cold_out_dir=${arg#--cold-out-dir=} ;;
 	--hot-dir=*) hot_dir=${arg#--hot-dir=} ;;
 	--close-interval=*) close_interval=${arg#--close-interval=} ;;
@@ -93,6 +95,25 @@ write_invocation() {
 	} >"$out/invocation.json"
 }
 
+# fail_leg is the one way this stub dies: a partial driver.csv and an
+# invocation.json carrying the error (stellar-rpc#907), then exit 1. A leg that
+# dies partway has already created the store it writes into, so the store dirs
+# named in argv are left behind — the runner post-cleans only on success, and
+# the e2e test asserts a failed cell keeps its store for diagnosis.
+fail_leg() {
+	if [ -n "$cold_out_dir" ]; then
+		mkdir -p "$cold_out_dir"
+	fi
+	if [ -n "$hot_dir" ]; then
+		mkdir -p "$hot_dir"
+	fi
+	mkdir -p "$out"
+	csv_start "$out/driver.csv"
+	csv_row "$out/driver.csv" 'backfill_wall,1,0,50000,50000,50000,50000,50000'
+	write_invocation "$1"
+	exit 1
+}
+
 # control_mode is what the control file says to do with this leg: run, fail, or
 # hang. The last matching line wins.
 control_mode() {
@@ -115,11 +136,7 @@ if [ -n "$out" ]; then
 		exit 0
 		;;
 	fail)
-		mkdir -p "$out"
-		csv_start "$out/driver.csv"
-		csv_row "$out/driver.csv" 'backfill_wall,1,0,50000,50000,50000,50000,50000'
-		write_invocation 'induced failure'
-		exit 1
+		fail_leg 'induced failure'
 		;;
 	esac
 fi
@@ -135,7 +152,9 @@ case "$sub $tier" in
 	# One code path for the untimed golden freeze and the timed cold legs: both
 	# read a pack tree and write a cold store.
 	mkdir -p "$cold_out_dir/ledgers"
-	echo 'stub cold store' >"$cold_out_dir/ledgers/chunk-0001.stub"
+	# The marker names the store root it was written for, which is how a query
+	# leg tells this store from another tree that merely looks like one.
+	echo "$cold_out_dir" >"$cold_out_dir/ledgers/chunk-0001.stub"
 	mkdir -p "$out"
 	csv_start "$out/driver.csv"
 	csv_row "$out/driver.csv" 'backfill_wall,1,0,50000,50000,50000,50000,50000'
@@ -177,6 +196,28 @@ case "$sub $tier" in
 	;;
 
 "bench-query cold" | "bench-query hot")
+	# Both suites read a store this campaign built — the cold store the cell's
+	# cold ingest wrote, the hot DB its hot ingest wrote — and the real binary
+	# dies at open when it is pointed anywhere else. Die the same way, so the
+	# e2e test catches a plan that hands a query leg the wrong directory.
+	if [ "$tier" = cold ]; then
+		if [ ! -f "$cold_dir/ledgers/chunk-0001.stub" ]; then
+			echo "stub-rpc: bench-query cold: no cold store under $cold_dir" >&2
+			fail_leg "no cold store under $cold_dir"
+		fi
+		# A cold store some other leg built — the tree banked inside the golden
+		# dataset, say — is refused rather than queried: the real binary reads
+		# an on-disk index format only the binary that wrote it is promised to
+		# understand.
+		if [ "$(cat "$cold_dir/ledgers/chunk-0001.stub")" != "$cold_dir" ]; then
+			echo "stub-rpc: bench-query cold: $cold_dir holds a store built for another directory" >&2
+			fail_leg "cold store under $cold_dir was built for another directory"
+		fi
+	fi
+	if [ "$tier" = hot ] && [ ! -f "$hot_dir/hot.stub" ]; then
+		echo "stub-rpc: bench-query hot: no hot DB under $hot_dir" >&2
+		fail_leg "no hot DB under $hot_dir"
+	fi
 	mkdir -p "$out"
 	csv_start "$out/driver.csv"
 	csv_row "$out/driver.csv" "open,1,0,5000,5000,5000,5000,5000"

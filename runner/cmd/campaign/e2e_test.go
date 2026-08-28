@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -120,9 +121,19 @@ func TestE2E(t *testing.T) {
 			t.Errorf("metadata.json records resumed on a fresh campaign:\n%s", raw)
 		}
 
-		// The cold scratch store is post-cleaned the moment its rep is done; the
-		// hot DB is deliberately kept, because query-hot reads what it holds.
-		mustNotExist(t, filepath.Join(sc.root, "scratch", "sac-6000", "1"))
+		// Both query suites read a store this campaign built: the cold suite
+		// the cold store the cell's cold ingest left behind, not the cold tree
+		// banked inside the golden dataset, and the hot suite the hot DB.
+		coldStore := filepath.Join(sc.root, "scratch", "sac-6000", "1")
+		coldQuery := readLeg(t, filepath.Join(bundle, "query-cold-sac-6000-c1-txhash-run2"))
+		if want := "--cold-dir=" + coldStore; !slices.Contains(coldQuery.Argv, want) {
+			t.Errorf("query-cold-sac-6000-c1-txhash-run2 argv = %v, want it to carry %s",
+				coldQuery.Argv, want)
+		}
+		// The cold store is post-cleaned by the cell's last cold query leg —
+		// the last leg that reads it — and the hot DB is deliberately kept,
+		// because nothing in this campaign has finished reading it.
+		mustNotExist(t, coldStore)
 		mustExist(t, filepath.Join(sc.root, "hot", "sac-6000", "1"))
 	})
 
@@ -159,6 +170,16 @@ func TestE2E(t *testing.T) {
 		}
 		if got := readLeg(t, killed).ExitCode; got != 0 {
 			t.Errorf("re-run leg exit_code = %d, want 0", got)
+		}
+		// The cold query legs come after the hot ingest legs, so the killed
+		// session never reached them: the resume runs them against the cold
+		// store the first session's cold ingest left on disk, whose leg it
+		// skips as already complete. A cold ingest that post-cleaned its store
+		// would strand them here.
+		for _, leg := range queryLegNames("cold") {
+			if got := readLeg(t, filepath.Join(bundle, leg)).ExitCode; got != 0 {
+				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, got)
+			}
 		}
 		meta := readMetadata(t, bundle)
 		if !meta.Campaign.Resumed {
@@ -217,6 +238,46 @@ func TestE2E(t *testing.T) {
 		if meta.FinishedAt == "" {
 			t.Error("a failed campaign's metadata.json has no finished_at")
 		}
+	})
+
+	t.Run("FailedColdIngestSkipsColdQueries", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "failed-cold"), cfgPath)
+		// The last cold rep: the cold query legs read the store it leaves
+		// behind, so its failure is what takes the cold query suite down —
+		// the mirror image of FailedLegKeepGoing's hot failure.
+		sc.setControl("fail ingest-cold-sac-6000-c1-run2")
+
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want nonzero; output:\n%s", out)
+		}
+		bundle := sc.bundle(t)
+		log := readFile(t, filepath.Join(bundle, "campaign.log"))
+		for _, leg := range queryLegNames("cold") {
+			if want := "skipping " + leg + ": needs ingest-cold-sac-6000-c1-run2"; !strings.Contains(log, want) {
+				t.Errorf("campaign.log missing %q", want)
+			}
+			// Skipped, not attempted against a store that is not there.
+			mustNotExist(t, filepath.Join(bundle, leg))
+		}
+		// A cold failure must not take the hot suite down with it: it reads
+		// the hot DB, which this campaign still ingested.
+		for _, leg := range queryLegNames("hot") {
+			if got := readLeg(t, filepath.Join(bundle, leg)).ExitCode; got != 0 {
+				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, got)
+			}
+		}
+
+		failed := filepath.Join(bundle, "ingest-cold-sac-6000-c1-run2")
+		if leg := readLeg(t, failed); leg.ExitCode != 1 || leg.Error == "" {
+			t.Errorf("failed leg.json = exit_code %d, error %q; want exit_code 1 with an error",
+				leg.ExitCode, leg.Error)
+		}
+		// The failed cell keeps its cold store: post-cleaning runs only on
+		// success, and no cold query leg ran to free it, so whatever the leg
+		// managed to write is there to diagnose. The next campaign's pre-clean
+		// is what wipes it.
+		mustExist(t, filepath.Join(sc.root, "scratch", "sac-6000", "1"))
 	})
 
 	t.Run("ResumeRefusesEditedConfig", func(t *testing.T) {
@@ -560,8 +621,9 @@ func buildCampaign(t *testing.T, dir string) string {
 // legJSON is the runner's completion sentinel, read back the way an operator
 // diagnosing a bundle would.
 type legJSON struct {
-	ExitCode int    `json:"exit_code"`
-	Error    string `json:"error"`
+	Argv     []string `json:"argv"`
+	ExitCode int      `json:"exit_code"`
+	Error    string   `json:"error"`
 }
 
 func readLeg(t *testing.T, dir string) legJSON {

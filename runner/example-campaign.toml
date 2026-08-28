@@ -38,10 +38,12 @@ name = "example"
 ingest = "both"
 
 # Whether to run the query benchmark suites after ingest: true | false
-# (required — there is no default). Query-hot additionally needs the hot DB a
-# hot ingest leaves behind, so it only runs when ingest is hot or both. Each
-# suite runs one leg per endpoint type (ledgers, txpage, txhash, events),
-# because each type is paced at its own arrival rate.
+# (required — there is no default). Both suites read a database this campaign
+# builds: query-cold the cold store the cell's cold ingest leaves behind, so
+# query = true needs ingest = cold or both and is refused otherwise; query-hot
+# additionally needs the hot DB a hot ingest leaves behind, so it only runs when
+# ingest is both. Each suite runs one leg per endpoint type (ledgers, txpage,
+# txhash, events), because each type is paced at its own arrival rate.
 query = false
 
 # Pace the hot ingest at a fixed ledger close interval — a Go duration, e.g.

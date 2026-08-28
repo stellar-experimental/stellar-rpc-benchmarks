@@ -118,7 +118,7 @@ ignored: a misspelled key fails in the first second of the campaign, naming itse
 | `repo` | string | `https://github.com/stellar/stellar-rpc.git` | Where stellar-rpc comes from: a git URL or an **absolute** local path to a git repository (relative paths are refused — they would depend on the invocation cwd). The persistent build clone at `$BENCH_ROOT/src` is cloned/fetched from it each campaign; `repo` itself is never modified. To benchmark local work-in-progress, point it at a local checkout — only committed state is benchmarkable. |
 | `ref` | string | `feature/full-history` | Git ref to benchmark, resolved inside `$BENCH_ROOT/src` after fetching `repo`'s branches and tags. Built into `$BENCH_ROOT/bin/stellar-rpc-<sha>`. |
 | `ingest` | string | — (required) | `cold` \| `hot` \| `both` \| `none`. |
-| `query` | bool | — (required) | Run the query suites after ingest. Query-cold runs against each dataset's frozen pack root; query-hot needs the hot DB a hot ingest leaves behind, so it only runs when `ingest` is `hot` or `both` (otherwise the runner notes that it is running the cold suite only). Each suite emits **one leg per endpoint type** — see [Query load](#query-load-open-loop-paced-rps). |
+| `query` | bool | — (required) | Run the query suites after ingest. Both suites read a database this campaign builds — query-cold the cold store the cell's cold ingest leaves behind, query-hot the hot DB the hot ingest leaves behind — so `query = true` is refused unless `ingest` is `cold` or `both`; with `cold` the runner notes that it is running the cold suite only. With `runs > 1` the query legs read the store the **last** rep built. Each suite emits **one leg per endpoint type** — see [Query load](#query-load-open-loop-paced-rps) and [Which database the query legs read](#which-database-the-query-legs-read). |
 | `close_interval` | string | `"0"` | `bench-ingest hot --close-interval`: a Go duration (`"2s"`, `"1s"`, `"600ms"`) for phase pacing, or `"0"` for unpaced catch-up. |
 | `runs` | int ≥ 1 | `5` | Repetitions per (dataset, chunk) cell. |
 | `query_duration` | string | `"60s"` | `bench-query --duration`: how long each query leg holds its paced load. A Go duration greater than zero. |
@@ -139,8 +139,13 @@ Each `[[dataset]]` table:
 | `ledgers` | int | **`fixture` only** (and required there): the per-chunk ledger count. `0` = the whole chunk; otherwise ≥ 10000, because the untimed cold freeze streams a whole 10,000-ledger chunk and cannot freeze a partial one. |
 
 Every kind converges on a local cold pack root — the directory holding `ledgers/`,
-`events/`, `txhash/` — which is all the timed legs ever read. They differ only in how
-that root is materialized:
+`events/`, `txhash/` — of which the timed legs read `<root>/ledgers/` and nothing else:
+both ingest tiers stream those raw packs, and the `events/`/`txhash/` indexes banked
+beside them are never read. Those indexes were written by whatever binary prepared the
+dataset, and the cold-index on-disk format is allowed to change under them, so the cold
+query legs read the store this campaign's own cold ingest builds instead — see [Which
+database the query legs read](#which-database-the-query-legs-read). The kinds differ only
+in how that root is materialized:
 
 - **`packs-local`** — `location` **is** the cold pack root, used in place and never
   written to.
@@ -251,6 +256,22 @@ by default the runner walks up from the working directory to the `docs/targets.j
 the checkout it is running from. `preflight` resolves the whole load model, so a bad
 profile or an unresolvable phase fails in seconds rather than at the first query leg.
 
+### Which database the query legs read
+
+Both tiers read a database this campaign built: `query-hot` opens the hot DB the cell's
+hot ingest left at `$BENCH_ROOT/hot/<dataset>/<chunk>`, and `query-cold` opens the cold
+store its cold ingest built at `$BENCH_ROOT/scratch/<dataset>/<chunk>` — never the
+`events/`/`txhash/` tree banked inside the golden dataset. With `runs > 1` both read what
+the **last** rep built: every rep wipes and rebuilds the same chunk, so only the last
+one's success guarantees a whole store. The disk cost is that a query campaign carries
+every cell's cold store, on top of its hot DBs, until that cell's last cold query leg
+succeeds and frees it. What it buys is hermeticity — the binary answering the queries is
+the binary that wrote the store — and that is not theoretical: the golden tree's indexes
+were frozen by whatever binary prepared the dataset, and when stellar-rpc#932 changed the
+cold-index on-disk format, the first query campaigns' cold txhash legs all died at open
+(`cold index user metadata malformed`). Only `<dataset>/ledgers/` is still read from the
+golden tree, by both ingest tiers, because pack files are format-stable XDR.
+
 ## Compatibility floor
 
 The runner requires a stellar-rpc ref whose bench subcommands:
@@ -281,7 +302,10 @@ $BENCH_ROOT/
 ├── golden/    immutable prepared datasets, one dir per dataset name
 │              (rm -rf golden/<name> to force a re-fetch)
 ├── fixture/   staging area for generated fixture packs
-├── scratch/   cold-ingest output, deleted before and after every cold leg
+├── scratch/   cold stores, one per (dataset, chunk); wiped before every
+│              cold-ingest rep. On a query campaign a store is kept until the
+│              cell's last cold query leg succeeds; otherwise it goes as soon as
+│              the ingest rep succeeds
 ├── hot/       hot DBs; the last run's DB is kept for the hot query suite
 └── results/   campaign bundles: <name>-<sha>-<stamp>/
 ```
@@ -345,9 +369,16 @@ when the failure is likely to repeat.
 instance wipes the results directory, the golden datasets, and the hot DBs together. If the
 results directory survived, resume it; if the box restarted, there is nothing to resume onto
 and the campaign starts over. The hot query suite reads the DB the last hot ingest left
-behind, so in the unlikely case that the DB is gone but the results directory is not, those
-query legs fail (and the summary names them) — re-run the hot ingest for that cell by
-deleting its `ingest-hot-<dataset>-c<chunk>-run*` directories and resuming again.
+behind and the cold query suite the store the last cold ingest built, so in the unlikely
+case that one of those is gone but the results directory is not, the query legs that read
+it fail (and the summary names them) — re-run that tier's ingest for the cell by deleting
+its `ingest-<tier>-<dataset>-c<chunk>-run*` directories and resuming again.
+
+One resume hazard belongs to the cold store alone: the cell's **last** cold query leg
+deletes it on success, so a resume that has to re-run an *earlier* cold query leg of that
+cell — one that failed while the later ones succeeded — finds no store to open. The fix is
+the same one: delete that cell's `ingest-cold-<dataset>-c<chunk>-run*` directories, so the
+resume rebuilds the store before the query legs read it.
 
 ## Campaign bundle layout — the cross-repo contract
 
