@@ -786,6 +786,15 @@ def build_queries(results_dir, layout, unit, reps, tier):
             continue
         ws = sorted({int(m.group(1)) for st in rows[0]
                      for m in [re.match(r"^total_c(\d+)$", st)] if m})
+        if not ws and any(_TOTAL_R.match(st) for st in rows[0]):
+            # Paced rows in an unpaced dir shape: a bench binary newer than the
+            # runner that laid the bundle out (or a hand-assembled mix). Nothing
+            # here is a concurrency cell, so converting would emit an empty
+            # qtype entry that reads as a clean result.
+            warn(f"query-{tier}-{unit} {qt}: rows are the paced-RPS generation "
+                 f"but the bundle has the one-dir-per-rep layout — mismatched "
+                 f"runner/bench pair? skipping {qt}")
+            continue
         qout = {}
         for w in ws:
             agg = stage_agg(rows, f"total_c{w}", warn_nitems=(qt != "events"))

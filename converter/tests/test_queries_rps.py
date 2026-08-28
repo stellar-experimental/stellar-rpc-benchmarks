@@ -339,5 +339,67 @@ class ClosedLoopStillWorksTests(unittest.TestCase):
         self.assertEqual(convert.validate_run(self.data, reps=2), [])
 
 
+class MismatchedGenerationTests(unittest.TestCase):
+    """A one-dir-per-rep bundle whose query CSVs carry the paced total_r<rate>
+    rows — a bench binary newer than the runner that laid the bundle out. There
+    is no concurrency cell to read, so every qtype must be skipped with a loud
+    warning rather than converted into an empty entry."""
+    QTYPES = list(fixtures.RPS_RATES)
+
+    @classmethod
+    def _driver_rows(cls, tier, run):
+        """One closed-loop-shaped driver.csv carrying every leg's paced rows."""
+        rows = []
+        for qt in cls.QTYPES:
+            rows += [r for r in fixtures._rps_driver_rows(tier, qt, run,
+                                                          fixtures.RPS_RATES)
+                     if r[0] not in ("open", "evict", "peak_rss_bytes")]
+        head = [("open", 1, 1) + (60_000_000,) * 5]
+        if tier == "cold":
+            head.append(("evict", 12, 6, 4000, 500, 600, 700, 700))
+        return head + rows + [("peak_rss_bytes", 1, 0, 900_000_000, 0, 0, 0, 0)]
+
+    @classmethod
+    def setUpClass(cls):
+        root = os.path.join(tempfile.mkdtemp(), "b")
+        fixtures.build_campaign_bundle(root, paced=True, close_interval="600ms",
+                                       queries=True)
+        p99 = {q: fixtures.RPS_SCHED_P99_NS for q in cls.QTYPES}
+        svc = {q: fixtures.RPS_SERVICE_P99_NS for q in cls.QTYPES}
+        page = {q: fixtures.RPS_MEAN_PAGE_NS for q in cls.QTYPES}
+        for name in sorted(os.listdir(root)):
+            if not name.startswith("query-"):
+                continue
+            tier, run = name.split("-")[1], int(name.rsplit("run", 1)[1])
+            for qt in cls.QTYPES:
+                fixtures._write_csv(
+                    os.path.join(root, name, f"{qt}.csv"),
+                    fixtures._rps_qtype_rows(qt, run, fixtures.RPS_RATES,
+                                             p99, svc, page))
+            fixtures._write_csv(os.path.join(root, name, "driver.csv"),
+                                cls._driver_rows(tier, run))
+        cls.data, cls.warnings, _ = run_convert(root)
+
+    def test_every_qtype_is_named_in_a_mismatch_warning(self):
+        hits = [w for w in self.warnings if "mismatched runner/bench pair" in w]
+        # one per (tier, unit, qtype): 2 tiers x 3 units x 4 types
+        self.assertEqual(len(hits), 24)
+        self.assertIn("query-cold-sac-6000-c1 txhash: rows are the paced-RPS "
+                      "generation but the bundle has the one-dir-per-rep layout "
+                      "— mismatched runner/bench pair? skipping txhash", hits)
+
+    def test_no_empty_qtype_entries(self):
+        for tier, units in self.data["queries"].items():
+            for unit, entry in units.items():
+                self.assertEqual(list(entry), ["setup"], f"{tier}/{unit}")
+                self.assertTrue(entry["setup"])
+
+    def test_conversion_still_succeeds(self):
+        # warn-and-continue: the rest of the bundle converts and validates.
+        self.assertEqual(convert.validate_run(self.data, reps=2), [])
+        self.assertIn("ingest_cold", self.data)
+        self.assertFalse(convert.has_rps_cells(self.data["queries"]))
+
+
 if __name__ == "__main__":
     unittest.main()
