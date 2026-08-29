@@ -481,6 +481,229 @@ for (const run of manifest.runs) {
   window.close();
 }
 
+/* ---------------- summary-page section helpers ---------------- */
+/* The summary's two conditional sections, decided from the run JSON exactly as
+   summary.js decides them: the go / no-go budget section needs a phase with a
+   declared E2E budget, and the query section needs at least one leg carrying a
+   1x verdict. */
+const QT_ENDPOINT = { txhash: "getTransaction", txpage: "getTransactions", ledgers: "getLedgers", events: "getEvents" };
+const SUMMARY_QT_ORDER = ["txhash", "txpage", "ledgers", "events"];
+const summaryTrim = (x) => x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2);
+const summaryFmtNs = (ns) => ns >= 1e9 ? summaryTrim(ns / 1e9) + " s"
+  : ns >= 1e6 ? summaryTrim(ns / 1e6) + " ms"
+  : ns >= 1e3 ? summaryTrim(ns / 1e3) + " µs" : Math.round(ns) + " ns";
+const summaryFmtRps = (v) => (v >= 100 ? Math.round(v).toLocaleString("en-US")
+  : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
+const summaryProfileName = (D, unit) => {
+  if ((D.campaign || {}).phase == null) return unit;
+  const u = String(unit).toLowerCase();
+  if (u.startsWith("sac")) return "SAC transfers";
+  if (u.includes("token")) return "OZ token transfers";
+  if (u.includes("soroswap")) return "Soroswap swaps";
+  return unit;
+};
+const SUMMARY_SECTION_LABEL = {
+  budget: "E2E budget",
+  method: "Methodology",
+  goal: "Ingestion goal",
+  phases: "Ingestion phases",
+  queries: "Query latency",
+  machine: "Machine metadata",
+};
+/* Every (tier, unit, endpoint) leg with a 1x verdict, grouped by tier — the
+   rows the summary's per-tier table must carry, one for one. */
+function summaryQueryRows(D) {
+  const out = {};
+  for (const tier of ["hot", "cold"]) {
+    const t = (D.queries || {})[tier];
+    if (!t) continue;
+    const rows = [];
+    for (const u of D.dataset.unit_order) {
+      for (const [qt, qout] of Object.entries(t[u] || {})) {
+        if (qt === "setup") continue;
+        const v = (qout || {}).verdict_1x;
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v });
+      }
+    }
+    if (rows.length) out[tier] = rows;
+  }
+  return out;
+}
+/* The budget section's own gate: summary.js needs a matched phase carrying an
+   ingestion target, a block time and an E2E budget (the fixed network and
+   handler constants come from targets.json, which every run reads). */
+function summaryHasBudget(D) {
+  const targets = JSON.parse(fs.readFileSync(path.join(DOCS, "targets.json"), "utf8"));
+  const phase = (D.campaign || {}).phase;
+  if (phase == null) return false;
+  const p = (targets.phases || []).find((x) => x.phase === phase);
+  const fx = targets.fixed_estimates || {};
+  if (!p || !p.block_time_ns || !p.e2e_budget_ns) return false;
+  if (!fx.network_rtt_ns || !fx.send_tx_p99_ns || !fx.get_tx_p99_ns) return false;
+  // Phase 2 omits its ingestion target; summary.js derives it the same way.
+  const derived = p.ingest_p99_target_ns != null ? p.ingest_p99_target_ns
+    : p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns
+      - (Math.floor(3 * fx.network_rtt_ns / 2) + fx.send_tx_p99_ns + fx.get_tx_p99_ns);
+  return derived > 0 && (D.ingest_hot ? Object.keys(D.ingest_hot).length > 0 : false);
+}
+/* The summary's own section assertions, shared by the manifest runs and the
+   generated fixtures. `text` is the rendered page with #queries cut out — the
+   only place the tier words are allowed to appear. */
+function checkSummarySections(sdoc, group, D) {
+  const sreport = sdoc.getElementById("report");
+  const wantBudget = summaryHasBudget(D);
+  const QR = summaryQueryRows(D);
+  const qTiers = ["hot", "cold"].filter((t) => QR[t]);
+  const wantQueries = qTiers.length > 0;
+
+  // Vocabulary: the tier words are section-scoped, everything else is banned
+  // outright. Clone the report and drop #queries before reading the text.
+  const clone = sreport.cloneNode(true);
+  const qsec = clone.querySelector("#queries");
+  if (qsec) qsec.remove();
+  const outside = txt(clone);
+  const banned = outside.match(/\b(h[o]t|pod|platform|team)\b/i);
+  check(group, "no internal vocabulary outside the query section", !banned, banned ? banned[0] : "");
+  const everywhere = txt(sreport).match(/\b(pod|platform|team)\b/i);
+  check(group, "no pod/platform/team vocabulary anywhere", !everywhere, everywhere ? everywhere[0] : "");
+
+  // Section order, with the two conditional sections in their declared slots
+  // and machine metadata always last.
+  const want = ["budget", "method", "goal", "phases", "queries", "machine"]
+    .filter((id) => (id === "budget" ? wantBudget : id === "queries" ? wantQueries : true));
+  const secs = [...sreport.querySelectorAll("section")].map((s) => s.id);
+  check(group, `section order ${want.join("→")}`, secs.join(",") === want.join(","), secs.join(","));
+  const nav = sdoc.getElementById("summary-nav");
+  const navLinks = nav ? [...nav.querySelectorAll(".summary-nav-link")] : [];
+  check(group, "summary section nav is labelled and visible",
+    !!nav && nav.getAttribute("aria-label") === "Summary sections" && !nav.hidden,
+    nav ? `${nav.getAttribute("aria-label")} hidden=${nav.hidden}` : "missing");
+  check(group, "summary nav order, hrefs, labels, and numbers match rendered sections",
+    navLinks.length === want.length && navLinks.every((link, i) =>
+      link.getAttribute("href") === `#${want[i]}`
+      && txt(link.querySelector(".summary-nav-num")) === String(i + 1).padStart(2, "0")
+      && txt(link.querySelector(".summary-nav-text")) === SUMMARY_SECTION_LABEL[want[i]]),
+    navLinks.map(txt).join(" | "));
+  check(group, "summary nav has no dead section targets",
+    navLinks.every(link => !!sdoc.getElementById(link.getAttribute("href").slice(1))),
+    navLinks.map(link => link.getAttribute("href")).join(","));
+  const current = navLinks.filter(link => link.getAttribute("aria-current") === "location");
+  check(group, "summary nav initializes one accessible active link",
+    current.length === 1 && current[0] === navLinks[0], current.map(txt).join(" | "));
+  if (navLinks.length > 1) {
+    nav.addEventListener("click", event => event.preventDefault(), { capture: true, once: true });
+    navLinks[1].dispatchEvent(new sdoc.defaultView.MouseEvent("click", { bubbles: true, cancelable: true }));
+    check(group, "summary nav click updates aria-current without observer support",
+      navLinks[1].getAttribute("aria-current") === "location"
+        && navLinks.filter(link => link.hasAttribute("aria-current")).length === 1,
+      navLinks.filter(link => link.hasAttribute("aria-current")).map(txt).join(" | "));
+  }
+
+  if (wantBudget) {
+    const bud = sdoc.getElementById("budget");
+    check(group, "budget figure lives inside the budget section", !!(bud && bud.querySelector("#fig11")), bud ? "fig11 elsewhere" : "no section");
+    const lead = txt(bud && bud.querySelector(".banner .lead"));
+    check(group, "budget verdict is GO or NO-GO", /\b(GO|NO-GO)\b/.test(lead) && /of the .* budget/.test(lead), lead.slice(0, 140));
+    const tiles = bud ? bud.querySelectorAll(".slice-tile").length : 0;
+    check(group, "three slice tiles", tiles === 3, tiles + " tiles");
+    const tileTxt = txt(bud && bud.querySelector(".slice-tiles"));
+    check(group, "tiles name the three slices and their allocations",
+      /sendTransaction/.test(tileTxt) && /ingestion/.test(tileTxt) && /getTransaction/.test(tileTxt)
+      && (tileTxt.match(/allocation/g) || []).length === 3, tileTxt.slice(0, 160));
+    // getTransaction is measured only when the run recorded an in-RPC p99 on a
+    // live-store getTransaction leg; otherwise its allocation stands.
+    const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.v.in_rpc);
+    const f11t = txt(sdoc.querySelector("#fig11-tv"));
+    const getRow = f11t.split("getTransaction round trip")[1] || "";
+    check(group, measuredGet ? "budget table: getTransaction allocated → measured" : "budget table: getTransaction stays an estimate",
+      measuredGet ? /allocated → measured/.test(getRow) : !/getTransaction[^|]*allocated → measured/.test(getRow.split("end-to-end")[0] || ""),
+      getRow.slice(0, 160));
+  } else {
+    check(group, "no budget section without a phase E2E budget", !sdoc.getElementById("budget"), "section present");
+  }
+
+  if (!wantQueries) {
+    check(group, "no query section without 1x query verdicts", !sdoc.getElementById("queries"), "section present");
+    return;
+  }
+  const qsecLive = sdoc.getElementById("queries");
+  const phase = (D.campaign || {}).phase;
+  const heading = txt(qsecLive.querySelector(".sec-head h2"));
+  check(group, "query heading names the phase load",
+    heading === `Query latency at ${phase == null ? "target" : `Phase ${phase}`} load`, heading);
+  const intro = txt(qsecLive.querySelector(":scope > .sec-intro"));
+  check(group, "query intro describes client-observed p99 without a read-path goal",
+    /Each endpoint ran/.test(intro) && /client-observed p99 latency/.test(intro) && !/\bgoal\b/i.test(intro),
+    intro);
+  const subs = qsecLive.querySelectorAll("h3.method-sub").length;
+  check(group, `one subsection per tier (${qTiers.length})`, subs === qTiers.length, subs + " subheads");
+  const tables = qsecLive.querySelectorAll("table").length;
+  check(group, `one table per tier (${qTiers.length})`, tables === qTiers.length, tables + " tables");
+  const units = D.dataset.unit_order;
+  for (const tier of qTiers) {
+    const t = sdoc.getElementById(`q-table-${tier}`);
+    const rows = t ? [...t.querySelectorAll("tbody tr")] : [];
+    check(group, `${tier} matrix has four endpoint rows`, rows.length === SUMMARY_QT_ORDER.length, rows.length + " rows");
+    const headers = t ? [...t.querySelectorAll("thead th")].map(txt) : [];
+    const wantHeaders = ["Endpoint", ...units.map((u) => summaryProfileName(D, u))];
+    check(group, `${tier} matrix columns follow workload order`,
+      headers.join("|") === wantHeaders.join("|"), headers.join(" | "));
+    const cells = new Map(QR[tier].map((r) => [`${r.qt}\0${r.unit}`, r.v]));
+    for (const [ri, qt] of SUMMARY_QT_ORDER.entries()) {
+      const row = rows[ri];
+      const rowHead = txt(row && row.querySelector("th[scope=row]"));
+      check(group, `${tier} matrix row ${ri + 1} is ${QT_ENDPOINT[qt]}`,
+        rowHead === QT_ENDPOINT[qt], rowHead);
+      const data = row ? [...row.querySelectorAll("td")] : [];
+      check(group, `${tier} ${QT_ENDPOINT[qt]} has one cell per workload`,
+        data.length === units.length, data.length + " cells");
+      for (const [ui, unit] of units.entries()) {
+        const v = cells.get(`${qt}\0${unit}`);
+        const cell = data[ui];
+        if (!v) {
+          check(group, `${tier} ${qt}/${unit}: missing combination is an em dash`,
+            txt(cell) === "—" && !!cell.querySelector(".q-missing"), txt(cell));
+          continue;
+        }
+        const latency = cell.querySelector(".q-latency");
+        const rate = cell.querySelector(".q-rate");
+        check(group, `${tier} ${qt}/${unit}: p99 and rate match the source`,
+          latency && latency.tagName === "STRONG" && txt(latency) === summaryFmtNs(v.p99_ns)
+          && txt(rate) === summaryFmtRps(v.target_rps),
+          txt(cell));
+      }
+    }
+  }
+  const qTxt = txt(qsecLive);
+  check(group, "no raw query-cell tokens in the section", !/\b(txhash|txpage)\b/.test(qTxt), (qTxt.match(/\b(txhash|txpage)\b/) || [""])[0]);
+  check(group, "query section has no read-goal verdict UI",
+    !/read-path goal|within the goal|Goal ≤/i.test(qTxt)
+      && !qsecLive.querySelector(".chip, .q-count"),
+    qTxt.slice(0, 180));
+  const tierNotes = [...qsecLive.querySelectorAll("h3.method-sub + .sec-intro")].map(txt);
+  check(group, "tier descriptions use the concise store wording",
+    tierNotes.includes("Recent ledgers are served from the live store with a warm page cache.")
+      && (!qTiers.includes("cold") || tierNotes.includes("Archived ledgers are served from immutable files and event indexes after eviction from the page cache.")),
+    tierNotes.join(" | "));
+  if (D.run_id === "fixture-rps-phase3") {
+    const hotCell = sdoc.querySelector("#q-table-hot tbody tr:nth-child(1) td:nth-child(2)");
+    const coldCell = sdoc.querySelector("#q-table-cold tbody tr:nth-child(2) td:nth-child(2)");
+    check(group, "representative hot and cold matrix values render",
+      txt(hotCell && hotCell.querySelector(".q-latency")) === "130 ms"
+        && txt(hotCell && hotCell.querySelector(".q-rate")) === "1,000 rps"
+        && txt(coldCell && coldCell.querySelector(".q-latency")) === "640 ms"
+        && txt(coldCell && coldCell.querySelector(".q-rate")) === "50 rps",
+      `${txt(hotCell)} | ${txt(coldCell)}`);
+  }
+  const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.v.in_rpc);
+  if (wantBudget && measuredGet) {
+    check(group, "hot matrix links its highest getTransaction p99 to the E2E budget",
+      txt(qsecLive.querySelector(".q-foot")) === "The end-to-end budget in §01 uses the highest measured getTransaction p99.",
+      txt(qsecLive.querySelector(".q-foot")));
+  }
+}
+
+
 /* ---------------- generated fixture runs (tests/smoke/fixtures) ---------------- */
 /* Shapes the converter can emit that no committed run carries yet — today the
    open-loop (paced-RPS) queries block, in three variations. `make smoke`
@@ -604,8 +827,7 @@ for (const file of fixtureFiles) {
   const sreport = sdoc.getElementById("report");
   check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
-  const sbanned = txt(sreport).match(/\b(h[o]t|pod|platform|team)\b/i);
-  check(group, "summary: no internal vocabulary in rendered page", !sbanned, sbanned ? sbanned[0] : "");
+  checkSummarySections(sdoc, group + " summary", D);
   sm.window.close();
 }
 
@@ -762,8 +984,8 @@ if (phaseRun) {
 
 /* ---------------- stakeholder summary (summary.html) ---------------- */
 /* The public-facing summary renders the same run JSONs, cut to the ingestion
-   story: goal banner + phase-goal table (targets.json is the source; Phase 2's
-   ingestion target is derived), methodology (dataset table + pacing schematic),
+   story: goal banner (targets.json is the source; Phase 2's ingestion target is
+   derived), methodology (dataset table + pacing schematic),
    the headline p99 chart with two separate reference lines, the six-phase
    per-ledger figure, and machine metadata as the bottom-most section. */
 for (const run of manifest.runs) {
@@ -779,31 +1001,26 @@ for (const run of manifest.runs) {
   check(group, "full-report link targets internal viewer", !!full && full.getAttribute("href") === `index.html?run=${run.id}`, full ? full.getAttribute("href") : "missing");
   const allRuns = doc.getElementById("all-runs-link");
   check(group, "all-runs link back to the run index", !!allRuns && allRuns.getAttribute("href") === "index.html", allRuns ? allRuns.getAttribute("href") : "missing");
-  // Audience vocabulary: the page never uses the internal tier/org words.
+  // Audience vocabulary + section order, including the two conditional
+  // sections (go / no-go, query latency).
   const text = txt(report);
-  const banned = text.match(/\b(h[o]t|pod|platform|team)\b/i);
-  check(group, "no internal vocabulary in rendered page", !banned, banned ? banned[0] : "");
-  // Section order: machine metadata is the bottom-most section.
-  const secs = [...report.querySelectorAll("section")].map(s => s.id);
-  check(group, "section order glance→method→goal→phases→machine", secs.join(",") === "glance,method,goal,phases,machine", secs.join(","));
-  const bannerTxt = txt(report.querySelector(".banner"));
+  checkSummarySections(doc, group, runJSON(run.id));
+  // The goal banner leads the goal section; the conditional budget section
+  // above it carries a verdict banner of its own.
+  const goalSection = report.querySelector("#goal");
+  const goalBanner = goalSection && goalSection.querySelector(".banner");
+  const goalFigure = goalSection && goalSection.querySelector("#fig31");
+  const bannerTxt = txt(goalBanner);
   check(group, "goal banner has a verdict", /(MEETS GOAL|MISS)/.test(bannerTxt), bannerTxt.slice(0, 120));
-  // Goals table: cut to the phase the run was paced for; the two benchmark
-  // non-inputs (Orgs, Retention) are not shown.
+  check(group, "goal banner precedes the ingestion figure",
+    !!(goalBanner && goalFigure && (goalBanner.compareDocumentPosition(goalFigure) & window.Node.DOCUMENT_POSITION_FOLLOWING)),
+    "banner missing or misplaced");
+  check(group, "at-a-glance section and phase goals table removed",
+    !doc.getElementById("glance") && !doc.getElementById("phase-block"), "legacy summary content present");
   const phNo = (runJSON(run.id).campaign || {}).phase;
-  const phTbl = txt(doc.querySelector("#phase-block table"));
-  if (phNo != null) {
-    const others = [1, 2, 3].filter(p => p !== phNo);
-    check(group, `phase table shows only Phase ${phNo}, badged 'this run'`,
-      new RegExp(`Phase ${phNo}`).test(phTbl) && /this run/.test(phTbl) && others.every(p => !new RegExp(`Phase ${p}\\b`).test(phTbl)),
-      phTbl.slice(0, 100));
-  } else {
-    check(group, "phase table lists all three phases", /Phase 1/.test(phTbl) && /Phase 2/.test(phTbl) && /Phase 3/.test(phTbl), phTbl.slice(0, 100));
-  }
-  check(group, "no Orgs or Retention rows", !/Orgs|Retention/.test(phTbl), phTbl.slice(0, 100));
   // Fig 1.1: the E2E budget bar — the goal composition vs the same trip with
-  // this run's measured ingestion, against the phase's declared E2E budget.
-  if (phNo != null) {
+  // this run's measured slices, against the phase's declared E2E budget.
+  if (doc.getElementById("budget")) {
     const f11 = doc.querySelector("#fig11-body svg");
     check(group, "budget figure rendered", !!f11, "missing");
     check(group, "budget ceiling line drawn", !!(f11 && f11.querySelector("line.refline-budget")), "missing");
@@ -851,7 +1068,7 @@ for (const run of manifest.runs) {
   const g = expectedGoal(runJSON(run.id));
   if (g) checkGoalBanner(group, bannerTxt, g, `phase ${phNo} banner`);
   if (run.id.startsWith("phase2-")) {
-    check(group, "Phase 2 ingestion target derived (405 ms)", /405 ms/.test(phTbl), phTbl.slice(0, 200));
+    check(group, "Phase 2 ingestion target derived (405 ms)", /405 ms/.test(bannerTxt), bannerTxt.slice(0, 200));
     // SAC's p99 is a per-box number, not a per-phase one — the two 2026-07 Phase 2
     // runs miss the 405 ms goal, at 604 ms on the m6id.2xlarge and 456 ms on the
     // faster c6id.8xlarge. Key each figure to its own run id.
