@@ -18,6 +18,8 @@
   const selectEl = document.getElementById("run-select");
   const themeBtn = document.getElementById("theme-toggle");
   const fullLink = document.getElementById("full-report");
+  const toolbarEl = document.querySelector(".summary-toolbar");
+  const navEl = document.getElementById("summary-nav");
   const tip = document.getElementById("tip");
 
   // The run schema's live-ingestion section (see SCHEMA.md). The key is
@@ -30,9 +32,20 @@
   let LIVE_TARGETS = null;  // phases[] from targets.json, or null if unfetched
   let LIVE_FIXED = null;    // fixed_estimates from targets.json (tx submission, query)
   let MEASURED_TX = null;   // measured in-RPC sendTransaction p99 (ns) from docs/txsub/, or null → estimate
+  let MEASURED_TX_NAME = ""; // which tx-submission profile carried that p99
   let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
   let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
+  let sectionObserver = null;
   let redrawTimer = null;
+
+  const SECTION_META = [
+    { id: "budget", label: "E2E budget" },
+    { id: "method", label: "Methodology" },
+    { id: "goal", label: "Ingestion goal" },
+    { id: "phases", label: "Ingestion phases" },
+    { id: "queries", label: "Query latency" },
+    { id: "machine", label: "Machine metadata" },
+  ];
 
   /* ============================ theme ============================ */
   function currentTheme() {
@@ -65,6 +78,87 @@
   const fmtMiB = bytes => trim(bytes / 1048576) + " MiB";
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const shortCommit = c => (c || "").slice(0, 8);
+
+  /* ============================ section navigation ============================ */
+  function syncToolbarOffset() {
+    if (!toolbarEl) return;
+    const h = toolbarEl.getBoundingClientRect().height || toolbarEl.offsetHeight || 56;
+    document.documentElement.style.setProperty("--summary-toolbar-height", `${Math.ceil(h)}px`);
+  }
+  function setActiveSection(id) {
+    if (!navEl) return;
+    navEl.querySelectorAll(".summary-nav-link").forEach(link => {
+      if (link.dataset.section === id) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  }
+  function clearSectionNav() {
+    if (sectionObserver) sectionObserver.disconnect();
+    sectionObserver = null;
+    if (!navEl) return;
+    navEl.hidden = true;
+    navEl.replaceChildren();
+  }
+  function renderSectionNav(sections, secNo) {
+    clearSectionNav();
+    if (!navEl || !sections.length) return;
+    navEl.innerHTML = `<div class="summary-nav-inner">
+      <div class="summary-nav-title">On this page</div>
+      <ol class="summary-nav-list">${sections.map(section => `<li>
+        <a class="summary-nav-link" href="#${esc(section.id)}" data-section="${esc(section.id)}">
+          <span class="summary-nav-num">${secNo(section.id)}</span>
+          <span class="summary-nav-text">${esc(section.label)}</span>
+        </a>
+      </li>`).join("")}</ol>
+    </div>`;
+    navEl.hidden = false;
+    syncToolbarOffset();
+
+    const ids = new Set(sections.map(section => section.id));
+    const hashId = location.hash.slice(1);
+    const initialId = ids.has(hashId) ? hashId : sections[0].id;
+    setActiveSection(initialId);
+
+    // The report arrives after the browser's initial hash jump, so replay it
+    // once the dynamic sections exist. Links still work without this enhancement.
+    if (ids.has(hashId)) {
+      const target = document.getElementById(hashId);
+      if (target && typeof target.scrollIntoView === "function") {
+        requestAnimationFrame(() => target.scrollIntoView({ behavior: "auto", block: "start" }));
+      }
+    }
+
+    if (typeof IntersectionObserver !== "function") return;
+    const visible = new Map();
+    const toolbarHeight = Math.ceil(toolbarEl ? toolbarEl.getBoundingClientRect().height : 56);
+    const navHeight = matchMedia("(min-width: 1168px)").matches ? 0 : Math.ceil(navEl.getBoundingClientRect().height);
+    const top = toolbarHeight + navHeight + 16;
+    sectionObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.set(entry.target.id, entry);
+        else visible.delete(entry.target.id);
+      }
+      if (!visible.size) return;
+      const current = [...visible.values()].sort((a, b) =>
+        Math.abs(a.boundingClientRect.top - top) - Math.abs(b.boundingClientRect.top - top))[0];
+      setActiveSection(current.target.id);
+    }, { rootMargin: `-${top}px 0px -65% 0px`, threshold: 0 });
+    sections.forEach(section => {
+      const target = document.getElementById(section.id);
+      if (target) sectionObserver.observe(target);
+    });
+  }
+
+  if (navEl) {
+    navEl.addEventListener("click", event => {
+      const link = event.target.closest(".summary-nav-link");
+      if (link) setActiveSection(link.dataset.section);
+    });
+  }
+  window.addEventListener("hashchange", () => {
+    const id = location.hash.slice(1);
+    if (id && document.getElementById(id)) setActiveSection(id);
+  });
 
   /* ============================ svg helpers ============================ */
   const NSVG = "http://www.w3.org/2000/svg";
@@ -535,14 +629,15 @@
       const m = await res.json();
       const run = (m.runs || []).find(r => r.role === "headline");
       if (!run) return;
-      const sums = await Promise.all(Object.values(run.summaries || {}).map(p =>
-        fetch("txsub/" + p, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
-      let worst = null;
-      for (const s of sums) {
+      const modes = Object.keys(run.summaries || {});
+      const sums = await Promise.all(modes.map(k =>
+        fetch("txsub/" + run.summaries[k], { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
+      let worst = null, worstMode = "";
+      sums.forEach((s, i) => {
         const v = s && s.handler && s.handler.p99_ns;
-        if (typeof v === "number" && (worst == null || v > worst)) worst = v;
-      }
-      if (worst != null) MEASURED_TX = worst;
+        if (typeof v === "number" && (worst == null || v > worst)) { worst = v; worstMode = modes[i]; }
+      });
+      if (worst != null) { MEASURED_TX = worst; MEASURED_TX_NAME = TXSUB_MODE_LABEL[worstMode] || worstMode; }
     } catch (err) {
       console.warn("txsub data not loaded; tx-submission slice stays an estimate", err);
     }
@@ -574,6 +669,65 @@
     return { targets, sel, closeNs: camp.close_interval_ns || 0 };
   }
 
+  // The tx-submission benchmark's own profile names (docs/txsub/index.json
+  // keys), spelled the way its page spells them.
+  const TXSUB_MODE_LABEL = { "sac-transfer": "SAC transfer", "oz-transfer": "OZ token transfer", "soroswap": "Soroswap swap" };
+
+  /* ============================ query verdicts ============================ */
+  // The read benchmark's cells, read the way the internal report reads them:
+  // the endpoint names the public API uses, and the one verdict per
+  // (tier, profile, endpoint) leg that the phase's request rate is judged at.
+  const QT_ENDPOINT = {
+    txhash: "getTransaction", txpage: "getTransactions",
+    ledgers: "getLedgers", events: "getEvents",
+  };
+  const QT_ORDER = ["txhash", "txpage", "ledgers", "events"];
+  const endpointLabel = qt => QT_ENDPOINT[qt] || qt;
+  const TIER_ORDER = ["hot", "cold"];
+  const TIER_TITLE = { hot: "Recent ledgers (hot)", cold: "Archived ledgers (cold)" };
+  const TIER_NOTE = {
+    hot: "Recent ledgers are served from the live store with a warm page cache.",
+    cold: "Archived ledgers are served from immutable files and event indexes after eviction from the page cache.",
+  };
+  const fmtRps = v => v == null || !isFinite(v)
+    ? "—"
+    : (v >= 100 ? fmtInt(v) : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
+  // Every (tier, profile, endpoint) leg carrying a 1× result, grouped by tier
+  // and ordered endpoint-first. The source field is named verdict_1x, but the
+  // summary presents its p99 and request rate without a read-path verdict.
+  function queryVerdicts(Q, order) {
+    const out = {};
+    for (const tier of TIER_ORDER) {
+      const t = (Q || {})[tier];
+      if (!t) continue;
+      // Endpoints the run recorded, in the published order, with anything the
+      // map does not know appended under its own name.
+      const seen = [];
+      for (const u of order) for (const qt of Object.keys(t[u] || {})) {
+        if (qt !== "setup" && !seen.includes(qt)) seen.push(qt);
+      }
+      const qts = [...QT_ORDER.filter(q => seen.includes(q)), ...seen.filter(q => !QT_ORDER.includes(q))];
+      const rows = [];
+      for (const qt of qts) for (const u of order) {
+        const v = ((t[u] || {})[qt] || {}).verdict_1x;
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v });
+      }
+      if (rows.length) out[tier] = rows;
+    }
+    return out;
+  }
+  // Worst in-RPC getTransaction p99 over the live-store legs — the E2E model
+  // carries the network legs as constants, so only the in-RPC slice belongs in
+  // the budget. Null when the run measured none: the allocation then stands.
+  function measuredGetTx(QV) {
+    let worst = null;
+    for (const r of (QV.hot || [])) {
+      const ir = r.qt === "txhash" && r.v.in_rpc;
+      if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) worst = { ns: ir.p99_ns, unit: r.unit };
+    }
+    return worst;
+  }
+
   // Match a run unit ("sac-6000-c1") to its workload in targets.json.
   function workloadFor(unit, phase) {
     const ws = (phase && phase.workloads) || [];
@@ -600,7 +754,7 @@
     const macBits = [mac.vcpus ? mac.vcpus + " vCPU" : "", mac.mem ? mac.mem + " RAM" : "", "local NVMe"].filter(Boolean).join(" · ");
     const macTxt = mac.instance ? ` Run on a single ${mac.instance} (${macBits}).` : "";
     const subTxt = wlNames.length && wlNames.every(Boolean)
-      ? `RPC per-ledger ingestion latency under Phase ${sel.phase} target load — production ingestion code, fed synthetic ledgers of ${wlNames.length > 1 ? wlNames.slice(0, -1).join(", ") + " and " + wlNames[wlNames.length - 1] : wlNames[0]}${paced ? ` at the ${fmtNsAxis(sel.block_time_ns)} block time` : ""}.${macTxt}`
+      ? `RPC v2 ingestion & query latencies under Phase ${sel.phase} target load, fed synthetic ledgers of ${wlNames.length > 1 ? wlNames.slice(0, -1).join(", ") + " and " + wlNames[wlNames.length - 1] : wlNames[0]}${paced ? ` at the ${fmtNsAxis(sel.block_time_ns)} block time` : ""}.${macTxt}`
       : (ds.description || "");
     return `
     <header class="masthead">
@@ -623,6 +777,9 @@
     </div>`;
   }
 
+  // `no` is the figure's displayed label ("Fig 3.1"). Two sections are
+  // conditional, so callers derive its section half from secNo(); `id` is fixed
+  // and is what every other reference — smoke, tableView, legend — keys on.
   function figHTML(id, no, title, legendId, caption, opts = {}) {
     return `<figure class="fig" id="${id}">
       <div class="fig-head"><div><span class="fig-no">${no}</span><span class="fig-title">${title}</span></div>${legendId ? `<div class="legend" id="${legendId}"></div>` : ""}</div>
@@ -631,35 +788,6 @@
       <figcaption>${caption}</figcaption>
       ${opts.noTable ? "" : `<details class="tv" id="${id}-tv"><summary>Table view</summary><div class="tv-scroll"></div></details>`}
     </figure>`;
-  }
-
-  // The goals table — the summary reads a run against the phase it was paced
-  // for, so only that phase's column is shown (all phases when none matches).
-  function phaseTableHTML(PH) {
-    const sel = PH.sel;
-    const cols = sel ? [sel] : PH.targets;
-    const selNo = sel ? sel.phase : null;
-    // The selected-column tint only means something next to other columns.
-    const cls = p => (!sel && selNo === p.phase ? ' class="ph-sel"' : "");
-    const head = cols.map(p =>
-      `<th${cls(p)}>Phase ${p.phase}${selNo === p.phase ? '<span class="ph-badge">this run</span>' : ""}</th>`).join("");
-    const row = (label, f) =>
-      `<tr><td>${label}</td>${cols.map(p => `<td${cls(p)}>${f(p)}</td>`).join("")}</tr>`;
-    let rows = "";
-    rows += row("Block time", p => fmtNsAxis(p.block_time_ns));
-    rows += row("End-to-end budget (externalized → client)", p => p.e2e_budget_ns ? fmtNsAxis(p.e2e_budget_ns) : "—");
-    rows += row("Ingestion latency, p99 (meta available → ingested in RPC)",
-      p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) : "—");
-    for (const name of (cols[0].workloads || []).map(w => w.name)) {
-      rows += row(esc(name), p => {
-        const w = (p.workloads || []).find(x => x.name === name);
-        return w ? `${fmtInt(w.tps)} TPS (${fmtInt(w.tx_per_ledger)} tx/ledger)` : "—";
-      });
-    }
-    return `<div class="phase-block" id="phase-block">
-      <div class="fig-head"><div><span class="fig-no">Goals</span><span class="fig-title">${sel ? `The Phase ${sel.phase} goals` : "The three phases and their goals"}</span></div></div>
-      <div class="tv-scroll"><table class="data phase-table"><tr><th>Goal</th>${head}</tr>${rows}</table></div>
-    </div>`;
   }
 
   // Per-ledger latency lanes: end to end plus every ingestion phase, in phase
@@ -707,6 +835,31 @@
     });
     const goalMet = goalNs != null && goalPass === units.length;
 
+    /* ---- E2E budget inputs ---- */
+    // The budget section renders only when every slice is known: a phase goal
+    // with a declared E2E budget, plus the network constant and the two in-RPC
+    // handler allocations (sendTransaction, getTransaction) from targets.json.
+    const FIXED = LIVE_FIXED || {};
+    const rttNs = FIXED.network_rtt_ns || 0;
+    const sendNs = FIXED.send_tx_p99_ns || 0, getNs = FIXED.get_tx_p99_ns || 0;
+    const budgetNs = sel ? sel.e2e_budget_ns || 0 : 0;
+    const nBlocks = sel ? sel.block_count || 2 : 2;
+    const canBudget = !!(goalNs && blockNs && budgetNs && rttNs && sendNs && getNs && goalWorst);
+
+    /* ---- query verdicts (the query section, and the measured getTransaction slice) ---- */
+    const QV = queryVerdicts(D.queries, ORDER);
+    const qTiers = TIER_ORDER.filter(t => QV[t]);
+    const hasQueries = qTiers.length > 0;
+    const MEASURED_GET = measuredGetTx(QV);
+
+    // Section numbers are display only, and two sections are conditional — so
+    // they are numbered from what this run actually renders, and every § link
+    // in the prose reads its number from here.
+    const sectionDefs = SECTION_META
+      .filter(section => (section.id === "budget" ? canBudget : section.id === "queries" ? hasQueries : true));
+    const SECS = sectionDefs.map(section => section.id);
+    const secNo = id => String(SECS.indexOf(id) + 1).padStart(2, "0");
+
     // Which phase carries the worst profile's p99 tail — used in the banner note.
     const tailPhase = (() => {
       if (!goalWorst || !ING[goalWorst].phases) return null;
@@ -720,8 +873,8 @@
     const banner = goalNs && units.length ? (() => {
       const w = goalWorst ? ING[goalWorst].driver.ingest_total : null;
       const note = goalMet
-        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. <a href="#goal">§03 · Latency vs the goal</a> compares the profiles; <a href="#phases">§04 · Per-ledger latency breakdown</a> shows where the time goes.`
-        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§04 · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
+        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. The chart below compares the profiles; <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a> shows where the time goes.`
+        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
       return `<div class="banner${goalMet ? "" : " warn-tail"}">
         <div class="banner-figure">${goalPass}<span class="of"> / ${units.length}</span></div>
         <div class="banner-copy">
@@ -786,63 +939,117 @@
       ? `<p class="sec-intro" id="raw-results">Raw results: ${bucketLink(rawSrc)}</p>`
       : "";
 
-    /* ---- fig 1.1 inputs: the E2E budget composition ---- */
-    // Renders only when every slice is known: a phase goal with a declared
-    // E2E budget, plus the network constant and the two in-RPC handler
-    // estimates (sendTransaction, getTransaction) from targets.json.
-    const FIXED = LIVE_FIXED || {};
-    const rttNs = FIXED.network_rtt_ns || 0;
-    const sendNs = FIXED.send_tx_p99_ns || 0, getNs = FIXED.get_tx_p99_ns || 0;
-    const budgetNs = sel ? sel.e2e_budget_ns || 0 : 0;
-    const nBlocks = sel ? sel.block_count || 2 : 2;
-    const canBudget = !!(goalNs && blockNs && budgetNs && rttNs && sendNs && getNs && goalWorst);
+    /* ---- the go / no-go section: the E2E budget composition ---- */
     // Why the consensus slice spans N blocks: in Phases 1–2 a transaction
     // waits for the next ledger close; Phase 3's consensus + execution
     // pipelining adds one more.
     const whyBlocks = canBudget ? (nBlocks >= 3
       ? `Phase ${sel.phase} pipelines consensus and execution, so a transaction completes after ${nBlocks} ledger closes`
       : `a transaction submitted now lands in the <em>next</em> ledger close, not the one in flight`) : "";
-    const budgetFig = canBudget ? figHTML("fig11", "Fig 1.1", "Where ingestion sits in the end-to-end budget", "fig11-legend",
-      `The six slices of the end-to-end (E2E) trip, in lifecycle order, stacked against the declared Phase ${sel.phase} E2E budget. Top bar: the goal composition — the ${fmtNsAxis(goalNs)} ingestion target in place. Bottom bar: the same trip with this run's <strong>measured</strong> ingestion, the worst profile's p99 (${esc(disp(goalWorst))}). The two network slices are hardcoded constants from the assumed ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(Math.floor(rttNs / 2))} carries the submission request (the response is off the critical path), and a full round trip carries the getTransaction call. The Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each: ${whyBlocks}. Hatched slices come from outside this benchmark${MEASURED_TX ? " (sendTransaction is measured by its own benchmark; getTransaction stays an estimate until its benchmark lands)" : " (sendTransaction and getTransaction stay estimates until their benchmarks land)"}; the solid ingestion slice is what this run measures. Ingestion is the one slice these benchmarks move.`) : "";
+    // The three slices this work owns carry their own colors; the network and
+    // consensus slices stay de-emphasized grey. Measured values replace their
+    // allocation on the run bar; an unmeasured slice keeps the allocation and
+    // stays hatched.
+    const blockTotal = nBlocks * blockNs;
+    const netSendNs = Math.floor(rttNs / 2), netReadNs = rttNs;   // hardcoded network constants
+    const wp99 = canBudget ? ING[goalWorst].driver.ingest_total.p99.m : 0;
+    const txRunNs = MEASURED_TX || sendNs;
+    const getRunNs = MEASURED_GET ? MEASURED_GET.ns : getNs;
+    const e2eOf = (ing, txV, getV) => netSendNs + txV + blockTotal + ing + netReadNs + getV;
+    const e2eGoal = canBudget ? e2eOf(goalNs, sendNs, getNs) : 0;
+    const e2eRun = canBudget ? e2eOf(wp99, txRunNs, getRunNs) : 0;
+    const slack = budgetNs - e2eRun;
+    const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
+      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. Hatched segments are targets or estimates; solid segments are measured.`) : "";
+
+    // One tile per slice this work owns: what it measured, on which profile,
+    // against what it was allocated. The mark judges the slice alone — the
+    // verdict above it judges the whole trip.
+    const sliceTile = (name, meas, profile, allocNs) => `<div class="slice-tile">
+      <div class="slice-name">${esc(name)}</div>
+      <div class="slice-val">${esc(fmtNs(meas == null ? allocNs : meas))}${meas == null ? "" : `<span class="${meas <= allocNs ? "cell-ok" : "cell-warn"}">${meas <= allocNs ? "✓" : "▲"}</span>`}</div>
+      <div class="slice-sub">${meas == null ? "estimate" : esc(profile)}</div>
+      <div class="slice-alloc">allocation ${esc(fmtNsAxis(allocNs))}</div>
+    </div>`;
+    const budgetSection = canBudget ? `
+    <section id="budget">
+      <div class="sec-head"><span class="sec-num">${secNo("budget")}</span><h2>Phase ${sel.phase} end-to-end budget</h2></div>
+      <p class="sec-intro">We measure p99 latency for sendTransaction, ingestion, and getTransaction on the highest-latency workload profile. The go / no-go decision is based on total end-to-end latency instead of each slice's target.</p>
+      <div class="banner${slack < 0 ? " warn-tail" : ""}"><div class="banner-copy">
+        <div class="lead">E2E ${fmtNs(e2eRun)} of the ${fmtNs(budgetNs)} budget — ${slack === 0 ? "exactly on budget" : slack > 0 ? `${fmtNs(slack)} under` : `${fmtNs(-slack)} over`}. ${slack < 0 ? '<span class="chip warn">▲ NO-GO</span>' : '<span class="chip">✓ GO</span>'}</div>
+      </div></div>
+      ${budgetFig}
+      <div class="slice-tiles">
+        ${sliceTile("sendTransaction", MEASURED_TX, MEASURED_TX_NAME, sendNs)}
+        ${sliceTile("ingestion", wp99, disp(goalWorst), goalNs)}
+        ${sliceTile("getTransaction", MEASURED_GET && MEASURED_GET.ns, MEASURED_GET ? disp(MEASURED_GET.unit) : "", getNs)}
+      </div>
+    </section>` : "";
+
+    /* ---- § query latency inputs ---- */
+    // The harness writes its leg duration as a Go duration ("60s"); space the
+    // unit off so it reads as prose.
+    const qDuration = ((camp.config || {}).query_duration || "").trim().replace(/(\d)\s*([a-z])/i, "$1 $2");
+    const qRateTxt = sel ? `Phase ${sel.phase} request rate` : "target request rate";
+    const qLoadTxt = sel ? `Phase ${sel.phase} load` : "target load";
+    const queryTableHTML = tier => {
+      const rows = QV[tier];
+      const cells = new Map(rows.map(r => [`${r.qt}\0${r.unit}`, r.v]));
+      const head = ORDER.map(unit => `<th scope="col">${esc(disp(unit))}</th>`).join("");
+      const body = QT_ORDER.map(qt => `<tr>
+          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}</th>
+          ${ORDER.map(unit => {
+            const v = cells.get(`${qt}\0${unit}`);
+            return v
+              ? `<td class="q-cell"><strong class="q-latency">${esc(fmtNs(v.p99_ns))}</strong><span class="q-rate">${esc(fmtRps(v.target_rps))}</span></td>`
+              : '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';
+          }).join("")}
+        </tr>`).join("");
+      return `<div class="tv-scroll"><table class="data q-table" id="q-table-${tier}" style="width:100%">
+        <thead><tr><th scope="col">Endpoint</th>${head}</tr></thead>
+        <tbody>${body}</tbody></table></div>`;
+    };
+    const queriesSection = hasQueries ? `
+    <section id="queries">
+      <div class="sec-head"><span class="sec-num">${secNo("queries")}</span><h2>Query latency at ${esc(qLoadTxt)}</h2></div>
+      <p class="sec-intro">Each endpoint ran${qDuration ? ` for ${esc(qDuration)}` : ""} at its workload's ${esc(qRateTxt)}. Values are client-observed p99 latency.</p>
+      ${qTiers.map(tier => `<h3 class="method-sub">${esc(TIER_TITLE[tier] || tier)}</h3>
+      <p class="sec-intro">${esc(TIER_NOTE[tier] || "")}</p>
+      ${queryTableHTML(tier)}
+      ${tier === "hot" && canBudget && MEASURED_GET ? `<p class="q-foot">The end-to-end budget in §${secNo("budget")} uses the highest measured <code>getTransaction</code> p99.</p>` : ""}`).join("")}
+    </section>` : "";
 
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
     const pacePara = closeNs > 0
-      ? `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. The benchmark controls two things: where ledgers come from, and when. It feeds the generated ledgers at a fixed close interval — <strong>${fmtNsAxis(closeNs)}</strong> for this run${paceIsBlockTime ? `, the Phase ${sel.phase} block time` : ""}. The clock starts when the first ledger arrives — the <strong>anchor</strong>. From there, every ledger has a fixed due time: ledger <em>i</em> is due at <code>anchor + i × interval</code>. The loop sleeps until each due time, then ingests. When a ledger runs long, the loop falls behind; it then ingests back-to-back until it catches up.`
+      ? `The benchmark runs RPC's production ingestion loop and schedules one ledger every <strong>${fmtNsAxis(closeNs)}</strong>${paceIsBlockTime ? `, matching the Phase ${sel.phase} block time` : ""}. If ingestion exceeds that interval, the next ledger starts immediately and the loop runs without waiting until it catches up.`
       : `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. This run was not paced: ledgers were fed back-to-back.`;
 
     /* ---- section skeleton ---- */
-    reportEl.innerHTML = mastheadHTML(D) + `
-    <section id="glance">
-      <div class="sec-head"><span class="sec-num">01</span><h2>At a glance</h2></div>
-      ${sel ? `<p class="sec-intro">Phase ${sel.phase} models a ${fmtNsAxis(blockNs)} block time.${goalNs ? ` The goal: per-ledger ingestion latency p99 within ${fmtNsAxis(goalNs)} on every workload profile.` : ""}</p>` : ""}
-      ${banner}
-      ${budgetFig}
-      ${PH ? phaseTableHTML(PH) : ""}
-    </section>
-
+    reportEl.innerHTML = mastheadHTML(D) + budgetSection + `
     <section id="method">
-      <div class="sec-head"><span class="sec-num">02</span><h2>Methodology</h2></div>
+      <div class="sec-head"><span class="sec-num">${secNo("method")}</span><h2>Methodology</h2></div>
       <h3 class="method-sub">Test data</h3>
-      <p class="sec-intro">Synthetic ledgers, generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's TPL target rate. Three profiles cover the target workloads.</p>
+      <p class="sec-intro">Synthetic ledgers are generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's target TPL.</p>
       ${datasetTable}
       ${sourceData}
       <h3 class="method-sub">Ingestion and pacing</h3>
       <p class="sec-intro">${pacePara}</p>
-      ${figHTML("fig21", "Fig 2.1", "How ledgers are fed — the close-interval schedule", "",
-        `Schematic. The solid line is the anchor — the first ledger arrives and the clock starts. Startup time before the anchor is not on the schedule, however long it takes. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. On schedule, the loop sleeps until the due time, then ingests (L0–L2). A slow ledger (L3) puts the loop behind; the next ledger (L4) starts at once, with no sleep, until the loop catches back up (L5). The gap between a late commit and its due time is the lag.`, { noTable: true })}
+      ${figHTML("fig21", `Fig ${+secNo("method")}.1`, "How ledgers are fed — the close-interval schedule", "",
+        `Ledger 0 sets the <strong>anchor</strong>; startup before it is untimed. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. L0–L2 finish within their slots, so the loop waits for each next due time. L3 overruns its slot; L4 starts immediately, and normal pacing resumes with L5 after catch-up. Lag is the time from a ledger's due time to its commit.`, { noTable: true })}
     </section>
 
     <section id="goal">
-      <div class="sec-head"><span class="sec-num">03</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
-      ${figHTML("fig31", "Fig 3.1", "Ingestion latency p99 by workload profile", "fig31-legend",
+      <div class="sec-head"><span class="sec-num">${secNo("goal")}</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
+      ${banner}
+      ${figHTML("fig31", `Fig ${+secNo("goal")}.1`, "Ingestion latency p99 by workload profile", "fig31-legend",
         `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${fmtNsAxis(goalNs)}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
       <p class="sec-intro" id="goal-readout"></p>
     </section>
 
     <section id="phases">
-      <div class="sec-head"><span class="sec-num">04</span><h2>Per-ledger RPC ingestion latency — end to end, and every phase</h2></div>
-      <p class="sec-intro">Where a ledger's time goes during ingestion. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Fig 4.1 splits the run's total ingestion time across those phases; Fig 4.2 compares the profiles one phase at a time — <strong>end to end</strong> is the per-ledger sum of all six.</p>
+      <div class="sec-head"><span class="sec-num">${secNo("phases")}</span><h2>Per-ledger RPC ingestion latency — end to end, and every phase</h2></div>
+      <p class="sec-intro">Where a ledger's time goes during ingestion. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Fig ${+secNo("phases")}.1 splits the run's total ingestion time across those phases; Fig ${+secNo("phases")}.2 compares the profiles one phase at a time — <strong>end to end</strong> is the per-ledger sum of all six.</p>
       <div class="phase-guide">
         <p><strong>RocksDB</strong> is the live store — an embedded key-value database on the node's local disk. Ingestion breaks each ledger down and files it there: the compressed ledger bytes, the transaction-hash entries, the events. Nothing reaches RocksDB until <strong>commit</strong> — the three middle phases stage writes into one batch.</p>
         <ul>
@@ -855,62 +1062,66 @@
         </ul>
         <p>Most of the p99 tail sits in <strong>commit</strong> and <strong>apply</strong>; on the heaviest profile, apply dominates.</p>
       </div>
-      ${figHTML("fig41", "Fig 4.1", "Where ingestion time goes — each phase's share of the run", "fig41-legend",
+      ${figHTML("fig41", `Fig ${+secNo("phases")}.1`, "Where ingestion time goes — each phase's share of the run", "fig41-legend",
         `Each bar splits the run's <strong>total ingestion time</strong> — summed over every ledger (${medRuns}) — across the six phases. Shares are built from per-phase totals, which add up exactly; percentiles do not.`)}
-      ${figHTML("fig42", "Fig 4.2", "Per-ledger latency, one phase at a time", "fig42-legend",
+      ${figHTML("fig42", `Fig ${+secNo("phases")}.2`, "Per-ledger latency, one phase at a time", "fig42-legend",
         `Latency percentiles over every ledger of the run (${medRuns}; linear scale, fitted to the selected phase). <strong>end to end</strong> is the per-ledger sum of the six phases; waiting for the next ledger is excluded.`, { picker: true })}
     </section>
 
+    ` + queriesSection + `
     <section id="machine" class="method">
-      <div class="sec-head"><span class="sec-num">05</span><h2>Machine metadata</h2></div>
+      <div class="sec-head"><span class="sec-num">${secNo("machine")}</span><h2>Machine metadata</h2></div>
       <p class="sec-intro">Raw provenance for the box behind these numbers.</p>
       ${rawResults}
       <pre class="metadata" id="machine-metadata"></pre>
     </section>
     ` + footerHTML(D, runId);
 
+    renderSectionNav(sectionDefs, secNo);
     const C = COLORS();
 
     /* ---- fig 1.1 E2E budget bar ---- */
     // Same slice order and derivation as the latency model
     // (latency-model.html), in lifecycle order:
     // E2E = rtt/2 + sendTransaction + block_count × block + ingest + rtt + getTransaction.
+    // The three slices this work owns each carry their own solid color; the
+    // network and consensus slices stay de-emphasized grey. A slice with no
+    // measurement behind it keeps its allocation and stays hatched.
     if (canBudget) {
-      const wp99 = ING[goalWorst].driver.ingest_total.p99.m;
-      const blockTotal = nBlocks * blockNs;
-      const netSendNs = Math.floor(rttNs / 2), netReadNs = rttNs;   // hardcoded network constants
-      const txRunNs = MEASURED_TX || sendNs;   // measured in-RPC sendTransaction when available, phase-independent
       const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
-      const e2eOf = (ing, txV) => netSendNs + txV + blockTotal + ing + netReadNs + getNs;
-      const segs = (ingNs, hatch, txV) => [
+      const getRunLabel = MEASURED_GET ? "getTransaction (measured, in-RPC)" : "getTransaction (estimate)";
+      const segs = (ingNs, measured, txV, getV) => [
         { color: C.de, ns: netSendNs, hatch: true },
-        { color: C.de, ns: txV, hatch: true },
+        { color: C.s5, ns: txV, hatch: !(measured && MEASURED_TX) },
         { color: C.de, ns: blockTotal, lab: `Stellar Core consensus — ${fmtNsAxis(blockTotal)}`, ink: true },
-        { color: C.s1, ns: ingNs, hatch: hatch, lab: fmtNs(ingNs), callout: true },
+        { color: C.s1, ns: ingNs, hatch: !measured, lab: fmtNs(ingNs), callout: true },
         { color: C.de, ns: netReadNs, hatch: true },
-        { color: C.de, ns: getNs, hatch: true },
+        { color: C.s2, ns: getV, hatch: !(measured && MEASURED_GET) },
       ];
-      const tip = (ingNs, ingLabel, txV, txLabel) => [
+      const tip = (ingNs, ingLabel, txV, txLabel, getV, getLabel) => [
         { color: C.de, value: fmtNs(netSendNs), label: "network — submission request (assumed)" },
-        { color: C.de, value: fmtNs(txV), label: txLabel },
+        { color: C.s5, value: fmtNs(txV), label: txLabel },
         { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
         { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
         { color: C.de, value: fmtNs(netReadNs), label: "network — getTransaction round trip (assumed)" },
-        { color: C.de, value: fmtNs(getNs), label: "getTransaction (estimate)" },
-        { value: fmtNs(e2eOf(ingNs, txV)), label: "end-to-end (derived)" },
+        { color: C.s2, value: fmtNs(getV), label: getLabel },
+        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end (derived)" },
       ];
       budgetChart("fig11-body", [
         { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
-          segs: segs(goalNs, true, sendNs), tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)") },
+          segs: segs(goalNs, false, sendNs, getNs),
+          tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)", getNs, "getTransaction (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
-          segs: segs(wp99, false, txRunNs), tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel) },
+          segs: segs(wp99, true, txRunNs, getRunNs),
+          tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
       ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
       legend("fig11-legend", [
-        { label: "Stellar Core consensus", color: C.de },
-        { label: MEASURED_TX ? "network (assumed) + getTransaction (estimate); sendTransaction measured"
-          : "network (assumed) + sendTransaction + getTransaction (estimates)",
-          color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
+        { label: "sendTransaction", color: C.s5 },
         { label: "ingestion", color: C.s1 },
+        { label: "getTransaction", color: C.s2 },
+        { label: "network + consensus (assumed constants)", color: C.de },
+        { label: "hatched = allocation, not a measurement",
+          color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
         { label: "E2E budget", color: CVAR("--warn"), line: true },
       ]);
       const dTxt = e2e => { const d = budgetNs - e2e; return d === 0 ? "on budget" : d > 0 ? fmtNs(d) + " under" : fmtNs(-d) + " over"; };
@@ -920,9 +1131,9 @@
         [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
         ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
         ["network — getTransaction round trip", fmtNsAxis(netReadNs), fmtNsAxis(netReadNs), "assumed constant"],
-        ["getTransaction", fmtNsAxis(getNs), fmtNsAxis(getNs), "estimate"],
-        ["end-to-end (derived)", fmtNs(e2eOf(goalNs, sendNs)), fmtNs(e2eOf(wp99, txRunNs)), "derived"],
-        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eOf(goalNs, sendNs)), dTxt(e2eOf(wp99, txRunNs)), "derived"],
+        ["getTransaction", fmtNsAxis(getNs), MEASURED_GET ? `${fmtNs(getRunNs)} (${disp(MEASURED_GET.unit)})` : fmtNsAxis(getNs), MEASURED_GET ? "allocated → measured" : "estimate"],
+        ["end-to-end (derived)", fmtNs(e2eGoal), fmtNs(e2eRun), "derived"],
+        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eGoal), dTxt(e2eRun), "derived"],
       ]);
     }
 
@@ -1047,6 +1258,7 @@
     const D = CURRENT.data;
     try { renderSummary(D); }
     catch (err) {
+      clearSectionNav();
       console.error("summary render failed", err);
       reportEl.innerHTML = `<div class="error-box">Failed to render the summary for run “${esc(D.run_id || "")}”: ${esc(err.message)}.
         <a href="index.html?run=${esc(D.run_id || "")}" style="color:var(--accent)">Open the full report ↗</a></div>`;
@@ -1054,6 +1266,7 @@
   }
 
   async function loadRun(entry) {
+    clearSectionNav();
     reportEl.innerHTML = `<div class="loading">Loading ${esc(entry.name || entry.id)}…</div>`;
     if (fullLink) fullLink.href = `index.html?run=${encodeURIComponent(entry.id)}`;
     try {
@@ -1109,6 +1322,11 @@
     selectRun(initial, false);
   }
 
-  window.addEventListener("resize", () => { clearTimeout(redrawTimer); redrawTimer = setTimeout(draw, 160); });
+  window.addEventListener("resize", () => {
+    syncToolbarOffset();
+    clearTimeout(redrawTimer);
+    redrawTimer = setTimeout(draw, 160);
+  });
+  syncToolbarOffset();
   boot();
 })();
