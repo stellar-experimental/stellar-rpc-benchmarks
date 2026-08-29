@@ -1030,13 +1030,13 @@
     }
 
     /* ---- machine metadata ---- */
-    // The raw dump is verbatim except the harness's campaign-config echo
-    // lines (both the old "-iters:" form and the newer "campaign:" one-liner),
-    // which repeat campaign config in internal vocabulary already covered by
-    // the masthead.
+    // The raw dump is verbatim except the harness's config-echo lines — the
+    // old "-iters:" form and the two current ones, "campaign: …" and
+    // "close-interval: …". All three repeat campaign config the masthead
+    // already states, in internal vocabulary this page does not use.
     (function machineMeta() {
       const lines = String((D.machine || {}).raw || "").trim().split("\n")
-        .filter(l => !/-iters:/.test(l) && !/^campaign: /.test(l));
+        .filter(l => !/-iters:/.test(l) && !/^campaign: /.test(l) && !/^close-interval: /.test(l));
       document.getElementById("machine-metadata").textContent = lines.join("\n");
     })();
   }

@@ -350,7 +350,9 @@ SPECS = [
     },
     {
         "id": "fixture-rps-partial",
-        "name": "Fixture — open-loop query load, hot-only first profile",
+        # The name reaches the public summary through the masthead, so it stays
+        # in the vocabulary that page allows — no tier word.
+        "name": "Fixture — open-loop query load, one tier missing on the first profile",
         "units": ["sac-6000-c1", "soroswap-1500-c1"],
         "reps": 1,
         "close_interval": "600ms",

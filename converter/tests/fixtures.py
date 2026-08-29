@@ -42,6 +42,8 @@ Mem:            8Gi       1Gi       6Gi
 repo: {commit} (old-branch)
 go version go1.26.5 linux/amd64
 rustc 1.97.0 (2d8144b78 2026-07-07)
+campaign: fixture-rps-query · ingest: both · query: yes · runs: 3 · query-duration: 60s · query-phase: 1
+close-interval: 2s · workers: 32 · hot-num-ledgers: 500
 fsync probe: 8192000 bytes (8.2 MB, 7.8 MiB) copied, 0.3 s, 27 MB/s
 """
 

@@ -594,6 +594,19 @@ for (const file of fixtureFiles) {
   check(group, "fixture has its own assertions", !!extra, "no FIXTURE_CHECKS entry for " + D.run_id);
   if (extra) extra(doc, group, D);
   window.close();
+
+  // The same fixture through the stakeholder summary. The committed runs carry
+  // older machine-metadata dumps, so the fixture is the only run whose dump is
+  // what the current harness writes — this is where a config-echo line leaking
+  // internal vocabulary into the public page is caught.
+  const sm = await loadViewer(`?run=${D.run_id}`, { page: "summary.html", script: "summary.js", fetch: makeFetch(overlay) });
+  const sdoc = sm.window.document;
+  const sreport = sdoc.getElementById("report");
+  check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
+  check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
+  const sbanned = txt(sreport).match(/\b(h[o]t|pod|platform|team)\b/i);
+  check(group, "summary: no internal vocabulary in rendered page", !sbanned, sbanned ? sbanned[0] : "");
+  sm.window.close();
 }
 
 /* ---------------- run index (bare index.html, no ?run=) ---------------- */
