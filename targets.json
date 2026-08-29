@@ -9,6 +9,40 @@
   },
   "query_p99_note": "Read-path design target, one number for every phase: no query cell (type x tier x concurrency) may exceed this p99. It sits outside fixed_estimates because it is not a slice of the E2E formula — the read benchmarks judge against it directly.",
   "query_p99_target_ns": 500000000,
+  "query_load_note": "Open-loop query load model: per endpoint x profile x phase RPS floors on a single RPC node, derived 2026-08-27 from the management read/write patterns guideline (benchmarking hub, 856-query-load-targets.md). Load is an arrival rate, not a concurrency level: each cell is paced at ladder x floor (0.5x/1x/2x); the verdict cell is 1x. Profiles are keyed by dataset model name (the dataset name with its per-ledger tx count stripped: sac-6000 -> sac). Per-profile arrays are indexed by phase: [phase 1, phase 2, phase 3]. The p99 SLA at the target rate is query_p99_target_ns above. get_tx_in_rpc_p99_ns is getTransaction's additional in-RPC p99 target — a separate verdict from the E2E-slice estimate in fixed_estimates. events_page_budget_ns is getEvents' additional per-phase MEAN page-latency budget (a sequential subscriber needs each page's cursor, so mean overrun accumulates as lag), not a p99.",
+  "query_load": {
+    "ladder": [0.5, 1, 2],
+    "derivation": {
+      "read_fraction": 0.1,
+      "txpage_page_limit": 200,
+      "events_page_limit": 1000,
+      "events_per_tx": {"sac": 1, "custom_token": 1, "soroswap": 5}
+    },
+    "get_tx_in_rpc_p99_ns": 10000000,
+    "profiles": {
+      "sac": {
+        "txhash_rps": [300, 500, 1000],
+        "txpage_rps": [15, 25, 50],
+        "ledgers_rps": [0.5, 1, 1.67],
+        "events_rps": [3, 5, 10],
+        "events_page_budget_ns": [333000000, 200000000, 100000000]
+      },
+      "custom_token": {
+        "txhash_rps": [200, 400, 600],
+        "txpage_rps": [10, 20, 30],
+        "ledgers_rps": [0.5, 1, 1.67],
+        "events_rps": [2, 4, 6],
+        "events_page_budget_ns": [500000000, 250000000, 167000000]
+      },
+      "soroswap": {
+        "txhash_rps": [75, 150, 300],
+        "txpage_rps": [3.75, 7.5, 15],
+        "ledgers_rps": [0.5, 1, 1.67],
+        "events_rps": [3.75, 7.5, 15],
+        "events_page_budget_ns": [267000000, 133000000, 67000000]
+      }
+    }
+  },
   "phases": [
     {
       "phase": 1,

@@ -100,7 +100,7 @@
   const COLORS = () => ({
     s1: CVAR("--s1"), s2: CVAR("--s2"), s3: CVAR("--s3"), s4: CVAR("--s4"),
     s5: CVAR("--s5"), s6: CVAR("--s6"), hot: CVAR("--hot"), cold: CVAR("--s1"),
-    de: CVAR("--deemph"), warn: CVAR("--warn"),
+    de: CVAR("--deemph"), warn: CVAR("--warn"), mu: CVAR("--muted"),
   });
 
   /* ============================ tooltip ============================ */
@@ -586,52 +586,140 @@
   };
   const qtLabel = qt => QT_LABEL[qt] || qt;
 
-  // Query types and concurrency levels, discovered from the data so a run that
-  // swept a different set still renders.
+  // Open-loop vocabulary. The paced generation names its cells "r<rate>" and
+  // hangs a `verdict_1x` beside them; the section speaks the endpoint names the
+  // RPC's public API uses, while the data keeps the CSV's machine names
+  // everywhere. An endpoint the map does not know keeps its raw name.
+  const QT_ENDPOINT = {
+    txhash: "getTransaction", txpage: "getTransactions",
+    ledgers: "getLedgers", events: "getEvents",
+  };
+  const endpointLabel = qt => QT_ENDPOINT[qt] || qt;
+  const RATE_KEY = /^r\d+(?:\.\d+)?$/;
+  // Served ÷ offered below this reads as saturation: the pacer could not place
+  // its requests, so the leg measured a queue rather than the endpoint.
+  const SATURATED = 0.95;
+  // A qtype entry's rate cells, ascending BY VALUE (so r500 precedes r1000).
+  // verdict_1x is a sibling of theirs, not one of them.
+  const rateKeys = qout => Object.keys(qout || {})
+    .filter(k => RATE_KEY.test(k)).sort((a, b) => +a.slice(1) - +b.slice(1));
+  const fmtRps = v => v == null || !isFinite(v) ? "—"
+    : v >= 100 ? fmtInt(v) : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2));
+  const rpsTxt = v => v == null || !isFinite(v) ? "—" : fmtRps(v) + " rps";
+  const cellTarget = (qout, k) =>
+    (qout[k] && qout[k].target_rps != null ? qout[k].target_rps : +k.slice(1));
+
+  // The judged rung of one endpoint entry: the cell the run names as this
+  // phase's floor, else the middle of whatever ladder it swept — an unfloored
+  // run still reports a measured number, just without a floor to judge it by.
+  function judgedRate(qout) {
+    const v = qout && qout.verdict_1x;
+    if (v && v.rate && qout[v.rate]) return v.rate;
+    const ks = rateKeys(qout);
+    return ks.length ? ks[Math.floor((ks.length - 1) / 2)] : null;
+  }
+
+  // One entry's ladder, labelled for a reader. The multiplier comes from the
+  // floor the run names; failing that, from the campaign's ladder by ascending
+  // position; failing that, the rung is labelled with its own rate.
+  function rungs(qout, ladder) {
+    const ks = rateKeys(qout);
+    const v = qout && qout.verdict_1x;
+    const floor = v && v.target_rps > 0 ? v.target_rps : null;
+    return ks.map((k, i) => {
+      const target = cellTarget(qout, k);
+      const label = floor ? (+(target / floor).toFixed(3)) + "×"
+        : (Array.isArray(ladder) && ladder.length === ks.length) ? (+ladder[i]) + "×"
+        : rpsTxt(target);
+      return { key: k, target, label, cell: qout[k] };
+    });
+  }
+
+  // Query types and sweep axis, discovered from the data so a run that swept a
+  // different set still renders. A run carries ONE cell generation (SCHEMA
+  // "Query cells: two generations"): closed-loop "c<W>" concurrency levels, or
+  // open-loop "r<rate>" arrival rates. `mode` is null when it carries neither,
+  // which gates the whole section off rather than guessing.
+  //
+  // CONC is a run-wide axis (every cell sweeps the same worker counts), but
+  // RATES is NOT: each endpoint's ladder is a multiple of its own phase floor,
+  // so the rates differ per (tier, unit, qtype). RATES here is only the probe
+  // that decides the mode — the open-loop renderers read each entry's own keys.
+  //
+  // The scan covers EVERY (tier, unit): a run whose first unit is absent from a
+  // tier — its cold query legs failed, or it swept hot only — still has a grid,
+  // and probing that one entry would report an empty one and take the whole
+  // section down with it. The grid is therefore the union of what the run
+  // recorded, not the shape of one corner of it, so a consumer must treat any
+  // single (tier, unit, qtype, cell) as possibly absent.
   function queryGrid(Q, units) {
-    const firstTier = Q && (Q.cold || Q.hot) ? (Q.cold || Q.hot) : {};
-    const firstUnit = firstTier[units[0]] || {};
-    const QT = Object.keys(firstUnit).filter(k => k !== "setup");
-    const someQt = QT[0] ? firstUnit[QT[0]] : {};
-    const CONC = Object.keys(someQt).filter(k => /^c\d+$/.test(k)).sort((a, b) => +a.slice(1) - +b.slice(1));
     const TIERS = ["cold", "hot"].filter(t => Q && Q[t]);
-    return { QT, CONC, TIERS };
+    const QT = [];
+    let probe = null;
+    for (const tier of TIERS) for (const u of units || []) {
+      const entry = Q[tier][u] || {};
+      for (const qt of Object.keys(entry)) {
+        if (qt === "setup") continue;
+        if (!QT.includes(qt)) QT.push(qt);
+        // The sweep axis comes from the first entry that carries cells; a qtype
+        // that recorded none still contributes its name, nothing else.
+        if (probe) continue;
+        const cells = entry[qt] || {};
+        const conc = Object.keys(cells).filter(k => /^c\d+$/.test(k));
+        const rates = rateKeys(cells);
+        if (conc.length || rates.length) probe = { conc, rates };
+      }
+    }
+    const CONC = (probe ? probe.conc : []).sort((a, b) => +a.slice(1) - +b.slice(1));
+    const RATES = probe ? probe.rates : [];
+    const mode = CONC.length ? "closed" : RATES.length ? "open" : null;
+    return { QT, CONC, RATES, TIERS, mode };
   }
 
   // ids: [latency, p99-vs-concurrency, throughput]. Returns the draw function.
   function queryFigs(o) {
     const { Q, QT, CONC, TIERS, C, ids } = o;
     const tierColor = t => (t === "cold" ? C.cold : C.hot);
-    const cell = (tier, qt, cc) => Q[tier][o.unit()][qt][cc];
+    // The grid is the union across units (see queryGrid), so a cell the selected
+    // unit never recorded reads as null here. A lane built on one is dropped and
+    // its table row prints "—"; nothing indexes through a missing entry.
+    const cell = (tier, qt, cc) => (((Q[tier] || {})[o.unit()] || {})[qt] || {})[cc] || null;
+    // Tiers this qtype can be charted on (every level present) or tabulated on
+    // (any level present) for the selected unit.
+    const tiersWith = (qt, some) => TIERS.filter(tier => some
+      ? CONC.some(cc => cell(tier, qt, cc)) : CONC.every(cc => cell(tier, qt, cc)));
     const lat = () => {
       const rows = QT.map(qt => ({
         label: qt, sub: qtLabel(qt).replace(qt + " ", "").replace(/[()]/g, ""),
-        lanes: TIERS.map(tier => {
+        lanes: TIERS.filter(tier => cell(tier, qt, CONC[0])).map(tier => {
           const q = cell(tier, qt, CONC[0]);
           return { name: tier + " tier (" + CONC[0] + ")", color: tierColor(tier), pts: { p50: q.p50.m, p90: q.p90.m, p99: q.p99.m, max: q.max.m }, spread: `${fmtNs(q.p99.lo)} – ${fmtNs(q.p99.hi)}` };
         }),
-      }));
-      dotRangeChart(ids[0] + "-body", rows);
+      })).filter(r => r.lanes.length);
+      if (rows.length) dotRangeChart(ids[0] + "-body", rows);
+      else document.getElementById(ids[0] + "-body").replaceChildren();
       legend(ids[0] + "-legend", [...TIERS.map(t => ({ label: t + " tier", color: tierColor(t) })), { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" }]);
       tableView(ids[0], ["Query type", "Tier", "p50", "p90", "p99", "max", "p99 spread"],
-        QT.flatMap(qt => TIERS.map(tier => { const q = cell(tier, qt, CONC[0]); return [qtLabel(qt), tier, fmtNs(q.p50.m), fmtNs(q.p90.m), fmtNs(q.p99.m), fmtNs(q.max.m), `${fmtNs(q.p99.lo)} – ${fmtNs(q.p99.hi)}`]; })));
+        QT.flatMap(qt => TIERS.filter(tier => cell(tier, qt, CONC[0])).map(tier => { const q = cell(tier, qt, CONC[0]); return [qtLabel(qt), tier, fmtNs(q.p50.m), fmtNs(q.p90.m), fmtNs(q.p99.m), fmtNs(q.max.m), `${fmtNs(q.p99.lo)} – ${fmtNs(q.p99.hi)}`]; })));
     };
     const p99 = () => {
-      const panels = QT.map(qt => ({ title: qt, series: TIERS.map(tier => ({ name: tier + " p99", color: tierColor(tier), vals: CONC.map(cc => cell(tier, qt, cc).p99.m) })) }));
-      linePanels(ids[1] + "-body", panels, { fmt: fmtNs, fmtTick: fmtNsAxis, xLabels: CONC });
+      const panels = QT.map(qt => ({ title: qt, series: tiersWith(qt).map(tier => ({ name: tier + " p99", color: tierColor(tier), vals: CONC.map(cc => cell(tier, qt, cc).p99.m) })) })).filter(p => p.series.length);
+      if (panels.length) linePanels(ids[1] + "-body", panels, { fmt: fmtNs, fmtTick: fmtNsAxis, xLabels: CONC });
+      else document.getElementById(ids[1] + "-body").replaceChildren();
       legend(ids[1] + "-legend", TIERS.map(t => ({ label: t + " p99", color: tierColor(t), line: true })));
       tableView(ids[1], ["Query type", "Tier", ...CONC.map(c => c + " p99")],
-        QT.flatMap(qt => TIERS.map(tier => [qtLabel(qt), tier, ...CONC.map(cc => fmtNs(cell(tier, qt, cc).p99.m))])));
+        QT.flatMap(qt => tiersWith(qt, true).map(tier => [qtLabel(qt), tier, ...CONC.map(cc => { const q = cell(tier, qt, cc); return q ? fmtNs(q.p99.m) : "—"; })])));
     };
     const tp = () => {
-      const panels = QT.map(qt => ({ title: qt, series: TIERS.map(tier => ({ name: tier + " ops/s", color: tierColor(tier), vals: CONC.map(cc => cell(tier, qt, cc).ops_s.m) })) }));
-      linePanels(ids[2] + "-body", panels, { fmt: fmtInt, xLabels: CONC });
+      const panels = QT.map(qt => ({ title: qt, series: tiersWith(qt).map(tier => ({ name: tier + " ops/s", color: tierColor(tier), vals: CONC.map(cc => cell(tier, qt, cc).ops_s.m) })) })).filter(p => p.series.length);
+      if (panels.length) linePanels(ids[2] + "-body", panels, { fmt: fmtInt, xLabels: CONC });
+      else document.getElementById(ids[2] + "-body").replaceChildren();
       legend(ids[2] + "-legend", TIERS.map(t => ({ label: t + " ops/s", color: tierColor(t), line: true })));
       const top = CONC[CONC.length - 1];
       tableView(ids[2], ["Query type", "Tier", ...CONC, "events/s @ " + top],
-        QT.flatMap(qt => TIERS.map(tier => {
+        QT.flatMap(qt => tiersWith(qt, true).map(tier => {
           const q = cell(tier, qt, top);
-          return [qtLabel(qt), tier, ...CONC.map(cc => fmtInt(cell(tier, qt, cc).ops_s.m)), q.items_s ? fmtInt(q.items_s.m) : "—"];
+          return [qtLabel(qt), tier, ...CONC.map(cc => { const c = cell(tier, qt, cc); return c ? fmtInt(c.ops_s.m) : "—"; }), q && q.items_s ? fmtInt(q.items_s.m) : "—"];
         })));
     };
     return () => { lat(); p99(); tp(); };
@@ -640,15 +728,18 @@
   // Worst unit for a (type, tier, concurrency) cell — the cell a target table
   // judges, since one unit over the line fails the run. `overCount` is how many
   // units breach, not just the worst: a cell can be missed by several at once,
-  // and reporting only the worst would hide the rest.
+  // and reporting only the worst would hide the rest. Null when no unit recorded
+  // the cell at all — the grid spans every unit's legs, not one unit's (see
+  // queryGrid), so a cell can be empty on this tier.
   function worstQueryCell(Q, units, tier, qt, cc, thr) {
     let w = null, overCount = 0;
     for (const u of units) {
-      const c = Q[tier][u][qt][cc];
+      const c = (((Q[tier] || {})[u] || {})[qt] || {})[cc];
+      if (!c) continue;
       if (!w || c.p99.m > w.cell.p99.m) w = { cell: c, unit: u };
       if (thr != null && c.p99.m > thr) overCount++;
     }
-    return { ...w, overCount };
+    return w && { ...w, overCount };
   }
 
   // Query target table: rows are type · tier, columns the concurrency sweep,
@@ -670,6 +761,8 @@
       for (const cc of CONC) {
         const w = worstQueryCell(Q, units, tier, qt, cc, thr);
         const td = document.createElement("td");
+        // No unit swept this cell on this tier: the column stays, empty.
+        if (!w) { td.textContent = "—"; r.appendChild(td); continue; }
         td.textContent = fmtMs(w.cell.p99.m) + " ms";
         // Name the worst unit, and say when it is not the only one over.
         const extra = w.overCount > 1 ? ` +${w.overCount - 1} more` : "";
@@ -689,6 +782,211 @@
         : "✓ = median-run p99 within the budget for every unit, including each cell's min–max spread.";
     }
     return { over, breaches, unitBreaches };
+  }
+
+  // ---- open-loop query rendering ----
+  // The 1× verdict table: the run's whole read-path answer in one grid, one row
+  // per endpoint × profile × tier. Three budgets are judged SEPARATELY and never
+  // folded together — the scheduled-latency target every endpoint carries, plus
+  // getTransaction's tighter in-RPC budget and getEvents' mean-page budget.
+  // Returns the counts so the caller's footnote can reconcile with the chips.
+  function openVerdictTable(tableId, footId, o) {
+    const { Q, QT, TIERS, C, units, thr, short } = o;
+    const t = document.getElementById(tableId);
+    if (!t) return { checks: 0, fails: 0, rows: 0, unfloored: 0 };
+    const head = ["Endpoint · profile · tier", "Offered", "Served",
+      `Scheduled p99 (≤ ${fmtNsAxis(thr)})`, "In-RPC p99", "Mean page"];
+    const tr = document.createElement("tr");
+    head.forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
+    t.appendChild(tr);
+    let checks = 0, fails = 0, rows = 0, unfloored = 0;
+    // A verdict chip is its own element so a hand count of breaches can be read
+    // straight off the table.
+    const chip = pass => {
+      checks++; if (!pass) fails++;
+      const s = document.createElement("span");
+      s.className = pass ? "cell-ok q-pass" : "cell-warn q-fail";
+      s.textContent = pass ? " ✓" : " ▲";
+      return s;
+    };
+    const note = text => { const s = document.createElement("span"); s.className = "cell-note"; s.textContent = " " + text; return s; };
+    const td = (parent, ...kids) => {
+      const c = document.createElement("td");
+      for (const k of kids) c.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
+      parent.appendChild(c);
+      return c;
+    };
+    for (const qt of QT) for (const u of units) for (const tier of TIERS) {
+      const qout = ((Q[tier] || {})[u] || {})[qt];
+      const key = qout && judgedRate(qout);
+      if (!key) continue;
+      const cell = qout[key] || {}, v = qout.verdict_1x || null;
+      if (!v) unfloored++;
+      rows++;
+      const r = document.createElement("tr");
+      const name = td(r, "");
+      const tag = document.createElement("span");
+      tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
+      name.appendChild(tag);
+      name.appendChild(document.createTextNode(`${endpointLabel(qt)} · ${short(u)} · ${tier}`));
+      // Offered: the phase floor when the run names one, else the rate the leg
+      // was actually paced at.
+      const target = v && v.target_rps != null ? v.target_rps : cell.target_rps;
+      td(r, rpsTxt(target), v ? note("(1× floor)") : note("(no floor)"));
+      // Served: the achieved arrival rate, flagged when the pacer fell behind.
+      const ach = cell.achieved_rps;
+      const sTd = td(r, ach ? rpsTxt(ach.m) : "—");
+      if (ach) {
+        sTd.appendChild(note(`(${fmtRps(ach.lo)} – ${fmtRps(ach.hi)})`));
+        if (target > 0 && ach.m < target * SATURATED) {
+          const w = document.createElement("span"); w.className = "cell-warn";
+          w.textContent = ` ▲ ${Math.round((1 - ach.m / target) * 100)} % under`;
+          sTd.appendChild(w);
+        }
+      }
+      // Headline: the SCHEDULED p99 — queue-inclusive, so a leg that fell behind
+      // its schedule shows the delay it caused.
+      const p99 = v && v.p99_ns != null ? v.p99_ns : (cell.p99 || {}).m;
+      const pTd = td(r, p99 == null ? "—" : fmtNs(p99));
+      if (p99 != null) pTd.appendChild(chip(v ? v.pass : p99 <= thr));
+      // The two extra budgets belong to one endpoint each — getTransaction
+      // answers for its time inside the RPC, getEvents for the page a
+      // sequential subscriber waits on. Every other row leaves them empty
+      // rather than showing a number no budget applies to.
+      const inR = v && v.in_rpc;
+      const svc = (cell.service || {}).p99;
+      if (inR) {
+        const c = td(r, fmtNs(inR.p99_ns));
+        c.appendChild(chip(inR.pass));
+        c.appendChild(note(`(≤ ${fmtNsAxis(inR.threshold_ns)})`));
+      } else if (qt === "txhash" && svc) td(r, fmtNs(svc.m), note("(no budget)"));
+      else td(r, "—");
+      const pg = v && v.page_budget;
+      if (pg) {
+        const c = td(r, fmtNs(pg.mean_ns));
+        c.appendChild(chip(pg.pass));
+        c.appendChild(note(`(≤ ${fmtNsAxis(pg.budget_ns)})`));
+      } else if (qt === "events" && cell.mean_page_ns) td(r, fmtNs(cell.mean_page_ns.m), note("(no budget)"));
+      else td(r, "—");
+      t.appendChild(r);
+    }
+    const foot = document.getElementById(footId);
+    if (foot) {
+      foot.replaceChildren();
+      const verdict = document.createElement("strong");
+      verdict.textContent = fails === 0
+        ? `All ${checks} checks pass at the 1× rate. `
+        : `${checks - fails} of ${checks} checks pass at the 1× rate; ${fails} breach. `;
+      foot.appendChild(verdict);
+      foot.appendChild(document.createTextNode(
+        "Each row is judged on the scheduled p99; getTransaction also carries an in-RPC budget and getEvents a mean-page budget, counted here as checks of their own."
+        + (unfloored ? ` ${unfloored} of ${rows} rows carry no phase floor — those are judged on the latency target alone.` : "")));
+    }
+    return { checks, fails, rows, unfloored };
+  }
+
+  // The three profile-scoped open-loop figures. ids: [offered-vs-served,
+  // p99 ladder, latency detail at the 1× rate]. o.unit() is read on every draw,
+  // so the profile picker just re-invokes the returned function.
+  function openQueryFigs(o) {
+    const { Q, QT, TIERS, C, ids, thr, ladder } = o;
+    const tierColor = t => (t === "cold" ? C.cold : C.hot);
+    const entry = (tier, qt) => ((Q[tier] || {})[o.unit()] || {})[qt] || null;
+    // Panels share one x axis, so only entries that swept the same number of
+    // rungs can be drawn together; anything else falls out of the chart and is
+    // still listed in the table view.
+    const grid = () => {
+      const out = [];
+      for (const qt of QT) for (const tier of TIERS) {
+        const e = entry(tier, qt);
+        if (e && rateKeys(e).length) out.push({ qt, tier, rows: rungs(e, ladder) });
+      }
+      const n = out.length ? Math.max(...out.map(g => g.rows.length)) : 0;
+      return { all: out, drawable: out.filter(g => g.rows.length === n), labels: (out.find(g => g.rows.length === n) || { rows: [] }).rows.map(r => r.label) };
+    };
+
+    // Fig A — offered vs served. The two lines sit on top of each other while
+    // the endpoint keeps up; the served line falling away IS the saturation.
+    const served = () => {
+      const g = grid();
+      const panels = g.drawable
+        .filter(p => p.rows.every(r => r.cell && r.cell.achieved_rps))
+        .map(p => ({
+          title: `${endpointLabel(p.qt)} · ${p.tier}`,
+          series: [
+            { name: "offered", color: C.mu, vals: p.rows.map(r => r.target) },
+            { name: "served", color: tierColor(p.tier), vals: p.rows.map(r => r.cell.achieved_rps.m) },
+          ],
+        }));
+      if (panels.length) linePanels(ids[0] + "-body", panels, { fmt: rpsTxt, fmtTick: fmtRps, xLabels: g.labels });
+      else document.getElementById(ids[0] + "-body").replaceChildren();
+      legend(ids[0] + "-legend", [
+        { label: "offered (target rate)", color: C.mu, line: true },
+        ...TIERS.map(t => ({ label: "served · " + t, color: tierColor(t), line: true })),
+      ]);
+      tableView(ids[0], ["Endpoint", "Tier", "Rung", "Offered", "Served", "Scheduled p99", "Dropped"],
+        g.all.flatMap(p => p.rows.map(r => {
+          const c = r.cell || {}, ach = c.achieved_rps;
+          let s = ach ? rpsTxt(ach.m) : "—";
+          if (ach && r.target > 0 && ach.m < r.target * SATURATED) {
+            s += ` ▲ ${Math.round((1 - ach.m / r.target) * 100)} % under target`;
+          }
+          return [endpointLabel(p.qt), p.tier, r.label, rpsTxt(r.target), s,
+            c.p99 ? fmtNs(c.p99.m) : "—", c.shed ? fmtInt(c.shed.m) : "—"];
+        })));
+    };
+
+    // Fig B — the latency knee: scheduled p99 as the arrival rate climbs.
+    const knee = () => {
+      const g = grid();
+      const panels = QT.map(qt => ({
+        title: endpointLabel(qt),
+        series: g.drawable.filter(p => p.qt === qt).map(p => ({
+          name: p.tier + " p99", color: tierColor(p.tier), vals: p.rows.map(r => (r.cell.p99 || {}).m || 1),
+        })),
+      })).filter(p => p.series.length);
+      if (panels.length) linePanels(ids[1] + "-body", panels, { fmt: fmtNs, fmtTick: fmtNsAxis, xLabels: g.labels });
+      else document.getElementById(ids[1] + "-body").replaceChildren();
+      legend(ids[1] + "-legend", TIERS.map(t => ({ label: t + " scheduled p99", color: tierColor(t), line: true })));
+      tableView(ids[1], ["Endpoint", "Tier", ...g.labels.map(l => l + " p99")],
+        g.drawable.map(p => [endpointLabel(p.qt), p.tier, ...p.rows.map(r => (r.cell.p99 ? fmtNs(r.cell.p99.m) : "—"))]));
+    };
+
+    // Fig C — the shape of the distribution at the judged rate, tier by tier.
+    const detail = () => {
+      const rows = [];
+      const flat = [];
+      for (const qt of QT) {
+        const lanes = [];
+        let sub = "";
+        for (const tier of TIERS) {
+          const e = entry(tier, qt);
+          const k = e && judgedRate(e);
+          if (!k) continue;
+          const c = e[k];
+          sub = "1× · " + rpsTxt(cellTarget(e, k));
+          lanes.push({
+            name: tier + " tier", color: tierColor(tier),
+            pts: { p50: c.p50.m, p90: c.p90.m, p99: c.p99.m, max: c.max.m },
+            spread: `${fmtNs(c.p99.lo)} – ${fmtNs(c.p99.hi)}`,
+          });
+          flat.push([endpointLabel(qt), tier, rpsTxt(cellTarget(e, k)),
+            fmtNs(c.p50.m), fmtNs(c.p90.m), fmtNs(c.p99.m), fmtNs(c.max.m),
+            c.service && c.service.p99 ? fmtNs(c.service.p99.m) : "—"]);
+        }
+        if (lanes.length) rows.push({ label: endpointLabel(qt), sub, lanes });
+      }
+      if (rows.length) {
+        dotRangeChart(ids[2] + "-body", rows, {
+          reflines: [{ ns: thr, label: fmtNsAxis(thr) + " — latency target" }], groupSeparators: true,
+        });
+      } else document.getElementById(ids[2] + "-body").replaceChildren();
+      legend(ids[2] + "-legend", [...TIERS.map(t => ({ label: t + " tier", color: tierColor(t) })),
+        { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" }]);
+      tableView(ids[2], ["Endpoint", "Tier", "Offered", "p50", "p90", "p99", "max", "In-RPC p99"], flat);
+    };
+
+    return () => { served(); knee(); detail(); };
   }
 
   function mastheadHTML(D) {
@@ -971,7 +1269,12 @@
     let total = 0, pass = 0, worst = null;
     for (const qt of QT) for (const tier of TIERS) for (const cc of CONC) {
       let w = null;
-      for (const c of CH) { const cell = Q[tier][c][qt][cc]; if (!w || cell.p99.m > w.cell.p99.m) w = { cell, c, tier, qt, cc }; }
+      for (const c of CH) {
+        const cell = (((Q[tier] || {})[c] || {})[qt] || {})[cc];
+        if (cell && (!w || cell.p99.m > w.cell.p99.m)) w = { cell, c, tier, qt, cc };
+      }
+      // A cell no chunk recorded is not a design target the run answered for.
+      if (!w) continue;
       total++;
       if (w.cell.p99.m <= thr) pass++;
       if (!worst || w.cell.p99.m > worst.cell.p99.m) worst = w;
@@ -1070,8 +1373,11 @@
       const e2e99 = CH.map(c => hot[c].driver.ingest_total.p99.m);
       mk(fmtMs(Math.min(...e2e99)) + "–" + fmtMs(Math.max(...e2e99)), "ms", "hot-ingest p99 per ledger, end to end (range across the " + CH.length + " chunks)");
       const dense = CH[CH.length - 1];
-      if (Q.hot[dense].txhash) mk(fmtNs(Q.hot[dense].txhash[CONC[0]].p50.m), "", "hot-tier single-tx lookup p50 incl. verification, densest chunk");
-      if (Q.hot[dense].events) { const evq = Q.hot[dense].events[CONC[CONC.length - 1]]; mk(fmtK(evq.items_s.m) + "/s", "events", "hot-tier event scan rate at " + CONC[CONC.length - 1] + ", densest chunk (" + Math.round(evq.ops_s.m) + " queries/s)"); }
+      const denseHot = (Q.hot || {})[dense] || {};
+      const txq = (denseHot.txhash || {})[CONC[0]];
+      if (txq) mk(fmtNs(txq.p50.m), "", "hot-tier single-tx lookup p50 incl. verification, densest chunk");
+      const evq = (denseHot.events || {})[CONC[CONC.length - 1]];
+      if (evq && evq.items_s) mk(fmtK(evq.items_s.m) + "/s", "events", "hot-tier event scan rate at " + CONC[CONC.length - 1] + ", densest chunk (" + Math.round(evq.ops_s.m) + " queries/s)");
     })();
 
     /* ---- chunk table ---- */
@@ -1246,8 +1552,10 @@
       const topC = CONC[CONC.length - 1];
       let flagged = null;
       for (const c of CH) {
+        const hotQ = (Q.hot || {})[c] || {};
         let p99s = [];
-        for (const qt of QT) if (Q.hot[c][qt] && Q.hot[c][qt][topC]) p99s.push(Q.hot[c][qt][topC].p99.m);
+        for (const qt of QT) if (hotQ[qt] && hotQ[qt][topC]) p99s.push(hotQ[qt][topC].p99.m);
+        if (!p99s.length) continue;
         const avg = p99s.reduce((a, b) => a + b, 0) / p99s.length;
         if (!flagged || avg > flagged.avg) flagged = { c, avg };
       }
@@ -1277,7 +1585,9 @@
     (function fig62() {
       const cells = [];
       for (const tier of TIERS) for (const c of CH) for (const qt of QT) for (const cc of CONC) {
-        const cell = Q[tier][c][qt][cc]; const p = cell.p99, p50 = cell.p50;
+        const cell = (((Q[tier] || {})[c] || {})[qt] || {})[cc];
+        if (!cell) continue;
+        const p = cell.p99, p50 = cell.p50;
         cells.push({ tier, c, qt, cc, spread: (p.hi - p.lo) / p.m * 100, p99: p.m, lo: p.lo, hi: p.hi, p50spread: (p50.hi - p50.lo) / p50.m * 100 });
       }
       cells.sort((a, b) => b.spread - a.spread);
@@ -1343,7 +1653,11 @@
     // queries block, so the whole section disappears and the rest renumber.
     const Q = D.queries;
     const qGrid = Q ? queryGrid(Q, ORDER) : null;
-    const hasQueries = !!(qGrid && qGrid.QT.length && qGrid.CONC.length && qGrid.TIERS.length);
+    const hasQueries = !!(qGrid && qGrid.QT.length && qGrid.TIERS.length && qGrid.mode);
+    // "open" = the paced-RPS generation, "closed" = the concurrency sweep. The
+    // two share nothing but the cell grid, so the section branches whole.
+    const qMode = qGrid ? qGrid.mode : null;
+    const qLadder = (D.campaign && D.campaign.query_load && D.campaign.query_load.ladder) || null;
     const qCheck = checkFor(D, "queries");
     const qThr = qCheck && qCheck.threshold_ns ? qCheck.threshold_ns : 500e6;
     let secN = 2;
@@ -1486,7 +1800,28 @@
         "Per-ledger lag = max(commit − due, 0) over every committed ledger (" + medRuns + "). On-time ledgers count as zero, so p50 = 0 means on schedule at least half the time. Dashed line = one close interval; lag ÷ close interval = ledgers behind tip.")
         + `<p id="pace-readout-full" class="sec-intro"></p>` : ""}
     </section>
-    ${hasQueries ? `
+    ${hasQueries && qMode === "open" ? `
+    <section id="queries">
+      <div class="sec-head"><span class="sec-num">${secQueries}</span><h2>Queries — the read path at a fixed request rate</h2></div>
+      <p class="sec-intro">The read side of the same stores the sections above filled, driven <strong>open-loop</strong>: every endpoint gets a fixed number of requests per second on a fixed schedule, rather than a fixed pool of clients that only asks again once the last answer came back. A server that slows down therefore builds a queue instead of quietly being asked for less. Each endpoint runs three legs — at <strong>half, exactly, and twice</strong> the request rate this phase asks of the profile in question — for a fixed span each. The latency reported everywhere below is the <strong>scheduled</strong> one: the clock starts when a request was <em>due</em>, not when the client got round to sending it, so queueing counts against the server rather than disappearing. The verdict is read at the 1× leg; the half and double legs are the context on either side of it. Cold legs drop the profile's files from the OS page cache before measuring; hot legs warm them first, because a warm cache is the hot tier's steady state.</p>
+      <figure class="fig" id="figq1">
+        <div class="fig-head"><div><span class="fig-no">Fig ${+secQueries}.1</span><span class="fig-title">Verdict at the 1× request rate</span></div></div>
+        <div class="fig-body"><div class="target-table-wrap"><table class="target" id="query-verdict-table"></table></div></div>
+        <figcaption>One row per endpoint, profile and tier, at the rate this phase asks for. <strong>Offered</strong> is that rate; <strong>served</strong> is what the client actually managed to place (${medRuns}, spread in brackets) — well under offered means the endpoint saturated. <strong>Scheduled p99</strong> is the headline, judged against ${esc(fmtNsAxis(qThr))}. getTransaction additionally answers for its time inside the RPC alone, and getEvents for the mean page a sequential subscriber waits on; both are separate verdicts and neither is folded into the headline.</figcaption>
+      </figure>
+      <p id="query-verdict-footnote" style="color:var(--muted); font-size:12.5px; margin-top:10px"></p>
+      <h3 class="sub-h">The rate ladder, one profile at a time</h3>
+      <p class="sec-intro">Pick a profile to scope the three figures below to it.</p>
+      <div class="filter-row" id="profile-filter"><span class="filter-lab">${esc(ds.unit_label)}</span></div>
+      ${figHTML("figq2", `Fig ${+secQueries}.2`, "Offered vs served request rate", "figq2-legend", `What the client asked for against what it managed to place, at each rung (${medRuns}; log scale, shared across panels). The two lines sit on top of each other while the endpoint keeps up; the served line falling away is the endpoint refusing more load. The table view names the shortfall and the requests dropped at the in-flight cap.`)}
+      ${figHTML("figq3", `Fig ${+secQueries}.3`, "Scheduled p99 as the request rate climbs", "figq3-legend", `The tail latency each rung bought (${medRuns}; log scale, shared across panels). A rung far above its neighbour is the knee — past it the endpoint is queueing, not serving.`)}
+      ${figHTML("figq4", `Fig ${+secQueries}.4`, "Latency at the 1× rate — the whole distribution", "figq4-legend", `Scheduled-latency percentiles over every request of the 1× leg (${medRuns}; log scale). The dashed line is the ${esc(fmtNsAxis(qThr))} latency target. The table view adds each endpoint's time inside the RPC.`)}
+      <figure class="fig" id="figq5">
+        <div class="fig-head"><div><span class="fig-no">Fig ${+secQueries}.5</span><span class="fig-title">Per-leg setup and event-scan detail</span></div></div>
+        <div class="fig-body"><div class="tv-scroll"><table class="data" id="query-setup-table" style="width:100%"></table></div></div>
+        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> builds the read fixture, and <code>evict</code> drops the cold artifacts from the page cache once per leg — a hot leg has nothing to evict, so the row is absent. The event columns are what getEvents actually returned at the 1× rate.</figcaption>
+      </figure>
+    </section>` : hasQueries ? `
     <section id="queries">
       <div class="sec-head"><span class="sec-num">${secQueries}</span><h2>Queries — cold vs hot tier</h2></div>
       <p class="sec-intro">The read side of the same stores the sections above filled. Every query runs through the daemon's read facade, so each one resolves its serving tier as a served request does. Cold cells drop the dataset's artifacts from the OS page cache before measuring; hot cells warm first, because a warm cache is the hot tier's steady state. Pick a profile to scope the figures.</p>
@@ -1853,7 +2188,9 @@
     if (hasQueries) (function queries() {
       const { QT, CONC, TIERS } = qGrid;
       let curProfile = ORDER[0];
-      const draw = queryFigs({ Q, QT, CONC, TIERS, C, ids: ["figq1", "figq2", "figq3"], unit: () => curProfile });
+      const draw = qMode === "open"
+        ? openQueryFigs({ Q, QT, TIERS, C, ids: ["figq2", "figq3", "figq4"], thr: qThr, ladder: qLadder, unit: () => curProfile })
+        : queryFigs({ Q, QT, CONC, TIERS, C, ids: ["figq1", "figq2", "figq3"], unit: () => curProfile });
       const holder = document.getElementById("profile-filter");
       for (const p of ORDER) {
         const b = document.createElement("button");
@@ -1872,22 +2209,33 @@
 
       // Setup rows and the event-scan detail, per profile and tier. Setup keys
       // differ by tier (only a cold leg evicts), so the columns are the union of
-      // what the run actually recorded.
+      // what the run actually recorded. The event columns are read off the
+      // generation's headline cell: the top concurrency level, or the 1× rung.
       (function setupTable() {
         const keys = [];
         for (const tier of TIERS) for (const p of ORDER) {
           const st = (Q[tier][p] || {}).setup || {};
           for (const k of Object.keys(st)) if (!keys.includes(k)) keys.push(k);
         }
+        const open = qMode === "open";
         const top = CONC[CONC.length - 1];
+        const evCellOf = (tier, p) => {
+          const ev = (Q[tier][p] || {}).events;
+          if (!ev) return null;
+          const k = open ? judgedRate(ev) : top;
+          return k ? ev[k] : null;
+        };
         const t = document.getElementById("query-setup-table");
-        const head = [ds.unit_label, "Tier", ...keys, `events / page @ ${top}`, `events/s @ ${top}`];
+        const at = open ? "1×" : "@ " + top;
+        const head = [ds.unit_label, "Tier", ...keys,
+          open ? `event records ${at}` : `events / page ${at}`,
+          open ? `mean page ${at}` : `events/s ${at}`];
         const tr = document.createElement("tr");
         head.forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
         t.appendChild(tr);
         for (const p of ORDER) for (const tier of TIERS) {
           const st = (Q[tier][p] || {}).setup || {};
-          const ev = (Q[tier][p] || {}).events, evCell = ev && ev[top];
+          const evCell = evCellOf(tier, p);
           const cells = [disp(p), tier];
           for (const k of keys) {
             const v = st[k];
@@ -1897,12 +2245,19 @@
           }
           // items_r is the per-run raw count; with one rep it is one number.
           cells.push(evCell && evCell.items_r ? evCell.items_r.join(" / ") : "—");
-          cells.push(evCell && evCell.items_s ? fmtInt(evCell.items_s.m) : "—");
+          if (open) cells.push(evCell && evCell.mean_page_ns ? fmtNs(evCell.mean_page_ns.m) : "—");
+          else cells.push(evCell && evCell.items_s ? fmtInt(evCell.items_s.m) : "—");
           const r = document.createElement("tr");
           cells.forEach(v => { const td = document.createElement("td"); td.textContent = v; r.appendChild(td); });
           t.appendChild(r);
         }
       })();
+
+      if (qMode === "open") {
+        openVerdictTable("query-verdict-table", "query-verdict-footnote",
+          { Q, QT, TIERS, C, units: ORDER, thr: qThr, short: u => (parts(u) || {}).name || disp(u) });
+        return;
+      }
 
       const { breaches, unitBreaches } = queryTargetTable("query-target-table", "query-target-footnote",
         { Q, QT, CONC, TIERS, C, units: ORDER, thr: qThr });
