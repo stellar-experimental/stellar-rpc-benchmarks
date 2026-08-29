@@ -592,21 +592,16 @@
   const endpointLabel = qt => QT_ENDPOINT[qt] || qt;
   const TIER_ORDER = ["hot", "cold"];
   const TIER_TITLE = { hot: "Recent ledgers (hot)", cold: "Archived ledgers (cold)" };
-  // What each tier holds and when a client lands on it. Both sentences restate
-  // the internal report's own tier facts: the live store is the RocksDB path
-  // ingestion writes to and is measured with its page cache warm, its steady
-  // state; the archive is the immutable packfiles plus the event index the
-  // backfill freezes, measured with those files dropped from the page cache.
   const TIER_NOTE = {
-    hot: "Recent ledgers stay in the live store that ingestion writes to, and a request lands here whenever the ledger it names is still held there — measured with the page cache warm, which is that store's steady state.",
-    cold: "Older ledgers are frozen into immutable files with their event index, and a request lands here whenever it names a ledger the live store no longer holds — measured with those files dropped from the page cache first.",
+    hot: "Recent ledgers are served from the live store with a warm page cache.",
+    cold: "Archived ledgers are served from immutable files and event indexes after eviction from the page cache.",
   };
   const fmtRps = v => v == null || !isFinite(v)
     ? "—"
     : (v >= 100 ? fmtInt(v) : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
-  // Every (tier, profile, endpoint) leg carrying a 1× verdict, grouped by tier
-  // and ordered endpoint-first. A leg without a verdict has no rate to be
-  // judged at, so it is omitted rather than shown with an empty cell.
+  // Every (tier, profile, endpoint) leg carrying a 1× result, grouped by tier
+  // and ordered endpoint-first. The source field is named verdict_1x, but the
+  // summary presents its p99 and request rate without a read-path verdict.
   function queryVerdicts(Q, order) {
     const out = {};
     for (const tier of TIER_ORDER) {
@@ -666,7 +661,7 @@
     const macBits = [mac.vcpus ? mac.vcpus + " vCPU" : "", mac.mem ? mac.mem + " RAM" : "", "local NVMe"].filter(Boolean).join(" · ");
     const macTxt = mac.instance ? ` Run on a single ${mac.instance} (${macBits}).` : "";
     const subTxt = wlNames.length && wlNames.every(Boolean)
-      ? `RPC per-ledger ingestion latency under Phase ${sel.phase} target load — production ingestion code, fed synthetic ledgers of ${wlNames.length > 1 ? wlNames.slice(0, -1).join(", ") + " and " + wlNames[wlNames.length - 1] : wlNames[0]}${paced ? ` at the ${fmtNsAxis(sel.block_time_ns)} block time` : ""}.${macTxt}`
+      ? `RPC v2 ingestion & query latencies under Phase ${sel.phase} target load, fed synthetic ledgers of ${wlNames.length > 1 ? wlNames.slice(0, -1).join(", ") + " and " + wlNames[wlNames.length - 1] : wlNames[0]}${paced ? ` at the ${fmtNsAxis(sel.block_time_ns)} block time` : ""}.${macTxt}`
       : (ds.description || "");
     return `
     <header class="masthead">
@@ -700,35 +695,6 @@
       <figcaption>${caption}</figcaption>
       ${opts.noTable ? "" : `<details class="tv" id="${id}-tv"><summary>Table view</summary><div class="tv-scroll"></div></details>`}
     </figure>`;
-  }
-
-  // The goals table — the summary reads a run against the phase it was paced
-  // for, so only that phase's column is shown (all phases when none matches).
-  function phaseTableHTML(PH) {
-    const sel = PH.sel;
-    const cols = sel ? [sel] : PH.targets;
-    const selNo = sel ? sel.phase : null;
-    // The selected-column tint only means something next to other columns.
-    const cls = p => (!sel && selNo === p.phase ? ' class="ph-sel"' : "");
-    const head = cols.map(p =>
-      `<th${cls(p)}>Phase ${p.phase}${selNo === p.phase ? '<span class="ph-badge">this run</span>' : ""}</th>`).join("");
-    const row = (label, f) =>
-      `<tr><td>${label}</td>${cols.map(p => `<td${cls(p)}>${f(p)}</td>`).join("")}</tr>`;
-    let rows = "";
-    rows += row("Block time", p => fmtNsAxis(p.block_time_ns));
-    rows += row("End-to-end budget (externalized → client)", p => p.e2e_budget_ns ? fmtNsAxis(p.e2e_budget_ns) : "—");
-    rows += row("Ingestion latency, p99 (meta available → ingested in RPC)",
-      p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) : "—");
-    for (const name of (cols[0].workloads || []).map(w => w.name)) {
-      rows += row(esc(name), p => {
-        const w = (p.workloads || []).find(x => x.name === name);
-        return w ? `${fmtInt(w.tps)} TPS (${fmtInt(w.tx_per_ledger)} tx/ledger)` : "—";
-      });
-    }
-    return `<div class="phase-block" id="phase-block">
-      <div class="fig-head"><div><span class="fig-no">Goals</span><span class="fig-title">${sel ? `The Phase ${sel.phase} goals` : "The three phases and their goals"}</span></div></div>
-      <div class="tv-scroll"><table class="data phase-table"><tr><th>Goal</th>${head}</tr>${rows}</table></div>
-    </div>`;
   }
 
   // Per-ledger latency lanes: end to end plus every ingestion phase, in phase
@@ -792,17 +758,11 @@
     const qTiers = TIER_ORDER.filter(t => QV[t]);
     const hasQueries = qTiers.length > 0;
     const MEASURED_GET = measuredGetTx(QV);
-    // The read-path goal every cell is judged against; the cells carry it, and
-    // targets.json's 500 ms is the fallback when a run predates that field.
-    const qThrNs = (() => {
-      for (const t of qTiers) for (const r of QV[t]) if (r.v.threshold_ns > 0) return r.v.threshold_ns;
-      return 500000000;
-    })();
 
     // Section numbers are display only, and two sections are conditional — so
     // they are numbered from what this run actually renders, and every § link
     // in the prose reads its number from here.
-    const SECS = ["budget", "glance", "method", "goal", "phases", "queries", "machine"]
+    const SECS = ["budget", "method", "goal", "phases", "queries", "machine"]
       .filter(id => (id === "budget" ? canBudget : id === "queries" ? hasQueries : true));
     const secNo = id => String(SECS.indexOf(id) + 1).padStart(2, "0");
 
@@ -819,7 +779,7 @@
     const banner = goalNs && units.length ? (() => {
       const w = goalWorst ? ING[goalWorst].driver.ingest_total : null;
       const note = goalMet
-        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. <a href="#goal">§${secNo("goal")} · Latency vs the goal</a> compares the profiles; <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a> shows where the time goes.`
+        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. The chart below compares the profiles; <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a> shows where the time goes.`
         : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
       return `<div class="banner${goalMet ? "" : " warn-tail"}">
         <div class="banner-figure">${goalPass}<span class="of"> / ${units.length}</span></div>
@@ -905,8 +865,8 @@
     const e2eGoal = canBudget ? e2eOf(goalNs, sendNs, getNs) : 0;
     const e2eRun = canBudget ? e2eOf(wp99, txRunNs, getRunNs) : 0;
     const slack = budgetNs - e2eRun;
-    const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "The end-to-end trip, slice by slice", "fig11-legend",
-      `The six slices of the end-to-end (E2E) trip, in lifecycle order, against the declared Phase ${sel.phase} E2E budget: the goal composition on the top bar, this run's trip on the bottom one. The two network slices are hardcoded constants from the assumed ${fmtNsAxis(rttNs)} round trip — ${fmtNsAxis(netSendNs)} carries the submission request, a full round trip the getTransaction call — and the Stellar Core consensus slice spans ${nBlocks} blocks of ${fmtNsAxis(blockNs)} each, because ${whyBlocks}. Hatched slices are targets or estimates; solid ones are measured.`) : "";
+    const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
+      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. Hatched segments are targets or estimates; solid segments are measured.`) : "";
 
     // One tile per slice this work owns: what it measured, on which profile,
     // against what it was allocated. The mark judges the slice alone — the
@@ -919,8 +879,8 @@
     </div>`;
     const budgetSection = canBudget ? `
     <section id="budget">
-      <div class="sec-head"><span class="sec-num">${secNo("budget")}</span><h2>Go / no-go — the Phase ${sel.phase} end-to-end budget</h2></div>
-      <p class="sec-intro">Three slices of the end-to-end trip are ours to move — sendTransaction, ingestion, getTransaction — each measured at p99 on the worst workload profile. The verdict is the total against the budget: a slice may overrun its allocation as long as the whole trip stays inside.</p>
+      <div class="sec-head"><span class="sec-num">${secNo("budget")}</span><h2>Phase ${sel.phase} end-to-end budget</h2></div>
+      <p class="sec-intro">We measure p99 latency for sendTransaction, ingestion, and getTransaction on the highest-latency workload profile. The go / no-go decision is based on total end-to-end latency instead of each slice's target.</p>
       <div class="banner${slack < 0 ? " warn-tail" : ""}"><div class="banner-copy">
         <div class="lead">E2E ${fmtNs(e2eRun)} of the ${fmtNs(budgetNs)} budget — ${slack === 0 ? "exactly on budget" : slack > 0 ? `${fmtNs(slack)} under` : `${fmtNs(-slack)} over`}. ${slack < 0 ? '<span class="chip warn">▲ NO-GO</span>' : '<span class="chip">✓ GO</span>'}</div>
       </div></div>
@@ -937,60 +897,57 @@
     // unit off so it reads as prose.
     const qDuration = ((camp.config || {}).query_duration || "").trim().replace(/(\d)\s*([a-z])/i, "$1 $2");
     const qRateTxt = sel ? `Phase ${sel.phase} request rate` : "target request rate";
+    const qLoadTxt = sel ? `Phase ${sel.phase} load` : "target load";
     const queryTableHTML = tier => {
       const rows = QV[tier];
-      const met = rows.filter(r => r.v.pass).length;
-      const head = ["Endpoint", "Workload", "Request rate", "Latency p99", `Goal ≤ ${fmtNsAxis(qThrNs)}`];
-      const body = rows.map(r => `<tr>
-          <td>${esc(endpointLabel(r.qt))}</td>
-          <td>${esc(disp(r.unit))}</td>
-          <td class="q-num">${esc(fmtRps(r.v.target_rps))}</td>
-          <td class="q-num">${esc(fmtNs(r.v.p99_ns))}</td>
-          <td>${r.v.pass ? '<span class="chip">✓</span>' : '<span class="chip warn">▲ miss</span>'}</td>
+      const cells = new Map(rows.map(r => [`${r.qt}\0${r.unit}`, r.v]));
+      const head = ORDER.map(unit => `<th scope="col">${esc(disp(unit))}</th>`).join("");
+      const body = QT_ORDER.map(qt => `<tr>
+          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}</th>
+          ${ORDER.map(unit => {
+            const v = cells.get(`${qt}\0${unit}`);
+            return v
+              ? `<td class="q-cell"><strong class="q-latency">${esc(fmtNs(v.p99_ns))}</strong><span class="q-rate">${esc(fmtRps(v.target_rps))}</span></td>`
+              : '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';
+          }).join("")}
         </tr>`).join("");
       return `<div class="tv-scroll"><table class="data q-table" id="q-table-${tier}" style="width:100%">
-        <tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr>${body}</table></div>
-        <p class="q-count">${met} of ${rows.length} within the goal.</p>`;
+        <thead><tr><th scope="col">Endpoint</th>${head}</tr></thead>
+        <tbody>${body}</tbody></table></div>`;
     };
     const queriesSection = hasQueries ? `
     <section id="queries">
-      <div class="sec-head"><span class="sec-num">${secNo("queries")}</span><h2>Query latency at the ${esc(qRateTxt)}</h2></div>
-      <p class="sec-intro">Each endpoint was driven at the ${esc(qRateTxt)} for its workload${qDuration ? ` for ${esc(qDuration)}` : ""}, on the same box that ingested the ledgers. The number is the p99 of request latency as the client observes it, against the read-path goal of ${fmtNsAxis(qThrNs)}.</p>
+      <div class="sec-head"><span class="sec-num">${secNo("queries")}</span><h2>Query latency at ${esc(qLoadTxt)}</h2></div>
+      <p class="sec-intro">Each endpoint ran${qDuration ? ` for ${esc(qDuration)}` : ""} at its workload's ${esc(qRateTxt)}. Values are client-observed p99 latency.</p>
       ${qTiers.map(tier => `<h3 class="method-sub">${esc(TIER_TITLE[tier] || tier)}</h3>
       <p class="sec-intro">${esc(TIER_NOTE[tier] || "")}</p>
       ${queryTableHTML(tier)}
-      ${tier === "hot" && canBudget && MEASURED_GET ? `<p class="q-foot">getTransaction's time inside the RPC alone is judged in §${secNo("budget")}.</p>` : ""}`).join("")}
+      ${tier === "hot" && canBudget && MEASURED_GET ? `<p class="q-foot">The end-to-end budget in §${secNo("budget")} uses the highest measured <code>getTransaction</code> p99.</p>` : ""}`).join("")}
     </section>` : "";
 
     /* ---- pacing prose ---- */
     const paceIsBlockTime = blockNs && closeNs === blockNs;
     const pacePara = closeNs > 0
-      ? `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. The benchmark controls two things: where ledgers come from, and when. It feeds the generated ledgers at a fixed close interval — <strong>${fmtNsAxis(closeNs)}</strong> for this run${paceIsBlockTime ? `, the Phase ${sel.phase} block time` : ""}. The clock starts when the first ledger arrives — the <strong>anchor</strong>. From there, every ledger has a fixed due time: ledger <em>i</em> is due at <code>anchor + i × interval</code>. The loop sleeps until each due time, then ingests. When a ledger runs long, the loop falls behind; it then ingests back-to-back until it catches up.`
+      ? `The benchmark runs RPC's production ingestion loop and schedules one ledger every <strong>${fmtNsAxis(closeNs)}</strong>${paceIsBlockTime ? `, matching the Phase ${sel.phase} block time` : ""}. If ingestion exceeds that interval, the next ledger starts immediately and the loop runs without waiting until it catches up.`
       : `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. This run was not paced: ledgers were fed back-to-back.`;
 
     /* ---- section skeleton ---- */
     reportEl.innerHTML = mastheadHTML(D) + budgetSection + `
-    <section id="glance">
-      <div class="sec-head"><span class="sec-num">${secNo("glance")}</span><h2>At a glance</h2></div>
-      ${sel ? `<p class="sec-intro">Phase ${sel.phase} models a ${fmtNsAxis(blockNs)} block time.${goalNs ? ` The goal: per-ledger ingestion latency p99 within ${fmtNsAxis(goalNs)} on every workload profile.` : ""}</p>` : ""}
-      ${banner}
-      ${PH ? phaseTableHTML(PH) : ""}
-    </section>
-
     <section id="method">
       <div class="sec-head"><span class="sec-num">${secNo("method")}</span><h2>Methodology</h2></div>
       <h3 class="method-sub">Test data</h3>
-      <p class="sec-intro">Synthetic ledgers, generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's TPL target rate. Three profiles cover the target workloads.</p>
+      <p class="sec-intro">Synthetic ledgers are generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's target TPL.</p>
       ${datasetTable}
       ${sourceData}
       <h3 class="method-sub">Ingestion and pacing</h3>
       <p class="sec-intro">${pacePara}</p>
       ${figHTML("fig21", `Fig ${+secNo("method")}.1`, "How ledgers are fed — the close-interval schedule", "",
-        `Schematic. The solid line is the anchor — the first ledger arrives and the clock starts. Startup time before the anchor is not on the schedule, however long it takes. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. On schedule, the loop sleeps until the due time, then ingests (L0–L2). A slow ledger (L3) puts the loop behind; the next ledger (L4) starts at once, with no sleep, until the loop catches back up (L5). The gap between a late commit and its due time is the lag.`, { noTable: true })}
+        `Ledger 0 sets the <strong>anchor</strong>; startup before it is untimed. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. L0–L2 finish within their slots, so the loop waits for each next due time. L3 overruns its slot; L4 starts immediately, and normal pacing resumes with L5 after catch-up. Lag is the time from a ledger's due time to its commit.`, { noTable: true })}
     </section>
 
     <section id="goal">
       <div class="sec-head"><span class="sec-num">${secNo("goal")}</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
+      ${banner}
       ${figHTML("fig31", `Fig ${+secNo("goal")}.1`, "Ingestion latency p99 by workload profile", "fig31-legend",
         `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${fmtNsAxis(goalNs)}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
       <p class="sec-intro" id="goal-readout"></p>
