@@ -36,6 +36,26 @@
 /* in-bar label on the light gray block-time segment (white would wash out) */
 .bud-lab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; fill: var(--ink); }
 
+/* ---------- go / no-go slice tiles ----------
+   One tile per slice this work owns, under the budget bar: what it measured,
+   on which profile, against what it was allocated. Three across on a wide
+   screen, stacking on a narrow one. */
+.slice-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 16px; }
+.slice-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 12px; }
+.slice-name { font-size: 12.5px; font-weight: 650; color: var(--ink-2); }
+.slice-val { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin-top: 4px; }
+.slice-val .cell-ok, .slice-val .cell-warn { font-size: 12px; }
+.slice-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.slice-alloc {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+  color: var(--muted); margin-top: 8px;
+}
+
+/* ---------- query latency tables ---------- */
+.summary .q-table .q-num { font-variant-numeric: tabular-nums; }
+.summary .q-count { font-size: 12.5px; color: var(--ink-2); margin: 8px 0 0; }
+.summary .q-foot { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
+
 /* pass/miss readout under the headline figure — never wrap mid-item */
 .summary #goal-readout .goal-item { white-space: nowrap; }
 

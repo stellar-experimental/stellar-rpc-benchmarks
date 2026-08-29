@@ -481,6 +481,131 @@ for (const run of manifest.runs) {
   window.close();
 }
 
+/* ---------------- summary-page section helpers ---------------- */
+/* The summary's two conditional sections, decided from the run JSON exactly as
+   summary.js decides them: the go / no-go budget section needs a phase with a
+   declared E2E budget, and the query section needs at least one leg carrying a
+   1x verdict. */
+const QT_ENDPOINT = { txhash: "getTransaction", txpage: "getTransactions", ledgers: "getLedgers", events: "getEvents" };
+/* Every (tier, unit, endpoint) leg with a 1x verdict, grouped by tier — the
+   rows the summary's per-tier table must carry, one for one. */
+function summaryQueryRows(D) {
+  const out = {};
+  for (const tier of ["hot", "cold"]) {
+    const t = (D.queries || {})[tier];
+    if (!t) continue;
+    const rows = [];
+    for (const u of D.dataset.unit_order) {
+      for (const [qt, qout] of Object.entries(t[u] || {})) {
+        if (qt === "setup") continue;
+        const v = (qout || {}).verdict_1x;
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v });
+      }
+    }
+    if (rows.length) out[tier] = rows;
+  }
+  return out;
+}
+/* The budget section's own gate: summary.js needs a matched phase carrying an
+   ingestion target, a block time and an E2E budget (the fixed network and
+   handler constants come from targets.json, which every run reads). */
+function summaryHasBudget(D) {
+  const targets = JSON.parse(fs.readFileSync(path.join(DOCS, "targets.json"), "utf8"));
+  const phase = (D.campaign || {}).phase;
+  if (phase == null) return false;
+  const p = (targets.phases || []).find((x) => x.phase === phase);
+  const fx = targets.fixed_estimates || {};
+  if (!p || !p.block_time_ns || !p.e2e_budget_ns) return false;
+  if (!fx.network_rtt_ns || !fx.send_tx_p99_ns || !fx.get_tx_p99_ns) return false;
+  // Phase 2 omits its ingestion target; summary.js derives it the same way.
+  const derived = p.ingest_p99_target_ns != null ? p.ingest_p99_target_ns
+    : p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns
+      - (Math.floor(3 * fx.network_rtt_ns / 2) + fx.send_tx_p99_ns + fx.get_tx_p99_ns);
+  return derived > 0 && (D.ingest_hot ? Object.keys(D.ingest_hot).length > 0 : false);
+}
+/* The summary's own section assertions, shared by the manifest runs and the
+   generated fixtures. `text` is the rendered page with #queries cut out — the
+   only place the tier words are allowed to appear. */
+function checkSummarySections(sdoc, group, D) {
+  const sreport = sdoc.getElementById("report");
+  const wantBudget = summaryHasBudget(D);
+  const QR = summaryQueryRows(D);
+  const qTiers = ["hot", "cold"].filter((t) => QR[t]);
+  const wantQueries = qTiers.length > 0;
+
+  // Vocabulary: the tier words are section-scoped, everything else is banned
+  // outright. Clone the report and drop #queries before reading the text.
+  const clone = sreport.cloneNode(true);
+  const qsec = clone.querySelector("#queries");
+  if (qsec) qsec.remove();
+  const outside = txt(clone);
+  const banned = outside.match(/\b(h[o]t|pod|platform|team)\b/i);
+  check(group, "no internal vocabulary outside the query section", !banned, banned ? banned[0] : "");
+  const everywhere = txt(sreport).match(/\b(pod|platform|team)\b/i);
+  check(group, "no pod/platform/team vocabulary anywhere", !everywhere, everywhere ? everywhere[0] : "");
+
+  // Section order, with the two conditional sections in their declared slots
+  // and machine metadata always last.
+  const want = ["budget", "glance", "method", "goal", "phases", "queries", "machine"]
+    .filter((id) => (id === "budget" ? wantBudget : id === "queries" ? wantQueries : true));
+  const secs = [...sreport.querySelectorAll("section")].map((s) => s.id);
+  check(group, `section order ${want.join("→")}`, secs.join(",") === want.join(","), secs.join(","));
+
+  if (wantBudget) {
+    const bud = sdoc.getElementById("budget");
+    check(group, "budget figure lives inside the budget section", !!(bud && bud.querySelector("#fig11")), bud ? "fig11 elsewhere" : "no section");
+    const lead = txt(bud && bud.querySelector(".banner .lead"));
+    check(group, "budget verdict is GO or NO-GO", /\b(GO|NO-GO)\b/.test(lead) && /of the .* budget/.test(lead), lead.slice(0, 140));
+    const tiles = bud ? bud.querySelectorAll(".slice-tile").length : 0;
+    check(group, "three slice tiles", tiles === 3, tiles + " tiles");
+    const tileTxt = txt(bud && bud.querySelector(".slice-tiles"));
+    check(group, "tiles name the three slices and their allocations",
+      /sendTransaction/.test(tileTxt) && /ingestion/.test(tileTxt) && /getTransaction/.test(tileTxt)
+      && (tileTxt.match(/allocation/g) || []).length === 3, tileTxt.slice(0, 160));
+    // getTransaction is measured only when the run recorded an in-RPC p99 on a
+    // live-store getTransaction leg; otherwise its allocation stands.
+    const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.v.in_rpc);
+    const f11t = txt(sdoc.querySelector("#fig11-tv"));
+    const getRow = f11t.split("getTransaction round trip")[1] || "";
+    check(group, measuredGet ? "budget table: getTransaction allocated → measured" : "budget table: getTransaction stays an estimate",
+      measuredGet ? /allocated → measured/.test(getRow) : !/getTransaction[^|]*allocated → measured/.test(getRow.split("end-to-end")[0] || ""),
+      getRow.slice(0, 160));
+  } else {
+    check(group, "no budget section without a phase E2E budget", !sdoc.getElementById("budget"), "section present");
+  }
+
+  if (!wantQueries) {
+    check(group, "no query section without 1x query verdicts", !sdoc.getElementById("queries"), "section present");
+    return;
+  }
+  const qsecLive = sdoc.getElementById("queries");
+  const subs = qsecLive.querySelectorAll("h3.method-sub").length;
+  check(group, `one subsection per tier (${qTiers.length})`, subs === qTiers.length, subs + " subheads");
+  const tables = qsecLive.querySelectorAll("table").length;
+  check(group, `one table per tier (${qTiers.length})`, tables === qTiers.length, tables + " tables");
+  for (const tier of qTiers) {
+    const t = sdoc.getElementById(`q-table-${tier}`);
+    const rows = t ? t.querySelectorAll("tr").length - 1 : -1;
+    check(group, `${tier} table: one row per verdict cell (${QR[tier].length})`, rows === QR[tier].length, rows + " rows");
+    const chips = t ? t.querySelectorAll(".chip").length : 0;
+    const misses = t ? t.querySelectorAll(".chip.warn").length : 0;
+    const wantMiss = QR[tier].filter((r) => !r.v.pass).length;
+    check(group, `${tier} table: one chip per row, ${wantMiss} miss chips`,
+      chips === QR[tier].length && misses === wantMiss, `${chips} chips, ${misses} misses`);
+    // Endpoint names, never the raw cell tokens.
+    const names = [...new Set(QR[tier].map((r) => QT_ENDPOINT[r.qt] || r.qt))];
+    const tTxt = txt(t);
+    check(group, `${tier} table names the endpoints`, names.every((n) => tTxt.includes(n)), tTxt.slice(0, 160));
+  }
+  const qTxt = txt(qsecLive);
+  check(group, "no raw query-cell tokens in the section", !/\b(txhash|txpage)\b/.test(qTxt), (qTxt.match(/\b(txhash|txpage)\b/) || [""])[0]);
+  const counts = [...qsecLive.querySelectorAll(".q-count")].map((e) => txt(e));
+  check(group, "a count line under every table",
+    counts.length === qTiers.length && qTiers.every((t, i) => counts[i] === `${QR[t].filter((r) => r.v.pass).length} of ${QR[t].length} within the goal.`),
+    counts.join(" | "));
+}
+
+
 /* ---------------- generated fixture runs (tests/smoke/fixtures) ---------------- */
 /* Shapes the converter can emit that no committed run carries yet — today the
    open-loop (paced-RPS) queries block, in three variations. `make smoke`
@@ -604,8 +729,7 @@ for (const file of fixtureFiles) {
   const sreport = sdoc.getElementById("report");
   check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
-  const sbanned = txt(sreport).match(/\b(h[o]t|pod|platform|team)\b/i);
-  check(group, "summary: no internal vocabulary in rendered page", !sbanned, sbanned ? sbanned[0] : "");
+  checkSummarySections(sdoc, group + " summary", D);
   sm.window.close();
 }
 
@@ -779,14 +903,13 @@ for (const run of manifest.runs) {
   check(group, "full-report link targets internal viewer", !!full && full.getAttribute("href") === `index.html?run=${run.id}`, full ? full.getAttribute("href") : "missing");
   const allRuns = doc.getElementById("all-runs-link");
   check(group, "all-runs link back to the run index", !!allRuns && allRuns.getAttribute("href") === "index.html", allRuns ? allRuns.getAttribute("href") : "missing");
-  // Audience vocabulary: the page never uses the internal tier/org words.
+  // Audience vocabulary + section order, including the two conditional
+  // sections (go / no-go, query latency).
   const text = txt(report);
-  const banned = text.match(/\b(h[o]t|pod|platform|team)\b/i);
-  check(group, "no internal vocabulary in rendered page", !banned, banned ? banned[0] : "");
-  // Section order: machine metadata is the bottom-most section.
-  const secs = [...report.querySelectorAll("section")].map(s => s.id);
-  check(group, "section order glance→method→goal→phases→machine", secs.join(",") === "glance,method,goal,phases,machine", secs.join(","));
-  const bannerTxt = txt(report.querySelector(".banner"));
+  checkSummarySections(doc, group, runJSON(run.id));
+  // The goal banner lives in §At a glance; the budget section above it carries
+  // a verdict banner of its own.
+  const bannerTxt = txt(report.querySelector("#glance .banner"));
   check(group, "goal banner has a verdict", /(MEETS GOAL|MISS)/.test(bannerTxt), bannerTxt.slice(0, 120));
   // Goals table: cut to the phase the run was paced for; the two benchmark
   // non-inputs (Orgs, Retention) are not shown.
@@ -802,8 +925,8 @@ for (const run of manifest.runs) {
   }
   check(group, "no Orgs or Retention rows", !/Orgs|Retention/.test(phTbl), phTbl.slice(0, 100));
   // Fig 1.1: the E2E budget bar — the goal composition vs the same trip with
-  // this run's measured ingestion, against the phase's declared E2E budget.
-  if (phNo != null) {
+  // this run's measured slices, against the phase's declared E2E budget.
+  if (doc.getElementById("budget")) {
     const f11 = doc.querySelector("#fig11-body svg");
     check(group, "budget figure rendered", !!f11, "missing");
     check(group, "budget ceiling line drawn", !!(f11 && f11.querySelector("line.refline-budget")), "missing");
