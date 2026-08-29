@@ -18,6 +18,8 @@
   const selectEl = document.getElementById("run-select");
   const themeBtn = document.getElementById("theme-toggle");
   const fullLink = document.getElementById("full-report");
+  const toolbarEl = document.querySelector(".summary-toolbar");
+  const navEl = document.getElementById("summary-nav");
   const tip = document.getElementById("tip");
 
   // The run schema's live-ingestion section (see SCHEMA.md). The key is
@@ -33,7 +35,17 @@
   let MEASURED_TX_NAME = ""; // which tx-submission profile carried that p99
   let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
   let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
+  let sectionObserver = null;
   let redrawTimer = null;
+
+  const SECTION_META = [
+    { id: "budget", label: "E2E budget" },
+    { id: "method", label: "Methodology" },
+    { id: "goal", label: "Ingestion goal" },
+    { id: "phases", label: "Ingestion phases" },
+    { id: "queries", label: "Query latency" },
+    { id: "machine", label: "Machine metadata" },
+  ];
 
   /* ============================ theme ============================ */
   function currentTheme() {
@@ -66,6 +78,87 @@
   const fmtMiB = bytes => trim(bytes / 1048576) + " MiB";
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const shortCommit = c => (c || "").slice(0, 8);
+
+  /* ============================ section navigation ============================ */
+  function syncToolbarOffset() {
+    if (!toolbarEl) return;
+    const h = toolbarEl.getBoundingClientRect().height || toolbarEl.offsetHeight || 56;
+    document.documentElement.style.setProperty("--summary-toolbar-height", `${Math.ceil(h)}px`);
+  }
+  function setActiveSection(id) {
+    if (!navEl) return;
+    navEl.querySelectorAll(".summary-nav-link").forEach(link => {
+      if (link.dataset.section === id) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  }
+  function clearSectionNav() {
+    if (sectionObserver) sectionObserver.disconnect();
+    sectionObserver = null;
+    if (!navEl) return;
+    navEl.hidden = true;
+    navEl.replaceChildren();
+  }
+  function renderSectionNav(sections, secNo) {
+    clearSectionNav();
+    if (!navEl || !sections.length) return;
+    navEl.innerHTML = `<div class="summary-nav-inner">
+      <div class="summary-nav-title">On this page</div>
+      <ol class="summary-nav-list">${sections.map(section => `<li>
+        <a class="summary-nav-link" href="#${esc(section.id)}" data-section="${esc(section.id)}">
+          <span class="summary-nav-num">${secNo(section.id)}</span>
+          <span class="summary-nav-text">${esc(section.label)}</span>
+        </a>
+      </li>`).join("")}</ol>
+    </div>`;
+    navEl.hidden = false;
+    syncToolbarOffset();
+
+    const ids = new Set(sections.map(section => section.id));
+    const hashId = location.hash.slice(1);
+    const initialId = ids.has(hashId) ? hashId : sections[0].id;
+    setActiveSection(initialId);
+
+    // The report arrives after the browser's initial hash jump, so replay it
+    // once the dynamic sections exist. Links still work without this enhancement.
+    if (ids.has(hashId)) {
+      const target = document.getElementById(hashId);
+      if (target && typeof target.scrollIntoView === "function") {
+        requestAnimationFrame(() => target.scrollIntoView({ behavior: "auto", block: "start" }));
+      }
+    }
+
+    if (typeof IntersectionObserver !== "function") return;
+    const visible = new Map();
+    const toolbarHeight = Math.ceil(toolbarEl ? toolbarEl.getBoundingClientRect().height : 56);
+    const navHeight = matchMedia("(min-width: 1168px)").matches ? 0 : Math.ceil(navEl.getBoundingClientRect().height);
+    const top = toolbarHeight + navHeight + 16;
+    sectionObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.set(entry.target.id, entry);
+        else visible.delete(entry.target.id);
+      }
+      if (!visible.size) return;
+      const current = [...visible.values()].sort((a, b) =>
+        Math.abs(a.boundingClientRect.top - top) - Math.abs(b.boundingClientRect.top - top))[0];
+      setActiveSection(current.target.id);
+    }, { rootMargin: `-${top}px 0px -65% 0px`, threshold: 0 });
+    sections.forEach(section => {
+      const target = document.getElementById(section.id);
+      if (target) sectionObserver.observe(target);
+    });
+  }
+
+  if (navEl) {
+    navEl.addEventListener("click", event => {
+      const link = event.target.closest(".summary-nav-link");
+      if (link) setActiveSection(link.dataset.section);
+    });
+  }
+  window.addEventListener("hashchange", () => {
+    const id = location.hash.slice(1);
+    if (id && document.getElementById(id)) setActiveSection(id);
+  });
 
   /* ============================ svg helpers ============================ */
   const NSVG = "http://www.w3.org/2000/svg";
@@ -762,8 +855,9 @@
     // Section numbers are display only, and two sections are conditional — so
     // they are numbered from what this run actually renders, and every § link
     // in the prose reads its number from here.
-    const SECS = ["budget", "method", "goal", "phases", "queries", "machine"]
-      .filter(id => (id === "budget" ? canBudget : id === "queries" ? hasQueries : true));
+    const sectionDefs = SECTION_META
+      .filter(section => (section.id === "budget" ? canBudget : section.id === "queries" ? hasQueries : true));
+    const SECS = sectionDefs.map(section => section.id);
     const secNo = id => String(SECS.indexOf(id) + 1).padStart(2, "0");
 
     // Which phase carries the worst profile's p99 tail — used in the banner note.
@@ -983,6 +1077,7 @@
     </section>
     ` + footerHTML(D, runId);
 
+    renderSectionNav(sectionDefs, secNo);
     const C = COLORS();
 
     /* ---- fig 1.1 E2E budget bar ---- */
@@ -1163,6 +1258,7 @@
     const D = CURRENT.data;
     try { renderSummary(D); }
     catch (err) {
+      clearSectionNav();
       console.error("summary render failed", err);
       reportEl.innerHTML = `<div class="error-box">Failed to render the summary for run “${esc(D.run_id || "")}”: ${esc(err.message)}.
         <a href="index.html?run=${esc(D.run_id || "")}" style="color:var(--accent)">Open the full report ↗</a></div>`;
@@ -1170,6 +1266,7 @@
   }
 
   async function loadRun(entry) {
+    clearSectionNav();
     reportEl.innerHTML = `<div class="loading">Loading ${esc(entry.name || entry.id)}…</div>`;
     if (fullLink) fullLink.href = `index.html?run=${encodeURIComponent(entry.id)}`;
     try {
@@ -1225,6 +1322,11 @@
     selectRun(initial, false);
   }
 
-  window.addEventListener("resize", () => { clearTimeout(redrawTimer); redrawTimer = setTimeout(draw, 160); });
+  window.addEventListener("resize", () => {
+    syncToolbarOffset();
+    clearTimeout(redrawTimer);
+    redrawTimer = setTimeout(draw, 160);
+  });
+  syncToolbarOffset();
   boot();
 })();

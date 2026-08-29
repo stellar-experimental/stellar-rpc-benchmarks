@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="summary-page">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -19,10 +19,13 @@
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">◐ Theme</button>
 </div>
 
-<div class="wrap">
-  <main id="report" class="summary">
-    <div class="loading">Loading benchmark summary…</div>
-  </main>
+<div class="summary-shell">
+  <nav id="summary-nav" class="summary-nav" aria-label="Summary sections" hidden></nav>
+  <div class="wrap">
+    <main id="report" class="summary">
+      <div class="loading">Loading benchmark summary…</div>
+    </main>
+  </div>
 </div>
 
 <div class="tip" id="tip" role="status" aria-live="off"></div>

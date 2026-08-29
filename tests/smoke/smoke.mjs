@@ -502,6 +502,14 @@ const summaryProfileName = (D, unit) => {
   if (u.includes("soroswap")) return "Soroswap swaps";
   return unit;
 };
+const SUMMARY_SECTION_LABEL = {
+  budget: "E2E budget",
+  method: "Methodology",
+  goal: "Ingestion goal",
+  phases: "Ingestion phases",
+  queries: "Query latency",
+  machine: "Machine metadata",
+};
 /* Every (tier, unit, endpoint) leg with a 1x verdict, grouped by tier — the
    rows the summary's per-tier table must carry, one for one. */
 function summaryQueryRows(D) {
@@ -565,6 +573,31 @@ function checkSummarySections(sdoc, group, D) {
     .filter((id) => (id === "budget" ? wantBudget : id === "queries" ? wantQueries : true));
   const secs = [...sreport.querySelectorAll("section")].map((s) => s.id);
   check(group, `section order ${want.join("→")}`, secs.join(",") === want.join(","), secs.join(","));
+  const nav = sdoc.getElementById("summary-nav");
+  const navLinks = nav ? [...nav.querySelectorAll(".summary-nav-link")] : [];
+  check(group, "summary section nav is labelled and visible",
+    !!nav && nav.getAttribute("aria-label") === "Summary sections" && !nav.hidden,
+    nav ? `${nav.getAttribute("aria-label")} hidden=${nav.hidden}` : "missing");
+  check(group, "summary nav order, hrefs, labels, and numbers match rendered sections",
+    navLinks.length === want.length && navLinks.every((link, i) =>
+      link.getAttribute("href") === `#${want[i]}`
+      && txt(link.querySelector(".summary-nav-num")) === String(i + 1).padStart(2, "0")
+      && txt(link.querySelector(".summary-nav-text")) === SUMMARY_SECTION_LABEL[want[i]]),
+    navLinks.map(txt).join(" | "));
+  check(group, "summary nav has no dead section targets",
+    navLinks.every(link => !!sdoc.getElementById(link.getAttribute("href").slice(1))),
+    navLinks.map(link => link.getAttribute("href")).join(","));
+  const current = navLinks.filter(link => link.getAttribute("aria-current") === "location");
+  check(group, "summary nav initializes one accessible active link",
+    current.length === 1 && current[0] === navLinks[0], current.map(txt).join(" | "));
+  if (navLinks.length > 1) {
+    nav.addEventListener("click", event => event.preventDefault(), { capture: true, once: true });
+    navLinks[1].dispatchEvent(new sdoc.defaultView.MouseEvent("click", { bubbles: true, cancelable: true }));
+    check(group, "summary nav click updates aria-current without observer support",
+      navLinks[1].getAttribute("aria-current") === "location"
+        && navLinks.filter(link => link.hasAttribute("aria-current")).length === 1,
+      navLinks.filter(link => link.hasAttribute("aria-current")).map(txt).join(" | "));
+  }
 
   if (wantBudget) {
     const bud = sdoc.getElementById("budget");
