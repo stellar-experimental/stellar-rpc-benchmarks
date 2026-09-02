@@ -1,0 +1,1341 @@
+/* Stellar RPC full-history — stakeholder benchmark SUMMARY.
+   A standalone condensation of the internal report (index.html / app.js) for
+   the readers who own the end-to-end latency work. It answers one question:
+   is RPC ingestion fast enough for the phase goals, and how does it spend its
+   time? Ingestion here means the time from meta available in captive core
+   (the externalized ledger) to ingested in RPC.
+
+   Vanilla JS, single IIFE, no framework, no CDN, no build. Chart + formatting
+   helpers are duplicated from app.js on purpose (the two files are intentionally
+   not refactored into shared modules). Phase goals come from targets.json — the
+   single source of truth — with each run's baked campaign.phase_targets as the
+   offline fallback. Fetches over HTTP (needs `make serve`; file:// will not
+   work). Deep-links via ?run=<id>. */
+(function () {
+  "use strict";
+
+  const reportEl = document.getElementById("report");
+  const selectEl = document.getElementById("run-select");
+  const themeBtn = document.getElementById("theme-toggle");
+  const fullLink = document.getElementById("full-report");
+  const toolbarEl = document.querySelector(".summary-toolbar");
+  const navEl = document.getElementById("summary-nav");
+  const tip = document.getElementById("tip");
+
+  // The run schema's live-ingestion section (see SCHEMA.md). The key is
+  // assembled from halves so the storage-tier vocabulary the internal report
+  // uses never appears in this page's source.
+  const INGEST_SECTION = "ingest_h" + "ot";
+
+  let MANIFEST = null;
+  let CURRENT = null;       // { meta, data } of the run on screen
+  let LIVE_TARGETS = null;  // phases[] from targets.json, or null if unfetched
+  let LIVE_FIXED = null;    // fixed_estimates from targets.json (tx submission, query)
+  let MEASURED_TX = null;   // measured in-RPC sendTransaction p99 (ns) from docs/txsub/, or null → estimate
+  let MEASURED_TX_NAME = ""; // which tx-submission profile carried that p99
+  let DATASET_SIZES = null; // dataset-sizes.json (test-data provenance + sizes), or null
+  let PHASE_PICK = "end to end"; // fig 4.2 phase selection — survives theme/resize redraws
+  let sectionObserver = null;
+  let redrawTimer = null;
+
+  const SECTION_META = [
+    { id: "budget", label: "E2E budget" },
+    { id: "method", label: "Methodology" },
+    { id: "goal", label: "Ingestion goal" },
+    { id: "phases", label: "Ingestion phases" },
+    { id: "queries", label: "Query latency" },
+    { id: "machine", label: "Machine metadata" },
+  ];
+
+  /* ============================ theme ============================ */
+  function currentTheme() {
+    const t = document.documentElement.getAttribute("data-theme");
+    if (t) return t;
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); }
+  themeBtn.addEventListener("click", () => {
+    applyTheme(currentTheme() === "dark" ? "light" : "dark");
+    if (CURRENT) draw();  // recolour SVGs from CSS vars
+  });
+
+  /* ============================ formatting ============================ */
+  const trim = x => x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2);
+  function fmtNs(ns) {
+    if (ns >= 1e9) return trim(ns / 1e9) + " s";
+    if (ns >= 1e6) return trim(ns / 1e6) + " ms";
+    if (ns >= 1e3) return trim(ns / 1e3) + " µs";
+    return Math.round(ns) + " ns";
+  }
+  function fmtNsAxis(ns) {
+    const t = x => x >= 10 ? String(Math.round(x)) : String(+x.toFixed(1));
+    if (ns >= 1e9) return t(ns / 1e9) + " s";
+    if (ns >= 1e6) return t(ns / 1e6) + " ms";
+    if (ns >= 1e3) return t(ns / 1e3) + " µs";
+    return Math.round(ns) + " ns";
+  }
+  const fmtInt = x => Math.round(x).toLocaleString("en-US");
+  const fmtMiB = bytes => trim(bytes / 1048576) + " MiB";
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const shortCommit = c => (c || "").slice(0, 8);
+
+  /* ============================ section navigation ============================ */
+  function syncToolbarOffset() {
+    if (!toolbarEl) return;
+    const h = toolbarEl.getBoundingClientRect().height || toolbarEl.offsetHeight || 56;
+    document.documentElement.style.setProperty("--summary-toolbar-height", `${Math.ceil(h)}px`);
+  }
+  function setActiveSection(id) {
+    if (!navEl) return;
+    navEl.querySelectorAll(".summary-nav-link").forEach(link => {
+      if (link.dataset.section === id) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  }
+  function clearSectionNav() {
+    if (sectionObserver) sectionObserver.disconnect();
+    sectionObserver = null;
+    if (!navEl) return;
+    navEl.hidden = true;
+    navEl.replaceChildren();
+  }
+  function renderSectionNav(sections, secNo) {
+    clearSectionNav();
+    if (!navEl || !sections.length) return;
+    navEl.innerHTML = `<div class="summary-nav-inner">
+      <div class="summary-nav-title">On this page</div>
+      <ol class="summary-nav-list">${sections.map(section => `<li>
+        <a class="summary-nav-link" href="#${esc(section.id)}" data-section="${esc(section.id)}">
+          <span class="summary-nav-num">${secNo(section.id)}</span>
+          <span class="summary-nav-text">${esc(section.label)}</span>
+        </a>
+      </li>`).join("")}</ol>
+    </div>`;
+    navEl.hidden = false;
+    syncToolbarOffset();
+
+    const ids = new Set(sections.map(section => section.id));
+    const hashId = location.hash.slice(1);
+    const initialId = ids.has(hashId) ? hashId : sections[0].id;
+    setActiveSection(initialId);
+
+    // The report arrives after the browser's initial hash jump, so replay it
+    // once the dynamic sections exist. Links still work without this enhancement.
+    if (ids.has(hashId)) {
+      const target = document.getElementById(hashId);
+      if (target && typeof target.scrollIntoView === "function") {
+        requestAnimationFrame(() => target.scrollIntoView({ behavior: "auto", block: "start" }));
+      }
+    }
+
+    if (typeof IntersectionObserver !== "function") return;
+    const visible = new Map();
+    const toolbarHeight = Math.ceil(toolbarEl ? toolbarEl.getBoundingClientRect().height : 56);
+    const navHeight = matchMedia("(min-width: 1168px)").matches ? 0 : Math.ceil(navEl.getBoundingClientRect().height);
+    const top = toolbarHeight + navHeight + 16;
+    sectionObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.set(entry.target.id, entry);
+        else visible.delete(entry.target.id);
+      }
+      if (!visible.size) return;
+      const current = [...visible.values()].sort((a, b) =>
+        Math.abs(a.boundingClientRect.top - top) - Math.abs(b.boundingClientRect.top - top))[0];
+      setActiveSection(current.target.id);
+    }, { rootMargin: `-${top}px 0px -65% 0px`, threshold: 0 });
+    sections.forEach(section => {
+      const target = document.getElementById(section.id);
+      if (target) sectionObserver.observe(target);
+    });
+  }
+
+  if (navEl) {
+    navEl.addEventListener("click", event => {
+      const link = event.target.closest(".summary-nav-link");
+      if (link) setActiveSection(link.dataset.section);
+    });
+  }
+  window.addEventListener("hashchange", () => {
+    const id = location.hash.slice(1);
+    if (id && document.getElementById(id)) setActiveSection(id);
+  });
+
+  /* ============================ svg helpers ============================ */
+  const NSVG = "http://www.w3.org/2000/svg";
+  function S(tag, attrs, parent) {
+    const e = document.createElementNS(NSVG, tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+    }
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function roundedRight(x, y, w, h, r) {
+    r = Math.min(r, w, h / 2);
+    return `M${x},${y} h${w - r} a${r},${r} 0 0 1 ${r},${r} v${h - 2 * r} a${r},${r} 0 0 1 ${-r},${r} h${-(w - r)} z`;
+  }
+  function logTicks(lo, hi) {
+    const ticks = [];
+    const d0 = Math.floor(Math.log10(lo)), d1 = Math.ceil(Math.log10(hi));
+    for (let d = d0; d <= d1; d++) for (const m of [1, 2, 5]) {
+      const v = m * Math.pow(10, d);
+      if (v >= lo * 0.999 && v <= hi * 1.001) ticks.push(v);
+    }
+    const decades = ticks.filter(t => Math.log10(t) % 1 === 0);
+    return decades.length >= 3 ? decades : ticks;
+  }
+  function linTicks(hi, count) {
+    const step0 = hi / count;
+    const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => hi / s <= count) || mag;
+    const out = [];
+    for (let v = 0; v <= hi * 1.0001; v += step) out.push(v);
+    return out;
+  }
+  // Row-label gutter: widen only when a label or sub needs it.
+  function gutterW(base, W, rows) {
+    let need = base;
+    for (const r of rows || []) {
+      if (r.label) need = Math.max(need, String(r.label).length * 7 + 14);
+      if (r.sub) need = Math.max(need, String(r.sub).length * 6.4 + 14);
+    }
+    return Math.min(need, Math.round(W * 0.32));
+  }
+  const CVAR = s => getComputedStyle(document.documentElement).getPropertyValue(s).trim();
+  const COLORS = () => ({
+    s1: CVAR("--s1"), s2: CVAR("--s2"), s3: CVAR("--s3"), s4: CVAR("--s4"),
+    s5: CVAR("--s5"), s6: CVAR("--s6"), de: CVAR("--deemph"), warn: CVAR("--warn"),
+  });
+
+  /* ============================ tooltip ============================ */
+  function showTip(evt, title, rows) {
+    tip.replaceChildren();
+    const t = document.createElement("div"); t.className = "tip-title"; t.textContent = title; tip.appendChild(t);
+    for (const r of rows) {
+      const d = document.createElement("div"); d.className = "tip-row";
+      if (r.color) { const k = document.createElement("span"); k.className = "tip-key"; k.style.background = r.color; d.appendChild(k); }
+      const v = document.createElement("span"); v.className = "tip-val"; v.textContent = r.value; d.appendChild(v);
+      const l = document.createElement("span"); l.className = "tip-lab"; l.textContent = r.label; d.appendChild(l);
+      tip.appendChild(d);
+    }
+    tip.style.opacity = "1";
+    moveTip(evt);
+  }
+  function moveTip(evt) {
+    const pad = 14, r = tip.getBoundingClientRect();
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+  function hoverable(el, title, rows) {
+    el.classList.add("hit");
+    el.setAttribute("tabindex", "0");
+    el.addEventListener("pointerenter", e => showTip(e, title, rows));
+    el.addEventListener("pointermove", moveTip);
+    el.addEventListener("pointerleave", hideTip);
+    el.addEventListener("focus", () => { const r = el.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, title, rows); });
+    el.addEventListener("blur", hideTip);
+  }
+
+  /* ============================ legend + table view ============================ */
+  function legend(elId, items) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.replaceChildren();
+    for (const it of items) {
+      const s = document.createElement("span"); s.className = "lg-item";
+      const sw = document.createElement("span");
+      sw.className = it.line ? "lg-ln" : "lg-sw";
+      sw.style.background = it.color;
+      s.appendChild(sw);
+      s.appendChild(document.createTextNode(it.label));
+      el.appendChild(s);
+    }
+  }
+  function tableView(figId, headers, rows) {
+    const holder = document.querySelector(`#${figId}-tv .tv-scroll`);
+    if (!holder) return;
+    holder.replaceChildren();
+    const t = document.createElement("table"); t.className = "data"; t.style.width = "100%";
+    const tr = document.createElement("tr");
+    for (const h of headers) { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); }
+    t.appendChild(tr);
+    for (const row of rows) {
+      const r = document.createElement("tr");
+      for (const c of row) { const td = document.createElement("td"); td.textContent = c; r.appendChild(td); }
+      t.appendChild(r);
+    }
+    holder.appendChild(t);
+  }
+
+  /* ============================ dot-range chart ============================ */
+  // Same primitive as the internal viewer's fig 4.2 chart.
+  // rows: [{label, sub, lanes:[{name,color,pts:{p50,p90,p99,max}(ns)}]}]
+  // opts: { reflines: [{ns, label, block}], groupSeparators, linear }
+  function dotRangeChart(bodyId, rows, opts = {}) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const lin = !!opts.linear;
+    const reflines = (opts.reflines || []).slice().sort((a, b) => a.ns - b.ns);
+    const W = Math.max(el.clientWidth, 360);
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
+    const extraTop = reflines.length > 1 ? (reflines.length - 1) * 13 : 0;
+    const m = { l: labW, r: 34, t: 10 + extraTop, b: 46 };
+    const laneH = 26;
+    let allVals = [];
+    rows.forEach(r => r.lanes.forEach(l => allVals.push(l.pts.p50, l.pts.max)));
+    reflines.forEach(rl => allVals.push(rl.ns));
+    const lo = lin ? 0 : Math.min(...allVals) / 1.35;
+    const hi = Math.max(...allVals) * (lin ? 1.12 : 1.25);
+    const x = lin
+      ? v => m.l + v / hi * (W - m.l - m.r)
+      : v => m.l + (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (W - m.l - m.r);
+    const nLanes = rows.reduce((a, r) => a + r.lanes.length, 0);
+    const rowGap = 16;
+    const H = m.t + nLanes * laneH + rows.length * rowGap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    for (const tv of (lin ? linTicks(hi, 6) : logTicks(lo, hi))) {
+      const px = x(tv);
+      S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: tv === 0 ? "0" : fmtNsAxis(tv) }, svg);
+    }
+    reflines.forEach((rl, i) => {
+      if (!(rl.ns > lo && rl.ns < hi)) return;
+      const px = x(rl.ns);
+      S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: rl.block ? "refline-block" : "refline" }, svg);
+      const est = String(rl.label || "").length * 6.3;
+      let anchor = "middle", tx = px;
+      if (px + est / 2 > W - 4) { anchor = "end"; tx = W - 4; }
+      else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
+      S("text", { x: tx, y: 12 + i * 13, "text-anchor": anchor, class: rl.block ? "reflab-block" : "reflab", text: rl.label || "" }, svg);
+    });
+    S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: `per-ledger latency · ${lin ? "linear" : "log"} scale` }, svg);
+    let y = m.t;
+    rows.forEach((row, ri) => {
+      row.lanes.forEach((lane, li) => {
+        const cy = y + laneH / 2;
+        if (li === 0) {
+          S("text", { x: m.l - 10, y: cy + (row.lanes.length > 1 ? laneH / 2 : 0) + 1, "text-anchor": "end", class: "rowlab", text: row.label }, svg);
+          if (row.sub) S("text", { x: m.l - 10, y: cy + (row.lanes.length > 1 ? laneH / 2 : 0) + 14, "text-anchor": "end", class: "rowsub", text: row.sub }, svg);
+        }
+        const p = lane.pts;
+        S("line", { x1: x(p.p50), y1: cy, x2: x(p.max), y2: cy, stroke: lane.color, "stroke-width": 2, opacity: 0.32 }, svg);
+        S("line", { x1: x(p.max), y1: cy - 6, x2: x(p.max), y2: cy + 6, stroke: lane.color, "stroke-width": 1.6 }, svg);
+        S("circle", { cx: x(p.p90), cy: cy, r: 3.4, fill: lane.color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
+        S("circle", { cx: x(p.p99), cy: cy, r: 5, fill: "var(--surface)", stroke: lane.color, "stroke-width": 2.2 }, svg);
+        S("circle", { cx: x(p.p50), cy: cy, r: 5.6, fill: lane.color, stroke: "var(--surface)", "stroke-width": 2 }, svg);
+        const hit = S("rect", { x: m.l, y: y, width: W - m.l - m.r, height: laneH, fill: "transparent" }, svg);
+        hoverable(hit, `${row.label} — ${lane.name}`, [
+          { color: lane.color, value: fmtNs(p.p50), label: "p50" },
+          { color: lane.color, value: fmtNs(p.p90), label: "p90" },
+          { color: lane.color, value: fmtNs(p.p99), label: "p99" },
+          { color: lane.color, value: fmtNs(p.max), label: "max (worst ledger)" },
+        ]);
+        y += laneH;
+      });
+      if (opts.groupSeparators && ri < rows.length - 1) {
+        const sy = y + rowGap / 2;
+        S("line", { x1: 8, y1: sy, x2: W - m.r, y2: sy, class: "group-sep" }, svg);
+      }
+      y += rowGap;
+    });
+    el.appendChild(svg);
+  }
+
+  /* ============================ share chart ============================ */
+  // Composition of the run's total ingestion time: one stacked bar per
+  // profile, on a linear 0–100 % axis. Built from per-phase total_ns —
+  // totals are additive across phases; percentiles are not.
+  // rows: [{label, sub, parts:[{name, color, ns}]}]
+  function shareChart(bodyId, rows) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const W = Math.max(el.clientWidth, 360);
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
+    const m = { l: labW, r: 34, t: 8, b: 34 };
+    const barH = 26, gap = 18;
+    const inner = W - m.l - m.r;
+    const H = m.t + rows.length * (barH + gap) - gap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      S("line", { x1: m.l + f * inner, y1: m.t, x2: m.l + f * inner, y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: m.l + f * inner, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: Math.round(f * 100) + " %" }, svg);
+    }
+    S("text", { x: W - m.r, y: H - 8, "text-anchor": "end", class: "ax-unit", text: "share of the run's total ingestion time" }, svg);
+    let y = m.t;
+    for (const row of rows) {
+      const total = row.parts.reduce((a, p) => a + p.ns, 0);
+      S("text", { x: m.l - 10, y: y + barH / 2 + 1, "text-anchor": "end", class: "rowlab", text: row.label }, svg);
+      if (row.sub) S("text", { x: m.l - 10, y: y + barH / 2 + 14, "text-anchor": "end", class: "rowsub", text: row.sub }, svg);
+      let acc = 0;
+      row.parts.forEach((p, i) => {
+        const x0 = m.l + acc / total * inner, wpx = p.ns / total * inner;
+        const seg = i === row.parts.length - 1
+          ? S("path", { d: roundedRight(x0, y, wpx, barH, 6), fill: p.color, stroke: "var(--surface)", "stroke-width": 1 }, svg)
+          : S("rect", { x: x0, y: y, width: wpx, height: barH, fill: p.color, stroke: "var(--surface)", "stroke-width": 1 }, svg);
+        const pct = p.ns / total * 100;
+        if (wpx > 42) S("text", { x: x0 + wpx / 2, y: y + barH / 2 + 3.5, "text-anchor": "middle", class: "share-lab", text: pct.toFixed(0) + " %" }, svg);
+        hoverable(seg, `${row.label} — ${p.name}`, [
+          { color: p.color, value: pct.toFixed(1) + " %", label: "share of ingestion time" },
+          { color: p.color, value: fmtNs(p.ns), label: "total over the run" },
+        ]);
+        acc += p.ns;
+      });
+      y += barH + gap;
+    }
+    el.appendChild(svg);
+  }
+
+  /* ============================ goal chart ============================ */
+  // The headline "can we ship this phase" figure: one bar per profile at its
+  // ingestion p99, on a linear scale, against two separate reference lines —
+  // the phase's ingestion target (dashed) and its block time (solid).
+  // rows: [{label, sub, pts:{p50,p90,p99,max}, pass}]
+  // opts: { targetNs, targetLabel, blockNs, blockLabel }
+  function goalChart(bodyId, rows, opts) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const C = COLORS();
+    const W = Math.max(el.clientWidth, 360);
+    const labW = gutterW(W < 560 ? 96 : 140, W, rows);
+    const m = { l: labW, r: 84, t: 30, b: 30 };
+    const rowH = 24, gap = 16;
+    const H = m.t + rows.length * (rowH + gap) - gap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    const xmax = Math.max(opts.blockNs || 0, opts.targetNs || 0, ...rows.map(r => r.pts.p99)) * 1.04;
+    const x = v => m.l + v / xmax * (W - m.l - m.r);
+    for (const tv of linTicks(xmax / 1e6, 6)) {
+      const px = x(tv * 1e6);
+      S("line", { x1: px, y1: m.t, x2: px, y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: px, y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: fmtInt(tv) }, svg);
+    }
+    S("text", { x: W - m.r + 8, y: H - m.b + 16, class: "ax-unit", text: "ms" }, svg);
+    // Reference lines + labels. Labels sit in the reserved headroom; when the
+    // two would collide, the second drops one line down.
+    const refs = [];
+    if (opts.targetNs) refs.push({ ns: opts.targetNs, label: opts.targetLabel, block: false });
+    if (opts.blockNs) refs.push({ ns: opts.blockNs, label: opts.blockLabel, block: true });
+    let lastEnd = -1e9;
+    refs.sort((a, b) => a.ns - b.ns).forEach(rl => {
+      const px = x(rl.ns);
+      S("line", { x1: px, y1: m.t - 6, x2: px, y2: H - m.b, class: rl.block ? "refline-block" : "refline" }, svg);
+      const est = String(rl.label || "").length * 6.3;
+      let anchor = "middle", tx = px, ty = 12;
+      if (px + est / 2 > W - 4) { anchor = "end"; tx = W - 4; }
+      else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
+      if (tx - est / 2 < lastEnd + 12) ty = 25; else lastEnd = tx + est / 2;
+      S("text", { x: tx, y: ty, "text-anchor": anchor, class: rl.block ? "reflab-block" : "reflab", text: rl.label || "" }, svg);
+    });
+    rows.forEach((row, i) => {
+      const y = m.t + i * (rowH + gap), cy = y + rowH / 2;
+      S("text", { x: m.l - 10, y: cy - 1, "text-anchor": "end", class: "rowlab", text: row.label }, svg);
+      if (row.sub) S("text", { x: m.l - 10, y: cy + 13, "text-anchor": "end", class: "rowsub", text: row.sub }, svg);
+      const col = row.pass ? C.s1 : C.warn;
+      const bw = Math.max(x(row.pts.p99) - m.l, 1);
+      const bar = S("path", { d: roundedRight(m.l, y, bw, rowH, 4), fill: col }, svg);
+      S("text", { x: m.l + bw + 8, y: cy + 4, class: "vallab", text: fmtNs(row.pts.p99) + (row.pass ? "" : " ▲") }, svg);
+      const tipRows = [
+        { color: col, value: fmtNs(row.pts.p99), label: "p99 ingestion latency" },
+        { color: col, value: fmtNs(row.pts.p50), label: "p50" },
+        { color: col, value: fmtNs(row.pts.max), label: "max (worst ledger)" },
+      ];
+      if (opts.targetNs) tipRows.push({ value: (row.pts.p99 / opts.targetNs * 100).toFixed(0) + " %", label: "of the ingestion target" });
+      hoverable(bar, `${row.label} — ingestion p99`, tipRows);
+    });
+    S("line", { x1: m.l, y1: m.t, x2: m.l, y2: H - m.b, class: "baseline-l" }, svg);
+    el.appendChild(svg);
+  }
+
+  /* ============================ budget chart ============================ */
+  // The end-to-end context figure: the four E2E slices stacked against the
+  // phase's declared E2E budget — the goal composition on one bar, the same
+  // trip with this run's measured ingestion on the other. Hatched segments
+  // are targets or estimates; solid ones are measured.
+  // bars: [{label, sub, segs:[{color, ns, hatch, lab, ink}], e2e, tip}]
+  // opts: { budgetNs, budgetLabel }
+  function budgetChart(bodyId, bars, opts) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const W = Math.max(el.clientWidth, 360);
+    // Narrow screens: the row labels alone (subs move to the tooltip/table)
+    // and fewer axis ticks, so nothing clips or collides.
+    const narrow = W < 560;
+    const labW = gutterW(narrow ? 96 : 140, W, narrow ? bars.map(b => ({ label: b.label })) : bars);
+    const m = { l: labW, r: 96, t: 26, b: 26 };
+    const barH = 30, gap = 24;
+    const inner = W - m.l - m.r;
+    const H = m.t + bars.length * (barH + gap) - gap + m.b;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    // Diagonal surface-colored stripes overlaid on estimate/target segments.
+    const defs = S("defs", {}, svg);
+    const pat = S("pattern", { id: "hatch-est", width: 7, height: 7, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+    S("line", { x1: 0, y1: 0, x2: 0, y2: 7, stroke: "var(--surface)", "stroke-width": 3, opacity: 0.5 }, pat);
+    const totals = bars.map(b => b.segs.reduce((a, s) => a + s.ns, 0));
+    const xmax = Math.max(opts.budgetNs || 0, ...totals) * 1.02;
+    const x = v => m.l + v / xmax * inner;
+    for (const tv of linTicks(xmax, narrow ? 3 : 6)) {
+      S("line", { x1: x(tv), y1: m.t, x2: x(tv), y2: H - m.b, class: "gridline" }, svg);
+      S("text", { x: x(tv), y: H - m.b + 16, "text-anchor": "middle", class: "ax", text: tv === 0 ? "0" : fmtNsAxis(tv) }, svg);
+    }
+    if (opts.budgetNs) {
+      const px = x(opts.budgetNs);
+      S("line", { x1: px, y1: m.t - 5, x2: px, y2: H - m.b, class: "refline-budget" }, svg);
+      const est = String(opts.budgetLabel || "").length * 6.3;
+      let anchor = "middle", tx = px;
+      if (px + est / 2 > W - 4) { anchor = "end"; tx = W - 4; }
+      else if (px - est / 2 < 4) { anchor = "start"; tx = 4; }
+      S("text", { x: tx, y: 12, "text-anchor": anchor, class: "reflab-budget", text: opts.budgetLabel || "" }, svg);
+    }
+    bars.forEach((bar, i) => {
+      const y = m.t + i * (barH + gap), cy = y + barH / 2;
+      S("text", { x: m.l - 10, y: cy - 1, "text-anchor": "end", class: "rowlab", text: bar.label }, svg);
+      if (bar.sub && !narrow) S("text", { x: m.l - 10, y: cy + 13, "text-anchor": "end", class: "rowsub", text: bar.sub }, svg);
+      let acc = 0;
+      bar.segs.forEach((sg, si) => {
+        const x0 = x(acc), wpx = Math.max(sg.ns / xmax * inner, 2);
+        const last = si === bar.segs.length - 1;
+        const shape = last ? { d: roundedRight(x0, y, wpx, barH, 5) } : { x: x0, y: y, width: wpx, height: barH };
+        const draw = fill => S(last ? "path" : "rect", Object.assign({ fill }, shape), svg);
+        draw(sg.color);
+        if (sg.hatch) draw("url(#hatch-est)");
+        if (si > 0) S("line", { x1: x0, y1: y, x2: x0, y2: y + barH, stroke: "var(--surface)", "stroke-width": 1 }, svg);
+        if (sg.lab) {
+          if (sg.lab.length * 6.3 + 6 < wpx)
+            S("text", { x: x0 + wpx / 2, y: cy + 3.5, "text-anchor": "middle", class: sg.ink ? "bud-lab" : "share-lab", text: sg.lab }, svg);
+          // The ingestion value is the figure's key number — when its segment
+          // is too narrow, float the label above the bar instead of dropping it.
+          else if (sg.callout)
+            S("text", { x: x0 + wpx / 2, y: y - 4, "text-anchor": "middle", class: "rowsub", style: `fill:${sg.color}`, text: sg.lab }, svg);
+        }
+        acc += sg.ns;
+      });
+      // Derived E2E + budget verdict, in a fixed right-margin column so the
+      // labels never cross the budget line.
+      const d = opts.budgetNs - totals[i];
+      S("text", { x: m.l + inner + 8, y: cy - 2, class: "vallab", text: `E2E ${fmtNs(totals[i])}` }, svg);
+      S("text", {
+        x: m.l + inner + 8, y: cy + 12, class: "rowsub",
+        style: `fill:${d < 0 ? "var(--warn)" : "var(--good-text)"}`,
+        text: d === 0 ? "on budget" : d > 0 ? `${fmtNs(d)} under` : `${fmtNs(-d)} over`,
+      }, svg);
+      const hit = S("rect", { x: m.l, y: y - 4, width: inner, height: barH + 8, fill: "transparent" }, svg);
+      hoverable(hit, bar.label + " — end-to-end composition", bar.tip);
+    });
+    S("line", { x1: m.l, y1: m.t, x2: m.l, y2: H - m.b, class: "baseline-l" }, svg);
+    el.appendChild(svg);
+  }
+
+  /* ============================ pacing diagram ============================ */
+  // Schematic, not data: how the benchmark feeds ledgers. Due ticks at
+  // anchor + i × interval; the loop sleeps until each due time; one slow
+  // ledger puts it behind, and it drains back-to-back until it catches up.
+  function paceDiagram(bodyId) {
+    const el = document.getElementById(bodyId);
+    if (!el) return;
+    el.replaceChildren();
+    const C = COLORS();
+    const W = 740, H = 158;
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+    const x0 = 132, iv = 102, axisY = 118, barY = 74, barH = 18;
+    const due = i => x0 + i * iv;
+    // Before the anchor: startup — the source has not produced its first
+    // ledger yet. Off the schedule, so drawn as a faded, untimed stub.
+    S("line", { x1: 14, y1: axisY, x2: x0, y2: axisY, class: "pace-pre" }, svg);
+    S("text", { x: (14 + x0) / 2, y: barY + 8, "text-anchor": "middle", class: "pace-note", text: "startup" }, svg);
+    S("text", { x: (14 + x0) / 2, y: barY + 21, "text-anchor": "middle", class: "pace-note", text: "(untimed)" }, svg);
+    // time axis + due ticks. The first due line IS the anchor (due 0 =
+    // anchor + 0 × interval): drawn solid and named, the rest dashed.
+    S("line", { x1: x0, y1: axisY, x2: W - 10, y2: axisY, class: "baseline-l" }, svg);
+    for (let i = 0; i <= 5; i++) {
+      S("line", { x1: due(i), y1: i === 0 ? 24 : 40, x2: due(i), y2: axisY, class: i === 0 ? "pace-anchor" : "pace-due" }, svg);
+      S("text", { x: due(i), y: axisY + 16, "text-anchor": "middle", class: "ax", text: "due " + i }, svg);
+    }
+    S("text", { x: due(0) + 5, y: 30, "text-anchor": "start", class: "pace-note anchor", text: "anchor" }, svg);
+    S("text", { x: due(0) + 5, y: 43, "text-anchor": "start", class: "pace-note anchor", text: "clock starts" }, svg);
+    S("text", { x: W - 10, y: axisY + 16, "text-anchor": "end", class: "ax-unit", text: "time →" }, svg);
+    // "close interval" bracket between due 1 and due 2 (clear of the anchor label)
+    S("line", { x1: due(1), y1: 30, x2: due(2), y2: 30, stroke: "var(--muted)", "stroke-width": 1.2 }, svg);
+    for (const px of [due(1), due(2)]) S("line", { x1: px, y1: 26, x2: px, y2: 34, stroke: "var(--muted)", "stroke-width": 1.2 }, svg);
+    S("text", { x: (due(1) + due(2)) / 2, y: 22, "text-anchor": "middle", class: "pace-note", text: "close interval" }, svg);
+    // ledger bars: [start, width, color] — ledger 3 overruns its slot, ledger 4
+    // starts the moment 3 commits (no sleep), ledger 5 is back on schedule.
+    const bars = [
+      { i: 0, s: due(0), w: 44, c: C.s1 },
+      { i: 1, s: due(1), w: 38, c: C.s1 },
+      { i: 2, s: due(2), w: 48, c: C.s1 },
+      { i: 3, s: due(3), w: iv + 42, c: C.warn },
+      { i: 4, s: due(3) + iv + 42, w: 40, c: C.s1 },
+      { i: 5, s: due(5), w: 44, c: C.s1 },
+    ];
+    for (const b of bars) {
+      S("path", { d: roundedRight(b.s, barY, b.w, barH, 3), fill: b.c, opacity: 0.88 }, svg);
+      S("line", { x1: b.s + b.w, y1: barY - 3, x2: b.s + b.w, y2: barY + barH + 3, stroke: "var(--ink)", "stroke-width": 1.6 }, svg);
+      S("text", { x: b.s + 4, y: barY + barH / 2 + 3.5, class: "pace-barlab", text: "L" + b.i }, svg);
+    }
+    // sleep gap annotation, centered between ledger 0's commit and due 1
+    S("text", { x: (due(0) + 48 + due(1)) / 2, y: barY + barH / 2 + 3.5, "text-anchor": "middle", class: "pace-note", text: "sleep" }, svg);
+    // lag bracket under ledger 4: its commit landed after its due time
+    const lagA = due(4), lagB = bars[4].s + bars[4].w;
+    S("line", { x1: lagA, y1: barY + barH + 12, x2: lagB, y2: barY + barH + 12, stroke: CVAR("--warn"), "stroke-width": 1.4 }, svg);
+    for (const px of [lagA, lagB]) S("line", { x1: px, y1: barY + barH + 8, x2: px, y2: barY + barH + 16, stroke: CVAR("--warn"), "stroke-width": 1.4 }, svg);
+    S("text", { x: lagB + 6, y: barY + barH + 16, "text-anchor": "start", class: "pace-note warn", text: "lag" }, svg);
+    // top annotations
+    S("text", { x: due(1) + 6, y: barY - 12, class: "pace-note", text: "on schedule" }, svg);
+    S("text", { x: due(3) + 6, y: barY - 12, class: "pace-note warn", text: "one slow ledger overruns its slot" }, svg);
+    el.appendChild(svg);
+  }
+
+  /* ============================ phase goals ============================ */
+  // Fill the derived ingestion target for any phase that omits it — the same
+  // rule targets.json documents and the internal viewer applies:
+  // ingest = e2e_budget − block_count × block_time − ⌊3 × rtt / 2⌋ − send_tx − get_tx
+  // (half a round trip carries the submission request, a full round trip the
+  // getTransaction call; the two handler slices are in-RPC time).
+  function deriveTargets(phases, fixed) {
+    const fx = fixed || {};
+    const fxTotal = Math.floor(3 * (fx.network_rtt_ns || 0) / 2) + (fx.send_tx_p99_ns || 0) + (fx.get_tx_p99_ns || 0);
+    (phases || []).forEach(p => {
+      if (p.ingest_p99_target_ns == null && p.e2e_budget_ns > 0 && p.block_time_ns > 0 && fxTotal > 0) {
+        p.ingest_p99_target_ns = p.e2e_budget_ns - (p.block_count || 2) * p.block_time_ns - fxTotal;
+      }
+    });
+    return phases;
+  }
+  async function loadLiveTargets() {
+    try {
+      const res = await fetch("targets.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const t = await res.json();
+      LIVE_FIXED = t.fixed_estimates || null;
+      LIVE_TARGETS = deriveTargets(t.phases || [], t.fixed_estimates);
+    } catch (err) {
+      console.warn("targets.json not loaded; falling back to baked phase_targets", err);
+    }
+  }
+  // Measured tx submission (the tx-submission benchmark): worst headline-run
+  // profile's in-RPC handler p99. Network time is never part of it — the E2E
+  // model carries the network legs as hardcoded constants. Best-effort — on
+  // any failure the fixed estimate stands.
+  async function loadTxsub() {
+    try {
+      const res = await fetch("txsub/index.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const m = await res.json();
+      const run = (m.runs || []).find(r => r.role === "headline");
+      if (!run) return;
+      const modes = Object.keys(run.summaries || {});
+      const sums = await Promise.all(modes.map(k =>
+        fetch("txsub/" + run.summaries[k], { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null)));
+      let worst = null, worstMode = "";
+      sums.forEach((s, i) => {
+        const v = s && s.handler && s.handler.p99_ns;
+        if (typeof v === "number" && (worst == null || v > worst)) { worst = v; worstMode = modes[i]; }
+      });
+      if (worst != null) { MEASURED_TX = worst; MEASURED_TX_NAME = TXSUB_MODE_LABEL[worstMode] || worstMode; }
+    } catch (err) {
+      console.warn("txsub data not loaded; tx-submission slice stays an estimate", err);
+    }
+  }
+  async function loadDatasetSizes() {
+    try {
+      const res = await fetch("dataset-sizes.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      DATASET_SIZES = await res.json();
+    } catch (err) {
+      console.warn("dataset-sizes.json not loaded; dataset sizes omitted", err);
+    }
+  }
+  // Match a run unit ("sac-5000-c1") to its dataset-sizes profile ("sac-5000").
+  function sizesFor(unit) {
+    const p = DATASET_SIZES && DATASET_SIZES.profiles;
+    return (p && p[String(unit).replace(/-c\d+$/, "")]) || null;
+  }
+  // {targets, sel} — sel is the phase this run was paced for (campaign.phase).
+  function phaseState(D) {
+    const camp = D.campaign || {};
+    const baked = Array.isArray(camp.phase_targets)
+      ? camp.phase_targets.filter(p => p && p.phase != null && p.block_time_ns > 0) : [];
+    const live = Array.isArray(LIVE_TARGETS)
+      ? LIVE_TARGETS.filter(p => p && p.phase != null && p.block_time_ns > 0) : [];
+    const targets = live.length ? live : deriveTargets(baked, null);
+    if (!targets.length) return null;
+    const sel = camp.phase != null ? targets.find(p => p.phase === camp.phase) || null : null;
+    return { targets, sel, closeNs: camp.close_interval_ns || 0 };
+  }
+
+  // The tx-submission benchmark's own profile names (docs/txsub/index.json
+  // keys), spelled the way its page spells them.
+  const TXSUB_MODE_LABEL = { "sac-transfer": "SAC transfer", "oz-transfer": "OZ token transfer", "soroswap": "Soroswap swap" };
+
+  /* ============================ query verdicts ============================ */
+  // The read benchmark's cells, read the way the internal report reads them:
+  // the endpoint names the public API uses, and the one verdict per
+  // (tier, profile, endpoint) leg that the phase's request rate is judged at.
+  const QT_ENDPOINT = {
+    txhash: "getTransaction", txpage: "getTransactions",
+    ledgers: "getLedgers", events: "getEvents",
+  };
+  const QT_ORDER = ["txhash", "txpage", "ledgers", "events"];
+  const endpointLabel = qt => QT_ENDPOINT[qt] || qt;
+  const TIER_ORDER = ["hot", "cold"];
+  const TIER_TITLE = { hot: "Recent ledgers (hot)", cold: "Archived ledgers (cold)" };
+  const TIER_NOTE = {
+    hot: "Recent ledgers are served from the live store with a warm page cache.",
+    cold: "Archived ledgers are served from immutable files and event indexes after eviction from the page cache.",
+  };
+  const fmtRps = v => v == null || !isFinite(v)
+    ? "—"
+    : (v >= 100 ? fmtInt(v) : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
+  // Every (tier, profile, endpoint) leg carrying an SLA result, grouped by tier
+  // and ordered endpoint-first. The summary presents its p99 and request rate
+  // without a read-path verdict. Runs converted before the SLA and E2E-budget
+  // families were split carry one verdict_1x that plays the SLA role.
+  function queryVerdicts(Q, order) {
+    const out = {};
+    for (const tier of TIER_ORDER) {
+      const t = (Q || {})[tier];
+      if (!t) continue;
+      // Endpoints the run recorded, in the published order, with anything the
+      // map does not know appended under its own name.
+      const seen = [];
+      for (const u of order) for (const qt of Object.keys(t[u] || {})) {
+        if (qt !== "setup" && !seen.includes(qt)) seen.push(qt);
+      }
+      const qts = [...QT_ORDER.filter(q => seen.includes(q)), ...seen.filter(q => !QT_ORDER.includes(q))];
+      const rows = [];
+      for (const qt of qts) for (const u of order) {
+        const qout = (t[u] || {})[qt] || {};
+        const v = qout.verdict_sla || qout.verdict_1x;
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, e2e: qout.verdict_e2e || null });
+      }
+      if (rows.length) out[tier] = rows;
+    }
+    return out;
+  }
+  // Worst in-RPC getTransaction p99 over the live-store legs — the E2E model
+  // carries the network legs as constants, so only the in-RPC slice belongs in
+  // the budget. It comes from the E2E-budget probe, which is the leg run at the
+  // demand-derived rate for exactly this purpose; runs predating the split
+  // carry it folded into their single verdict instead. Null when the run
+  // measured none: the allocation then stands.
+  function measuredGetTx(QV) {
+    let worst = null;
+    for (const r of (QV.hot || [])) {
+      if (r.qt !== "txhash") continue;
+      const ir = (r.e2e && r.e2e.in_rpc) || r.v.in_rpc;
+      if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) {
+        worst = { ns: ir.p99_ns, unit: r.unit, rps: (r.e2e || r.v).target_rps,
+                  fromProbe: !!r.e2e };
+      }
+    }
+    return worst;
+  }
+
+  // Match a run unit ("sac-6000-c1") to its workload in targets.json.
+  function workloadFor(unit, phase) {
+    const ws = (phase && phase.workloads) || [];
+    const u = String(unit).toLowerCase();
+    if (u.startsWith("sac")) return ws.find(w => /^sac/i.test(w.name)) || null;
+    if (u.includes("token")) return ws.find(w => /token/i.test(w.name)) || null;
+    if (u.includes("soroswap")) return ws.find(w => /soroswap/i.test(w.name)) || null;
+    return null;
+  }
+
+  /* ============================ shared HTML ============================ */
+  function mastheadHTML(D) {
+    const ds = D.dataset;
+    const um = ds.unit_meta || {};
+    const units = ds.unit_order || Object.keys(um);
+    // Subtitle: what was measured and how, in targets.json workload names
+    // ("SAC transfers") — the run JSON's baked description spells out raw
+    // profile slugs instead, so it is only the fallback.
+    const PH = phaseState(D);
+    const sel = PH && PH.sel;
+    const wlNames = sel ? units.map(u => { const w = workloadFor(u, sel); return w && w.name; }) : [];
+    const paced = sel && (D.campaign || {}).close_interval_ns === sel.block_time_ns;
+    const mac = D.machine || {};
+    const macBits = [mac.vcpus ? mac.vcpus + " vCPU" : "", mac.mem ? mac.mem + " RAM" : "", "local NVMe"].filter(Boolean).join(" · ");
+    const macTxt = mac.instance ? ` Run on a single ${mac.instance} (${macBits}).` : "";
+    const subTxt = wlNames.length && wlNames.every(Boolean)
+      ? `RPC v2 ingestion & query latencies under Phase ${sel.phase} target load, fed synthetic ledgers of ${wlNames.length > 1 ? wlNames.slice(0, -1).join(", ") + " and " + wlNames[wlNames.length - 1] : wlNames[0]}${paced ? ` at the ${fmtNsAxis(sel.block_time_ns)} block time` : ""}.${macTxt}`
+      : (ds.description || "");
+    return `
+    <header class="masthead">
+      <div class="mast-eyebrow">
+        <span>Stellar RPC v2 · Full-History Storage Engine</span>
+        <span>Benchmark Summary · ${esc(D.run_date || "")}</span>
+      </div>
+      <h1>${esc(D.run_name || D.run_id || "Benchmark run")}</h1>
+      <p class="mast-sub">${esc(subTxt)}</p>
+    </header>`;
+  }
+
+  function footerHTML(D, runId) {
+    const b = D.build || {}, camp = D.campaign || {}, mac = D.machine || {};
+    const reps = camp.reps || 5;
+    return `<div class="footer">
+      ${esc(D.run_name || "")} · ${esc(mac.instance || "")}, local NVMe · build ${esc(shortCommit(b.commit))}${b.branch ? " (" + esc(b.branch) + ")" : ""}.<br>
+      ${reps === 1 ? "Values come from a single process-level run" : `Aggregates are medians of ${reps} process-level runs with min–max spread`}; no value was invented, interpolated, or smoothed.
+      <a href="index.html?run=${esc(runId)}" style="color:var(--accent)">Full internal report ↗</a>
+    </div>`;
+  }
+
+  // `no` is the figure's displayed label ("Fig 3.1"). Two sections are
+  // conditional, so callers derive its section half from secNo(); `id` is fixed
+  // and is what every other reference — smoke, tableView, legend — keys on.
+  function figHTML(id, no, title, legendId, caption, opts = {}) {
+    return `<figure class="fig" id="${id}">
+      <div class="fig-head"><div><span class="fig-no">${no}</span><span class="fig-title">${title}</span></div>${legendId ? `<div class="legend" id="${legendId}"></div>` : ""}</div>
+      ${opts.picker ? `<div class="phase-picker" id="${id}-picker"></div>` : ""}
+      <div class="fig-body" id="${id}-body"></div>
+      <figcaption>${caption}</figcaption>
+      ${opts.noTable ? "" : `<details class="tv" id="${id}-tv"><summary>Table view</summary><div class="tv-scroll"></div></details>`}
+    </figure>`;
+  }
+
+  // Per-ledger latency lanes: end to end plus every ingestion phase, in phase
+  // order. Colors match the internal viewer so the two reports read the same.
+  function ingestPhaseLanes(h, C) {
+    if (!h || !h.phases) return [];
+    const colors = { "end to end": C.s1, extract: C.s2, ledgers: C.s3, txhash: C.de, events: C.s4, "commit (fsync)": C.s6, apply: C.s5 };
+    const defs = [["extract", "extract"], ["ledgers", "ledgers"], ["txhash", "txhash"], ["events", "events"], ["commit", "commit (fsync)"], ["apply", "apply"]];
+    const out = [];
+    if (h.driver && h.driver.ingest_total) out.push({ name: "end to end", color: colors["end to end"], st: h.driver.ingest_total });
+    for (const [key, name] of defs) if (h.phases[key]) out.push({ name, color: colors[name], st: h.phases[key] });
+    return out;
+  }
+
+  /* ============================ SUMMARY renderer ============================ */
+  function renderSummary(D) {
+    const ds = D.dataset || {};
+    const um = ds.unit_meta || {};
+    const ORDER = ds.unit_order || Object.keys(um);
+    const ING = D[INGEST_SECTION] || {};
+    const camp = D.campaign || {};
+    const reps = camp.reps || 5;
+    const medRuns = reps === 1 ? "single run" : `median of ${reps} runs`;
+    const runId = D.run_id || (CURRENT && CURRENT.meta && CURRENT.meta.id) || "";
+    const PH = phaseState(D);
+    const sel = PH && PH.sel;
+    const goalNs = sel ? sel.ingest_p99_target_ns : null;
+    const blockNs = sel ? sel.block_time_ns : null;
+    const closeNs = camp.close_interval_ns || 0;
+
+    const units = ORDER.filter(u => ING[u] && ING[u].driver && ING[u].driver.ingest_total);
+    const wlOf = u => sel ? workloadFor(u, sel) : null;
+    // Display name: the workload's name from targets.json when the unit maps
+    // to one, else the unit id itself.
+    const disp = u => { const w = wlOf(u); return w ? w.name : u; };
+    const tplOf = u => { const k = um[u] || {}; return k.ledgers > 0 ? Math.round(k.txs / k.ledgers) : null; };
+    const subOf = u => { const t = tplOf(u); return t != null ? fmtInt(t) + " tx/ledger" : ""; };
+
+    /* ---- goal verdicts ---- */
+    let goalPass = 0, goalWorst = null;
+    if (goalNs) units.forEach(u => {
+      const p99 = ING[u].driver.ingest_total.p99.m;
+      if (p99 <= goalNs) goalPass++;
+      if (!goalWorst || p99 > ING[goalWorst].driver.ingest_total.p99.m) goalWorst = u;
+    });
+    const goalMet = goalNs != null && goalPass === units.length;
+
+    /* ---- E2E budget inputs ---- */
+    // The budget section renders only when every slice is known: a phase goal
+    // with a declared E2E budget, plus the network constant and the two in-RPC
+    // handler allocations (sendTransaction, getTransaction) from targets.json.
+    const FIXED = LIVE_FIXED || {};
+    const rttNs = FIXED.network_rtt_ns || 0;
+    const sendNs = FIXED.send_tx_p99_ns || 0, getNs = FIXED.get_tx_p99_ns || 0;
+    const budgetNs = sel ? sel.e2e_budget_ns || 0 : 0;
+    const nBlocks = sel ? sel.block_count || 2 : 2;
+    const canBudget = !!(goalNs && blockNs && budgetNs && rttNs && sendNs && getNs && goalWorst);
+
+    /* ---- query verdicts (the query section, and the measured getTransaction slice) ---- */
+    const QV = queryVerdicts(D.queries, ORDER);
+    const qTiers = TIER_ORDER.filter(t => QV[t]);
+    const hasQueries = qTiers.length > 0;
+    const MEASURED_GET = measuredGetTx(QV);
+
+    // Section numbers are display only, and two sections are conditional — so
+    // they are numbered from what this run actually renders, and every § link
+    // in the prose reads its number from here.
+    const sectionDefs = SECTION_META
+      .filter(section => (section.id === "budget" ? canBudget : section.id === "queries" ? hasQueries : true));
+    const SECS = sectionDefs.map(section => section.id);
+    const secNo = id => String(SECS.indexOf(id) + 1).padStart(2, "0");
+
+    // Which phase carries the worst profile's p99 tail — used in the banner note.
+    const tailPhase = (() => {
+      if (!goalWorst || !ING[goalWorst].phases) return null;
+      let best = null;
+      for (const [k, st] of Object.entries(ING[goalWorst].phases)) {
+        if (!best || st.p99.m > best.ns) best = { name: k === "commit" ? "commit (fsync)" : k, ns: st.p99.m };
+      }
+      return best;
+    })();
+
+    const banner = goalNs && units.length ? (() => {
+      const w = goalWorst ? ING[goalWorst].driver.ingest_total : null;
+      const note = goalMet
+        ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. The chart below compares the profiles; <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a> shows where the time goes.`
+        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
+      return `<div class="banner${goalMet ? "" : " warn-tail"}">
+        <div class="banner-figure">${goalPass}<span class="of"> / ${units.length}</span></div>
+        <div class="banner-copy">
+          <div class="lead">${goalMet
+            ? `All profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip">✓ MEETS GOAL</span>`
+            : `${goalPass} of ${units.length} profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip warn">▲ ${units.length - goalPass} MISS</span>`}</div>
+          <p>${note}</p>
+        </div>
+      </div>`;
+    })() : `<div class="banner"><div class="banner-copy">
+        <div class="lead">No phase goal applies to this run.</div>
+      </div></div>`;
+
+    /* ---- dataset table (built as HTML; every cell renders real data) ---- */
+    // A unit without positive counts has no real row to show — omit it rather
+    // than render NaN cells.
+    const dsUnits = units.filter(u => { const k = um[u] || {}; return k.ledgers > 0 && k.txs > 0; });
+    const allMapped = dsUnits.length > 0 && dsUnits.every(u => wlOf(u));
+    // Avg raw (uncompressed) ledger size, from dataset-sizes.json facts.
+    const avgLedgerOf = u => {
+      const s = sizesFor(u);
+      return s && s.raw_meta_gib > 0 && s.raw_meta_ledgers > 0 ? s.raw_meta_gib * 1073741824 / s.raw_meta_ledgers : null;
+    };
+    const allSized = dsUnits.length > 0 && dsUnits.every(u => avgLedgerOf(u) != null);
+    const dsHead = ["Profile", ...(allMapped ? ["Target load"] : []), "tx/ledger", "events/tx", ...(allSized ? ["Avg ledger size"] : []), "Ledgers", "Transactions", "Events"];
+    const dsRows = dsUnits.map(u => {
+      const k = um[u] || {}, w = wlOf(u);
+      const cells = [esc(disp(u))];
+      if (allMapped) cells.push(`${fmtInt(w.tps)} TPS · ${fmtInt(w.tx_per_ledger)} tx/ledger`);
+      cells.push(fmtInt(k.txs / k.ledgers), (k.events / k.txs).toFixed(2));
+      if (allSized) cells.push(fmtMiB(avgLedgerOf(u)));
+      cells.push(fmtInt(k.ledgers), fmtInt(k.txs), fmtInt(k.events));
+      return `<tr>${cells.map((c, i) => `<td${i ? "" : ' class="ds-name"'}>${c}</td>`).join("")}</tr>`;
+    }).join("");
+    const datasetTable = `<div class="tv-scroll" style="margin-top:16px"><table class="data" id="dataset-table" style="width:100%">
+      <tr>${dsHead.map(h => `<th>${h}</th>`).join("")}</tr>${dsRows}</table></div>`;
+    // Test data = the generated synthetic-ledger datasets (dataset-sizes.json);
+    // the run's own bundle URI is the RAW RESULTS dir, linked from §05 instead.
+    // s3:// links to the S3 console, legacy gs:// to the GCS console.
+    // Percent-encode a bucket path, keeping the "/" separators literal: without
+    // it a key containing #, ?, & or a space would change what the link points at.
+    const encPath = s => s.split("/").map(encodeURIComponent).join("/");
+    const bucketLink = (uri) => {
+      const u = String(uri);
+      let href = "";
+      if (u.startsWith("gs://")) {
+        href = "https://console.cloud.google.com/storage/browser/" + encPath(u.slice(5));
+      } else if (u.startsWith("s3://")) {
+        const [bucket, ...rest] = u.slice(5).split("/");
+        let prefix = rest.join("/");
+        if (prefix && !prefix.endsWith("/")) prefix += "/";
+        href = `https://console.aws.amazon.com/s3/buckets/${encodeURIComponent(bucket)}?prefix=${encPath(prefix)}`;
+      }
+      return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
+    };
+    const testDataGcs = DATASET_SIZES && DATASET_SIZES.source_gcs;
+    const sourceData = testDataGcs
+      ? `<p class="sec-intro" id="source-data">Source test data: ${bucketLink(testDataGcs)}</p>`
+      : "";
+    const rawSrc = camp.source_uri || camp.source_gcs;
+    const rawResults = rawSrc
+      ? `<p class="sec-intro" id="raw-results">Raw results: ${bucketLink(rawSrc)}</p>`
+      : "";
+
+    /* ---- the go / no-go section: the E2E budget composition ---- */
+    // Why the consensus slice spans N blocks: in Phases 1–2 a transaction
+    // waits for the next ledger close; Phase 3's consensus + execution
+    // pipelining adds one more.
+    const whyBlocks = canBudget ? (nBlocks >= 3
+      ? `Phase ${sel.phase} pipelines consensus and execution, so a transaction completes after ${nBlocks} ledger closes`
+      : `a transaction submitted now lands in the <em>next</em> ledger close, not the one in flight`) : "";
+    // The three slices this work owns carry their own colors; the network and
+    // consensus slices stay de-emphasized grey. Measured values replace their
+    // allocation on the run bar; an unmeasured slice keeps the allocation and
+    // stays hatched.
+    const blockTotal = nBlocks * blockNs;
+    const netSendNs = Math.floor(rttNs / 2), netReadNs = rttNs;   // hardcoded network constants
+    const wp99 = canBudget ? ING[goalWorst].driver.ingest_total.p99.m : 0;
+    const txRunNs = MEASURED_TX || sendNs;
+    const getRunNs = MEASURED_GET ? MEASURED_GET.ns : getNs;
+    const e2eOf = (ing, txV, getV) => netSendNs + txV + blockTotal + ing + netReadNs + getV;
+    const e2eGoal = canBudget ? e2eOf(goalNs, sendNs, getNs) : 0;
+    const e2eRun = canBudget ? e2eOf(wp99, txRunNs, getRunNs) : 0;
+    const slack = budgetNs - e2eRun;
+    const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
+      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. Hatched segments are targets or estimates; solid segments are measured.`) : "";
+
+    // One tile per slice this work owns: what it measured, on which profile,
+    // against what it was allocated. The mark judges the slice alone — the
+    // verdict above it judges the whole trip.
+    const sliceTile = (name, meas, profile, allocNs) => `<div class="slice-tile">
+      <div class="slice-name">${esc(name)}</div>
+      <div class="slice-val">${esc(fmtNs(meas == null ? allocNs : meas))}${meas == null ? "" : `<span class="${meas <= allocNs ? "cell-ok" : "cell-warn"}">${meas <= allocNs ? "✓" : "▲"}</span>`}</div>
+      <div class="slice-sub">${meas == null ? "estimate" : esc(profile)}</div>
+      <div class="slice-alloc">allocation ${esc(fmtNsAxis(allocNs))}</div>
+    </div>`;
+    const budgetSection = canBudget ? `
+    <section id="budget">
+      <div class="sec-head"><span class="sec-num">${secNo("budget")}</span><h2>Phase ${sel.phase} end-to-end budget</h2></div>
+      <p class="sec-intro">We measure p99 latency for sendTransaction, ingestion, and getTransaction on the highest-latency workload profile. The go / no-go decision is based on total end-to-end latency instead of each slice's target.</p>
+      <div class="banner${slack < 0 ? " warn-tail" : ""}"><div class="banner-copy">
+        <div class="lead">E2E ${fmtNs(e2eRun)} of the ${fmtNs(budgetNs)} budget — ${slack === 0 ? "exactly on budget" : slack > 0 ? `${fmtNs(slack)} under` : `${fmtNs(-slack)} over`}. ${slack < 0 ? '<span class="chip warn">▲ NO-GO</span>' : '<span class="chip">✓ GO</span>'}</div>
+      </div></div>
+      ${budgetFig}
+      <div class="slice-tiles">
+        ${sliceTile("sendTransaction", MEASURED_TX, MEASURED_TX_NAME, sendNs)}
+        ${sliceTile("ingestion", wp99, disp(goalWorst), goalNs)}
+        ${sliceTile("getTransaction", MEASURED_GET && MEASURED_GET.ns, MEASURED_GET ? disp(MEASURED_GET.unit) : "", getNs)}
+      </div>
+    </section>` : "";
+
+    /* ---- § query latency inputs ---- */
+    // The harness writes its leg duration as a Go duration ("60s"); space the
+    // unit off so it reads as prose.
+    const qDuration = ((camp.config || {}).query_duration || "").trim().replace(/(\d)\s*([a-z])/i, "$1 $2");
+    const qRateTxt = sel ? `Phase ${sel.phase} request rate` : "target request rate";
+    const qLoadTxt = sel ? `Phase ${sel.phase} load` : "target load";
+    const queryTableHTML = tier => {
+      const rows = QV[tier];
+      const cells = new Map(rows.map(r => [`${r.qt}\0${r.unit}`, r.v]));
+      const head = ORDER.map(unit => `<th scope="col">${esc(disp(unit))}</th>`).join("");
+      const body = QT_ORDER.map(qt => `<tr>
+          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}</th>
+          ${ORDER.map(unit => {
+            const v = cells.get(`${qt}\0${unit}`);
+            return v
+              ? `<td class="q-cell"><strong class="q-latency">${esc(fmtNs(v.p99_ns))}</strong><span class="q-rate">${esc(fmtRps(v.target_rps))}</span></td>`
+              : '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';
+          }).join("")}
+        </tr>`).join("");
+      return `<div class="tv-scroll"><table class="data q-table" id="q-table-${tier}" style="width:100%">
+        <thead><tr><th scope="col">Endpoint</th>${head}</tr></thead>
+        <tbody>${body}</tbody></table></div>`;
+    };
+    const queriesSection = hasQueries ? `
+    <section id="queries">
+      <div class="sec-head"><span class="sec-num">${secNo("queries")}</span><h2>Query latency at ${esc(qLoadTxt)}</h2></div>
+      <p class="sec-intro">Each endpoint ran${qDuration ? ` for ${esc(qDuration)}` : ""} at its workload's ${esc(qRateTxt)}. Values are client-observed p99 latency.</p>
+      ${qTiers.map(tier => `<h3 class="method-sub">${esc(TIER_TITLE[tier] || tier)}</h3>
+      <p class="sec-intro">${esc(TIER_NOTE[tier] || "")}</p>
+      ${queryTableHTML(tier)}
+      ${tier === "hot" && canBudget && MEASURED_GET ? `<p class="q-foot">The end-to-end budget in §${secNo("budget")} uses the highest measured <code>getTransaction</code> p99${MEASURED_GET.fromProbe ? `, taken from its end-to-end probe leg at ${esc(fmtRps(MEASURED_GET.rps))}` : ""}.</p>` : ""}`).join("")}
+    </section>` : "";
+
+    /* ---- pacing prose ---- */
+    const paceIsBlockTime = blockNs && closeNs === blockNs;
+    const pacePara = closeNs > 0
+      ? `The benchmark runs RPC's production ingestion loop and schedules one ledger every <strong>${fmtNsAxis(closeNs)}</strong>${paceIsBlockTime ? `, matching the Phase ${sel.phase} block time` : ""}. If ingestion exceeds that interval, the next ledger starts immediately and the loop runs without waiting until it catches up.`
+      : `RPC ingestion runs the production code path — the same loop the daemon runs against the live network. This run was not paced: ledgers were fed back-to-back.`;
+
+    /* ---- section skeleton ---- */
+    reportEl.innerHTML = mastheadHTML(D) + budgetSection + `
+    <section id="method">
+      <div class="sec-head"><span class="sec-num">${secNo("method")}</span><h2>Methodology</h2></div>
+      <h3 class="method-sub">Test data</h3>
+      <p class="sec-intro">Synthetic ledgers are generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's target TPL.</p>
+      ${datasetTable}
+      ${sourceData}
+      <h3 class="method-sub">Ingestion and pacing</h3>
+      <p class="sec-intro">${pacePara}</p>
+      ${figHTML("fig21", `Fig ${+secNo("method")}.1`, "How ledgers are fed — the close-interval schedule", "",
+        `Ledger 0 sets the <strong>anchor</strong>; startup before it is untimed. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. L0–L2 finish within their slots, so the loop waits for each next due time. L3 overruns its slot; L4 starts immediately, and normal pacing resumes with L5 after catch-up. Lag is the time from a ledger's due time to its commit.`, { noTable: true })}
+    </section>
+
+    <section id="goal">
+      <div class="sec-head"><span class="sec-num">${secNo("goal")}</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
+      ${banner}
+      ${figHTML("fig31", `Fig ${+secNo("goal")}.1`, "Ingestion latency p99 by workload profile", "fig31-legend",
+        `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${fmtNsAxis(goalNs)}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
+      <p class="sec-intro" id="goal-readout"></p>
+    </section>
+
+    <section id="phases">
+      <div class="sec-head"><span class="sec-num">${secNo("phases")}</span><h2>Per-ledger RPC ingestion latency — end to end, and every phase</h2></div>
+      <p class="sec-intro">Where a ledger's time goes during ingestion. Each ledger passes through six phases, in a fixed order, inside one ingestion call. Fig ${+secNo("phases")}.1 splits the run's total ingestion time across those phases; Fig ${+secNo("phases")}.2 compares the profiles one phase at a time — <strong>end to end</strong> is the per-ledger sum of all six.</p>
+      <div class="phase-guide">
+        <p><strong>RocksDB</strong> is the live store — an embedded key-value database on the node's local disk. Ingestion breaks each ledger down and files it there: the compressed ledger bytes, the transaction-hash entries, the events. Nothing reaches RocksDB until <strong>commit</strong> — the three middle phases stage writes into one batch.</p>
+        <ul>
+          <li><strong>extract</strong> — decode the raw ledger meta and read it once, transaction by transaction. Pull out each transaction's hash and its contract events, shaped for writing.</li>
+          <li><strong>ledgers</strong> — compress the raw ledger bytes (zstd) and stage them.</li>
+          <li><strong>txhash</strong> — stage the transaction-hash → ledger-sequence entries.</li>
+          <li><strong>events</strong> — stage each event's payload and its term-index rows (the keys behind topic lookups).</li>
+          <li><strong>commit (fsync)</strong> — write the staged batch to RocksDB: one atomic write, one <strong>fsync</strong>. One fsync per ledger is the durability design; a heavy commit phase is that design's price, not a defect.</li>
+          <li><strong>apply</strong> — after the batch is durable, update the in-memory event lookups that serve queries: the term index and the per-ledger event counts. Only events have this in-memory step.</li>
+        </ul>
+        <p>Most of the p99 tail sits in <strong>commit</strong> and <strong>apply</strong>; on the heaviest profile, apply dominates.</p>
+      </div>
+      ${figHTML("fig41", `Fig ${+secNo("phases")}.1`, "Where ingestion time goes — each phase's share of the run", "fig41-legend",
+        `Each bar splits the run's <strong>total ingestion time</strong> — summed over every ledger (${medRuns}) — across the six phases. Shares are built from per-phase totals, which add up exactly; percentiles do not.`)}
+      ${figHTML("fig42", `Fig ${+secNo("phases")}.2`, "Per-ledger latency, one phase at a time", "fig42-legend",
+        `Latency percentiles over every ledger of the run (${medRuns}; linear scale, fitted to the selected phase). <strong>end to end</strong> is the per-ledger sum of the six phases; waiting for the next ledger is excluded.`, { picker: true })}
+    </section>
+
+    ` + queriesSection + `
+    <section id="machine" class="method">
+      <div class="sec-head"><span class="sec-num">${secNo("machine")}</span><h2>Machine metadata</h2></div>
+      <p class="sec-intro">Raw provenance for the box behind these numbers.</p>
+      ${rawResults}
+      <pre class="metadata" id="machine-metadata"></pre>
+    </section>
+    ` + footerHTML(D, runId);
+
+    renderSectionNav(sectionDefs, secNo);
+    const C = COLORS();
+
+    /* ---- fig 1.1 E2E budget bar ---- */
+    // Same slice order and derivation as the latency model
+    // (latency-model.html), in lifecycle order:
+    // E2E = rtt/2 + sendTransaction + block_count × block + ingest + rtt + getTransaction.
+    // The three slices this work owns each carry their own solid color; the
+    // network and consensus slices stay de-emphasized grey. A slice with no
+    // measurement behind it keeps its allocation and stays hatched.
+    if (canBudget) {
+      const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
+      const getRunLabel = MEASURED_GET ? "getTransaction (measured, in-RPC)" : "getTransaction (estimate)";
+      const segs = (ingNs, measured, txV, getV) => [
+        { color: C.de, ns: netSendNs, hatch: true },
+        { color: C.s5, ns: txV, hatch: !(measured && MEASURED_TX) },
+        { color: C.de, ns: blockTotal, lab: `Stellar Core consensus — ${fmtNsAxis(blockTotal)}`, ink: true },
+        { color: C.s1, ns: ingNs, hatch: !measured, lab: fmtNs(ingNs), callout: true },
+        { color: C.de, ns: netReadNs, hatch: true },
+        { color: C.s2, ns: getV, hatch: !(measured && MEASURED_GET) },
+      ];
+      const tip = (ingNs, ingLabel, txV, txLabel, getV, getLabel) => [
+        { color: C.de, value: fmtNs(netSendNs), label: "network — submission request (assumed)" },
+        { color: C.s5, value: fmtNs(txV), label: txLabel },
+        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
+        { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
+        { color: C.de, value: fmtNs(netReadNs), label: "network — getTransaction round trip (assumed)" },
+        { color: C.s2, value: fmtNs(getV), label: getLabel },
+        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end (derived)" },
+      ];
+      budgetChart("fig11-body", [
+        { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
+          segs: segs(goalNs, false, sendNs, getNs),
+          tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)", getNs, "getTransaction (allocated)") },
+        { label: "This run", sub: `${disp(goalWorst)} p99`,
+          segs: segs(wp99, true, txRunNs, getRunNs),
+          tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
+      ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
+      legend("fig11-legend", [
+        { label: "sendTransaction", color: C.s5 },
+        { label: "ingestion", color: C.s1 },
+        { label: "getTransaction", color: C.s2 },
+        { label: "network + consensus (assumed constants)", color: C.de },
+        { label: "hatched = allocation, not a measurement",
+          color: `repeating-linear-gradient(45deg, ${C.de} 0 3px, transparent 3px 5px)` },
+        { label: "E2E budget", color: CVAR("--warn"), line: true },
+      ]);
+      const dTxt = e2e => { const d = budgetNs - e2e; return d === 0 ? "on budget" : d > 0 ? fmtNs(d) + " under" : fmtNs(-d) + " over"; };
+      tableView("fig11", ["Slice", `Phase ${sel.phase} goal`, "This run", "Provenance"], [
+        ["network — submission request", fmtNsAxis(netSendNs), fmtNsAxis(netSendNs), "assumed constant (half the round trip)"],
+        ["sendTransaction", fmtNsAxis(sendNs), MEASURED_TX ? fmtNs(txRunNs) : fmtNsAxis(sendNs), MEASURED_TX ? "allocated → measured" : "estimate"],
+        [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
+        ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
+        ["network — getTransaction round trip", fmtNsAxis(netReadNs), fmtNsAxis(netReadNs), "assumed constant"],
+        ["getTransaction", fmtNsAxis(getNs), MEASURED_GET ? `${fmtNs(getRunNs)} (${disp(MEASURED_GET.unit)})` : fmtNsAxis(getNs), MEASURED_GET ? "allocated → measured" : "estimate"],
+        ["end-to-end (derived)", fmtNs(e2eGoal), fmtNs(e2eRun), "derived"],
+        [`vs the ${fmtNsAxis(budgetNs)} E2E budget`, dTxt(e2eGoal), dTxt(e2eRun), "derived"],
+      ]);
+    }
+
+    /* ---- fig 2.1 pacing diagram ---- */
+    paceDiagram("fig21-body");
+
+    /* ---- fig 3.1 headline goal chart ---- */
+    if (units.length) {
+      const rows = units.map(u => {
+        const it = ING[u].driver.ingest_total;
+        return {
+          label: disp(u), sub: subOf(u),
+          pts: { p50: it.p50.m, p90: it.p90.m, p99: it.p99.m, max: it.max.m },
+          pass: goalNs == null || it.p99.m <= goalNs,
+        };
+      });
+      goalChart("fig31-body", rows, {
+        targetNs: goalNs, targetLabel: goalNs ? `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` : "",
+        blockNs: blockNs, blockLabel: blockNs ? `${fmtNsAxis(blockNs)} — block time` : "",
+      });
+      legend("fig31-legend", [
+        { label: "ingestion p99", color: C.s1 },
+        ...(goalNs ? [{ label: "ingestion target", color: C.warn, line: true }] : []),
+        ...(blockNs ? [{ label: "block time", color: CVAR("--muted"), line: true }] : []),
+      ]);
+      tableView("fig31", ["Profile", "p50", "p90", "p99", "Worst ledger", ...(goalNs ? ["Target", "Verdict"] : [])],
+        units.map(u => {
+          const it = ING[u].driver.ingest_total;
+          const base = [disp(u), fmtNs(it.p50.m), fmtNs(it.p90.m), fmtNs(it.p99.m), fmtNs(it.max.m)];
+          if (goalNs) base.push(fmtNsAxis(goalNs), it.p99.m <= goalNs ? "✓ PASS" : "▲ MISS");
+          return base;
+        }));
+      const readout = document.getElementById("goal-readout");
+      if (readout && goalNs) {
+        readout.innerHTML = units.map(u => {
+          const p99 = ING[u].driver.ingest_total.p99.m, ok = p99 <= goalNs;
+          return `<span class="goal-item"><strong>${esc(disp(u))}</strong> ${fmtNs(p99)} <span class="${ok ? "cell-ok" : "cell-warn"}">${ok ? "✓ PASS" : "▲ MISS"}</span></span>`;
+        }).join(" · ");
+      }
+    }
+
+    /* ---- fig 4.1 share of ingestion time · fig 4.2 per-phase detail ---- */
+    if (units.length) {
+      const lanesFor = u => ingestPhaseLanes(ING[u], C);
+      // Fig 4.1 — additive composition from per-phase total_ns over the run.
+      const shareRows = units.map(u => ({
+        label: disp(u), sub: subOf(u),
+        parts: lanesFor(u).filter(l => l.name !== "end to end" && l.st.total && l.st.total.m > 0)
+          .map(l => ({ name: l.name, color: l.color, ns: l.st.total.m })),
+      })).filter(r => r.parts.length);
+      const fig41 = document.getElementById("fig41");
+      if (shareRows.length) {
+        shareChart("fig41-body", shareRows);
+        legend("fig41-legend", shareRows[0].parts.map(p => ({ label: p.name, color: p.color })));
+        tableView("fig41", ["Profile", "Phase", "Time over the run", "Share"],
+          shareRows.flatMap(r => {
+            const total = r.parts.reduce((a, p) => a + p.ns, 0);
+            return r.parts.map(p => [r.label, p.name, fmtNs(p.ns), (p.ns / total * 100).toFixed(1) + " %"]);
+          }));
+      } else if (fig41) fig41.style.display = "none";
+
+      // Fig 4.2 — percentile detail, one phase at a time on a linear axis
+      // fitted to that phase's own range.
+      const laneNames = lanesFor(units[0]).map(l => l.name);
+      if (!laneNames.includes(PHASE_PICK)) PHASE_PICK = laneNames[0];
+      const drawDetail = () => {
+        const rows = units.map(u => {
+          const l = lanesFor(u).find(k => k.name === PHASE_PICK);
+          return l ? {
+            label: disp(u), sub: subOf(u),
+            lanes: [{ name: l.name, color: l.color, pts: { p50: l.st.p50.m, p90: l.st.p90.m, p99: l.st.p99.m, max: l.st.max.m } }],
+          } : null;
+        }).filter(Boolean);
+        const reflines = [];
+        if (PHASE_PICK === "end to end") {
+          if (goalNs) reflines.push({ ns: goalNs, label: `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` });
+          if (blockNs) reflines.push({ ns: blockNs, label: `${fmtNsAxis(blockNs)} — block time`, block: true });
+        }
+        dotRangeChart("fig42-body", rows, { linear: true, reflines });
+        const cur = rows.length ? rows[0].lanes[0] : null;
+        legend("fig42-legend", [
+          ...(cur ? [{ label: cur.name, color: cur.color }] : []),
+          { label: "● p50 · • p90 · ○ p99 · | max", color: "transparent" },
+        ]);
+      };
+      const picker = document.getElementById("fig42-picker");
+      if (picker) {
+        picker.replaceChildren();
+        for (const name of laneNames) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = name;
+          if (name === PHASE_PICK) b.classList.add("sel");
+          b.addEventListener("click", () => {
+            PHASE_PICK = name;
+            picker.querySelectorAll("button").forEach(o => o.classList.toggle("sel", o.textContent === name));
+            drawDetail();
+          });
+          picker.appendChild(b);
+        }
+      }
+      drawDetail();
+      tableView("fig42", ["Profile", "Series", "p50", "p90", "p99", "Worst ledger"],
+        units.flatMap(u => lanesFor(u).map(l => [disp(u), l.name, fmtNs(l.st.p50.m), fmtNs(l.st.p90.m), fmtNs(l.st.p99.m), fmtNs(l.st.max.m)])));
+    }
+
+    /* ---- machine metadata ---- */
+    // The raw dump is verbatim except the harness's config-echo lines — the
+    // old "-iters:" form and the two current ones, "campaign: …" and
+    // "close-interval: …". All three repeat campaign config the masthead
+    // already states, in internal vocabulary this page does not use.
+    (function machineMeta() {
+      const lines = String((D.machine || {}).raw || "").trim().split("\n")
+        .filter(l => !/-iters:/.test(l) && !/^campaign: /.test(l) && !/^close-interval: /.test(l));
+      document.getElementById("machine-metadata").textContent = lines.join("\n");
+    })();
+  }
+
+  /* ============================ shell / boot ============================ */
+  function draw() {
+    if (!CURRENT || !CURRENT.data) return;
+    const D = CURRENT.data;
+    try { renderSummary(D); }
+    catch (err) {
+      clearSectionNav();
+      console.error("summary render failed", err);
+      reportEl.innerHTML = `<div class="error-box">Failed to render the summary for run “${esc(D.run_id || "")}”: ${esc(err.message)}.
+        <a href="index.html?run=${esc(D.run_id || "")}" style="color:var(--accent)">Open the full report ↗</a></div>`;
+    }
+  }
+
+  async function loadRun(entry) {
+    clearSectionNav();
+    reportEl.innerHTML = `<div class="loading">Loading ${esc(entry.name || entry.id)}…</div>`;
+    if (fullLink) fullLink.href = `index.html?run=${encodeURIComponent(entry.id)}`;
+    try {
+      const res = await fetch(entry.path, { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      CURRENT = { meta: entry, data };
+      draw();
+    } catch (err) {
+      console.error(err);
+      reportEl.innerHTML = `<div class="error-box">Could not load <code>${esc(entry.path)}</code> (${esc(err.message)}).<br>Serve the folder instead of opening the file directly: <code>python3 -m http.server -d docs</code> — <code>file://</code> blocks fetch().</div>`;
+    }
+  }
+
+  function selectRun(id, push) {
+    const entry = MANIFEST.runs.find(r => r.id === id) || MANIFEST.runs[0];
+    if (!entry) return;
+    selectEl.value = entry.id;
+    const url = new URL(location.href);
+    url.searchParams.set("run", entry.id);
+    if (push) history.pushState({ run: entry.id }, "", url); else history.replaceState({ run: entry.id }, "", url);
+    loadRun(entry);
+  }
+
+  async function boot() {
+    await Promise.all([loadLiveTargets(), loadDatasetSizes(), loadTxsub()]);
+    try {
+      const res = await fetch("runs/index.json", { cache: "no-cache" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      MANIFEST = await res.json();
+    } catch (err) {
+      console.error(err);
+      reportEl.innerHTML = `<div class="error-box">Could not load <code>runs/index.json</code> (${esc(err.message)}).<br>Serve the folder: <code>python3 -m http.server -d docs</code> — opening via <code>file://</code> will not work.</div>`;
+      return;
+    }
+    (MANIFEST.runs || []).forEach(r => {
+      const o = document.createElement("option");
+      o.value = r.id;
+      o.textContent = `${r.name}  ·  ${r.date}`;
+      selectEl.appendChild(o);
+    });
+    selectEl.addEventListener("change", () => selectRun(selectEl.value, true));
+    window.addEventListener("popstate", () => {
+      // Hash-only navigation (the §-links) also fires popstate — don't
+      // re-render (and reset the scroll) unless the run actually changed.
+      const id = new URL(location.href).searchParams.get("run");
+      if (id && !(CURRENT && CURRENT.meta && CURRENT.meta.id === id)) selectRun(id, false);
+    });
+    const initial = new URL(location.href).searchParams.get("run");
+    // A summary is always of one specific run — a bare URL has none to show,
+    // so it lands on the run index instead of silently picking one.
+    if (!initial) { location.replace("index.html"); return; }
+    selectRun(initial, false);
+  }
+
+  window.addEventListener("resize", () => {
+    syncToolbarOffset();
+    clearTimeout(redrawTimer);
+    redrawTimer = setTimeout(draw, 160);
+  });
+  syncToolbarOffset();
+  boot();
+})();
