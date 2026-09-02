@@ -245,7 +245,7 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		if code != 2 {
 			t.Errorf("exit code = %d, want 2", code)
 		}
-		for _, want := range []string{"dataset 'pubnet-63'", "load profile 'pubnet'", "known profiles:"} {
+		for _, want := range []string{"dataset 'pubnet-63'", "e2e_probe profile 'pubnet'", "known profiles:"} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q, got:\n%s", want, stderr)
 			}

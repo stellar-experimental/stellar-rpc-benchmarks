@@ -110,7 +110,7 @@ func TestRatesRejects(t *testing.T) {
 		qtype   string
 		want    []string
 	}{
-		{"unknown profile", "pubnet", 1, "txhash", []string{"no query_load profile 'pubnet'", "sac"}},
+		{"unknown profile", "pubnet", 1, "txhash", []string{"no query_load.e2e_probe profile 'pubnet'", "sac"}},
 		{"unknown query type", "sac", 1, "blocks", []string{"unknown query type 'blocks'", "ledgers"}},
 		{"phase below the range", "sac", 0, "txhash", []string{"phase 0 has no floors", "phases 1-3"}},
 		{"phase above the range", "sac", 4, "txhash", []string{"phase 4 has no floors", "phases 1-3"}},

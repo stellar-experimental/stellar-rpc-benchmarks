@@ -933,7 +933,7 @@ def attach_query_verdicts(queries, phase):
                 if qt != "txhash":
                     continue
                 if e2e_floors is None:
-                    warn(f"query-{tier}-{unit}: no query_load profile {profile!r} "
+                    warn(f"query-{tier}-{unit}: no query_load.e2e_probe profile {profile!r} "
                          f"in targets.json; no E2E-budget verdict")
                     continue
                 if idx >= len(e2e_floors):

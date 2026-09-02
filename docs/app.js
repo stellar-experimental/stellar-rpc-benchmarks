@@ -579,10 +579,10 @@
   function checkOfKind(D, kind) {
     return allChecks(D).find(c => c && c.kind === kind) || null;
   }
-  // The read-path SLA check. Two checks now share applies_to "queries", so it
-  // is matched on kind; the applies_to fallback picks up the single
-  // query_p99_threshold check of runs converted before the split.
-  const queryCheck = D => checkOfKind(D, "query_sla") || checkFor(D, "queries");
+  // The read-path SLA check, matched on kind — two checks share applies_to
+  // "queries" now, so applies_to alone cannot pick it out. Runs converted
+  // before the split carry the single query_p99_threshold check in its place.
+  const queryCheck = D => checkOfKind(D, "query_sla") || checkOfKind(D, "query_p99_threshold");
 
   // The p99 one query cell answers to. The SLA check states a target per
   // endpoint AND storage tier in targets_ns; older runs state one number for

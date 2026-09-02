@@ -162,11 +162,11 @@ func (t *Targets) MatchPhase(closeIntervalNs int64) int {
 // plan's leg order is its own; this list is the vocabulary of the file.
 var QueryTypes = []string{"ledgers", "txpage", "txhash", "events"}
 
-// Rates is the RPS ladder one query leg targets, ascending: the endpoint's SLA
-// floor times every ladder step. txhash runs as ONE leg answering to both
-// families, so its ladder also unions the (profile, phase) E2E-probe ladder,
-// deduplicated and sorted — a floor the two families share becomes one cell
-// carrying both verdicts.
+// Rates is the RPS ladder one query leg targets, sorted ascending and
+// deduplicated: the endpoint's SLA floor times every ladder step. txhash runs
+// as ONE leg answering to both families, so its ladder also unions the
+// (profile, phase) E2E-probe ladder — a floor the two families share becomes
+// one cell carrying both verdicts.
 func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, error) {
 	slaFloor, ok := t.QueryLoad.SLA.FloorsRPS[qtype]
 	if !ok {
@@ -176,7 +176,7 @@ func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, 
 	// pace by them: a run that names neither is a run nobody can judge.
 	e2eFloors, ok := t.QueryLoad.E2EProbe.FloorsRPS[profileKey]
 	if !ok {
-		return nil, fmt.Errorf("targets: no query_load profile '%s' (known profiles: %s)",
+		return nil, fmt.Errorf("targets: no query_load.e2e_probe profile '%s' (known profiles: %s)",
 			profileKey, strings.Join(sortedKeys(t.QueryLoad.E2EProbe.FloorsRPS), ", "))
 	}
 	if phase < 1 || phase > len(e2eFloors) {
@@ -185,10 +185,9 @@ func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, 
 	rates := t.ladderAround(slaFloor)
 	if qtype == "txhash" {
 		rates = append(rates, t.ladderAround(e2eFloors[phase-1])...)
-		slices.Sort(rates)
-		rates = slices.Compact(rates)
 	}
-	return rates, nil
+	slices.Sort(rates)
+	return slices.Compact(rates), nil
 }
 
 // ladderAround is one floor times every ladder step, in ladder order.

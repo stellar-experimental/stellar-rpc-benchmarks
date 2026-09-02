@@ -138,11 +138,10 @@ function queryShape(D) {
    them (queryCheck + thresholdFor / judgedRate). A run states its target either
    per endpoint and tier (targets_ns, the SLA shape) or as one number for the
    whole run (threshold_ns, the published generation). */
-const allChecks = (D) => D.checks_all || [D.checks || {}];
-// Matched on kind first: two checks share applies_to "queries" once the
-// families are split. The applies_to fallback is the legacy single check.
-const queryCheck = (D) => allChecks(D).find((c) => c && c.kind === "query_sla")
-  || allChecks(D).find((c) => c && c.applies_to === "queries") || {};
+const checkOfKind = (D, kind) => (D.checks_all || [D.checks || {}]).find((c) => c && c.kind === kind);
+// Matched on kind: two checks share applies_to "queries" once the families
+// are split. query_p99_threshold is the legacy single check.
+const queryCheck = (D) => checkOfKind(D, "query_sla") || checkOfKind(D, "query_p99_threshold") || {};
 const queryThr = (D, qt, tier) => {
   const c = queryCheck(D);
   const byTier = c.targets_ns && c.targets_ns[qt];

@@ -245,7 +245,7 @@ class RpsVerdictOmissionTests(unittest.TestCase):
         cold = data["queries"]["cold"]["mystery-9000-c1"]
         self.assertIn("verdict_sla", cold["txhash"])
         self.assertNotIn("verdict_e2e", cold["txhash"])
-        hits = [w for w in warnings if "no query_load profile 'mystery'" in w]
+        hits = [w for w in warnings if "no query_load.e2e_probe profile 'mystery'" in w]
         self.assertEqual(len(hits), 2)             # one per tier, not per qtype
         self.assertEqual(convert.validate_run(data, reps=2), [])
 
