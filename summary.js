@@ -692,9 +692,10 @@
   const fmtRps = v => v == null || !isFinite(v)
     ? "—"
     : (v >= 100 ? fmtInt(v) : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
-  // Every (tier, profile, endpoint) leg carrying a 1× result, grouped by tier
-  // and ordered endpoint-first. The source field is named verdict_1x, but the
-  // summary presents its p99 and request rate without a read-path verdict.
+  // Every (tier, profile, endpoint) leg carrying an SLA result, grouped by tier
+  // and ordered endpoint-first. The summary presents its p99 and request rate
+  // without a read-path verdict. Runs converted before the SLA and E2E-budget
+  // families were split carry one verdict_1x that plays the SLA role.
   function queryVerdicts(Q, order) {
     const out = {};
     for (const tier of TIER_ORDER) {
@@ -709,8 +710,9 @@
       const qts = [...QT_ORDER.filter(q => seen.includes(q)), ...seen.filter(q => !QT_ORDER.includes(q))];
       const rows = [];
       for (const qt of qts) for (const u of order) {
-        const v = ((t[u] || {})[qt] || {}).verdict_1x;
-        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v });
+        const qout = (t[u] || {})[qt] || {};
+        const v = qout.verdict_sla || qout.verdict_1x;
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, e2e: qout.verdict_e2e || null });
       }
       if (rows.length) out[tier] = rows;
     }
@@ -718,12 +720,19 @@
   }
   // Worst in-RPC getTransaction p99 over the live-store legs — the E2E model
   // carries the network legs as constants, so only the in-RPC slice belongs in
-  // the budget. Null when the run measured none: the allocation then stands.
+  // the budget. It comes from the E2E-budget probe, which is the leg run at the
+  // demand-derived rate for exactly this purpose; runs predating the split
+  // carry it folded into their single verdict instead. Null when the run
+  // measured none: the allocation then stands.
   function measuredGetTx(QV) {
     let worst = null;
     for (const r of (QV.hot || [])) {
-      const ir = r.qt === "txhash" && r.v.in_rpc;
-      if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) worst = { ns: ir.p99_ns, unit: r.unit };
+      if (r.qt !== "txhash") continue;
+      const ir = (r.e2e && r.e2e.in_rpc) || r.v.in_rpc;
+      if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) {
+        worst = { ns: ir.p99_ns, unit: r.unit, rps: (r.e2e || r.v).target_rps,
+                  fromProbe: !!r.e2e };
+      }
     }
     return worst;
   }
@@ -1016,7 +1025,7 @@
       ${qTiers.map(tier => `<h3 class="method-sub">${esc(TIER_TITLE[tier] || tier)}</h3>
       <p class="sec-intro">${esc(TIER_NOTE[tier] || "")}</p>
       ${queryTableHTML(tier)}
-      ${tier === "hot" && canBudget && MEASURED_GET ? `<p class="q-foot">The end-to-end budget in §${secNo("budget")} uses the highest measured <code>getTransaction</code> p99.</p>` : ""}`).join("")}
+      ${tier === "hot" && canBudget && MEASURED_GET ? `<p class="q-foot">The end-to-end budget in §${secNo("budget")} uses the highest measured <code>getTransaction</code> p99${MEASURED_GET.fromProbe ? `, taken from its end-to-end probe leg at ${esc(fmtRps(MEASURED_GET.rps))}` : ""}.</p>` : ""}`).join("")}
     </section>` : "";
 
     /* ---- pacing prose ---- */

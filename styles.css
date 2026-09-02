@@ -179,6 +179,10 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; 
 
 /* ---------- figures ---------- */
 figure.fig { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin: 22px 0; padding: 18px 20px 12px; }
+/* A figure answering a DIFFERENT requirement from the one above it. The rule
+   down the left edge is the whole signal: same shape, visibly not the same
+   question. */
+figure.fig.fig-alt { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--surface)); }
 .fig-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
 .fig-title { font-weight: 650; font-size: 15px; }
 .fig-no {
