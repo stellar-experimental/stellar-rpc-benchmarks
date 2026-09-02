@@ -130,7 +130,7 @@ Three modes, least to most committal:
 |---------------|-----------------------------------------------------------------------------|
 | `--dry-run`   | Converts into a **temp** directory — never `docs/runs/` — and prints the converter output, the derived run id, the would-be commit body, the would-be branch, and the exact commands `--push-main` would run. Executes none of them. A remote bundle isn't fetched either; the fetch command is printed instead, so a dry run works offline. |
 | `--local`     | (default) Converts into `docs/runs/`, creates `run/<run_id>` off HEAD, commits the two changed files. No push. |
-| `--push-main` | Converts into `docs/runs/`, runs `make test` + `make smoke` as a push gate, commits on HEAD (which must be at `origin/main`), and pushes it to `origin main`. Prints `viewer: <url>`. Pushing to main is the deploy (`deploy-pages.yml`). |
+| `--push-main` | Converts into `docs/runs/`, runs `make test` + `make smoke` as a push gate, commits on HEAD (which must be at `origin/main`), and pushes it to `origin main`. Prints `viewer: <url>`. Pushing to main is the deploy (`deploy-pages.yml`). Concurrent ingests are safe: a push rejected because `main` moved is recovered by resetting to the new `origin/main` and redoing convert + gate + commit + push, up to `INGEST_PUSH_ATTEMPTS` (default 5) times. |
 
 `make ingest` passes `--local` on purpose: it stops at the commit, so you can read the
 diff and `make serve` the result before anything leaves the machine. Call the script

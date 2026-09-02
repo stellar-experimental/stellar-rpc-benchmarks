@@ -32,6 +32,11 @@
 #                origin/main), and `git push origin HEAD:main`. Prints a
 #                `viewer: <url>` line for the caller to surface. Pushing to
 #                main IS the deploy (deploy-pages.yml syncs docs/ to Pages).
+#                A push rejected because main moved (another ingest landed
+#                first) is recovered: reset to the new origin/main, convert +
+#                gate + commit again, push again — up to INGEST_PUSH_ATTEMPTS
+#                (default 5) times. Concurrent ingests therefore never need
+#                an outer lock.
 #
 # EXAMPLES
 #   # Inspect a remote bundle without touching anything (prints the fetch cmd):
@@ -306,7 +311,7 @@ if [ "$MODE" = "dry-run" ]; then
   echo "make test && make smoke"
   echo "git add $RUN_JSON $INDEX_JSON"
   echo "git commit -F <message>   # subject: runs: add $RUN_ID"
-  echo "git push origin HEAD:main"
+  echo "git push origin HEAD:main   # on a lost race: reset to origin/main, redo convert+gate+commit, push again"
   echo "viewer: $VIEWER_URL"
   exit 0
 fi
@@ -330,65 +335,120 @@ if [ "$MODE" = "push-main" ]; then
     || die "--push-main requires HEAD at origin/main (use a fresh clone, or git fetch && git checkout origin/main)"
 fi
 
-# Convert on the current HEAD; the mode decides where the commit lands below.
-run_convert "docs/runs"
+# ------------------------------------------------------------------ convert → gate → commit
+# One pass of the pipeline on the current HEAD. Sets COMMITTED=1 when a commit
+# was made, COMMITTED=0 when the converted run is byte-identical to what HEAD
+# already holds (nothing to push). --push-main calls this again on a fresh
+# origin/main when the push loses a race, which is why it is a function.
+COMMITTED=0
+build_run_commit() {
+  run_convert "docs/runs"
 
-# The direct push has no PR to catch a bad run, so the converter tests and the
-# viewer smoke test (which loads every committed run, this one included) gate
-# the push instead.
-if [ "$MODE" = "push-main" ]; then
-  echo "== test gate =="
-  make test
-  make smoke
-fi
-
-SUBJECT="runs: add $RUN_ID"
-BODY="$(build_body "$CONVERT_WARNINGS")"
-
-MSG_FILE="$WORK/commit-msg.txt"
-{
-  echo "$SUBJECT"
-  echo
-  echo "$BODY"
-  echo
-  echo "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-} > "$MSG_FILE"
-
-# --local stages the run on a run/<run_id> branch for a human to inspect;
-# --push-main commits where it stands (HEAD at origin/main, checked above).
-if [ "$MODE" = "local" ]; then
-  # Idempotent branch handling: reuse run/<run_id> if it already exists (e.g. a
-  # --force re-ingest), otherwise create it from the current HEAD.
-  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-    git checkout "$BRANCH"
-  else
-    git checkout -b "$BRANCH"
-  fi
-fi
-
-git add "$RUN_JSON" "$INDEX_JSON"
-if git diff --cached --quiet; then
-  echo "converted run is byte-identical to the committed one; nothing to commit."
+  # The direct push has no PR to catch a bad run, so the converter tests and the
+  # viewer smoke test (which loads every committed run, this one included) gate
+  # the push instead.
   if [ "$MODE" = "push-main" ]; then
-    echo "viewer: $VIEWER_URL"
+    echo "== test gate =="
+    make test
+    make smoke
+  fi
+
+  local subject body
+  subject="runs: add $RUN_ID"
+  body="$(build_body "$CONVERT_WARNINGS")"
+  MSG_FILE="$WORK/commit-msg.txt"
+  {
+    echo "$subject"
+    echo
+    echo "$body"
+    echo
+    echo "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+  } > "$MSG_FILE"
+
+  # --local stages the run on a run/<run_id> branch for a human to inspect;
+  # --push-main commits where it stands (HEAD at origin/main, checked above).
+  if [ "$MODE" = "local" ]; then
+    # Idempotent branch handling: reuse run/<run_id> if it already exists (e.g. a
+    # --force re-ingest), otherwise create it from the current HEAD.
+    if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+      git checkout "$BRANCH"
+    else
+      git checkout -b "$BRANCH"
+    fi
+  fi
+
+  git add "$RUN_JSON" "$INDEX_JSON"
+  if git diff --cached --quiet; then
+    echo "converted run is byte-identical to the committed one; nothing to commit."
+    COMMITTED=0
+    return 0
+  fi
+  git commit -F "$MSG_FILE"
+  COMMITTED=1
+
+  echo
+  echo "Committed:"
+  git show --stat --oneline -s HEAD
+  echo
+}
+
+build_run_commit
+
+if [ "$MODE" = "local" ]; then
+  if [ "$COMMITTED" -eq 1 ]; then
+    echo "Local mode: committed on branch $BRANCH; nothing pushed."
+    echo "Inspect with 'make serve', then push to main (from a fresh clone or"
+    echo "after rebasing onto origin/main) via --push-main, or cherry-pick."
   fi
   exit 0
 fi
-git commit -F "$MSG_FILE"
 
-echo
-echo "Committed:"
-git show --stat --oneline -s HEAD
-echo
+# ------------------------------------------------------------------ push-main: push, rebuild on a lost race, then name the live run
+# Several campaigns can finish inside the same ingest window, and each one
+# pushes its own commit to main. The manifest (index.json) is a read-modify-
+# write of the whole file, so a plain rebase of the losing commit would
+# conflict on it. The recovery is instead: reset to the new origin/main, run
+# the pipeline again (convert regenerates the manifest on top of the winner's
+# run, the gate re-checks the combined tree), commit, push. Convert is
+# deterministic on the bundle, so the retried run JSON is byte-identical to the
+# first attempt. A rejection that did NOT come with a moved origin/main is a
+# transient (network, auth) and is retried as-is.
+PUSH_ATTEMPTS="${INGEST_PUSH_ATTEMPTS:-5}"
+attempt=1
+while :; do
+  if [ "$COMMITTED" -eq 0 ]; then
+    # HEAD already holds this run (a previous attempt or another job landed it).
+    echo "viewer: $VIEWER_URL"
+    exit 0
+  fi
+  echo "== push (attempt $attempt/$PUSH_ATTEMPTS) =="
+  if git push origin HEAD:main; then
+    echo "viewer: $VIEWER_URL"
+    exit 0
+  fi
+  [ "$attempt" -lt "$PUSH_ATTEMPTS" ] \
+    || die "push to main failed $PUSH_ATTEMPTS times; the run is committed locally on $(git rev-parse --short HEAD), re-run --push-main from a fresh clone"
+  attempt=$((attempt + 1))
 
-if [ "$MODE" = "local" ]; then
-  echo "Local mode: committed on branch $BRANCH; nothing pushed."
-  echo "Inspect with 'make serve', then push to main (from a fresh clone or"
-  echo "after rebasing onto origin/main) via --push-main, or cherry-pick."
-  exit 0
-fi
+  before="$(git rev-parse origin/main)"
+  git fetch origin main --quiet
+  after="$(git rev-parse origin/main)"
+  if [ "$before" = "$after" ]; then
+    echo "push failed but origin/main did not move; retrying the push in 10s"
+    sleep 10
+    continue
+  fi
 
-# ------------------------------------------------------------------ push-main: push, then name the live run
-echo "== push =="
-git push origin HEAD:main
-echo "viewer: $VIEWER_URL"
+  echo "origin/main moved ${before:0:8} -> ${after:0:8} while this run was being built; rebuilding on the new main"
+  git reset --hard --quiet origin/main
+  if [ -f "$RUN_JSON" ] && [ "$FORCE" -ne 1 ]; then
+    # The race was with an ingest of THIS run (a re-run job, a manual ingest):
+    # the winner published it, so there is nothing left to do.
+    echo "$RUN_JSON already on main (published by the concurrent ingest); nothing to push."
+    echo "viewer: $VIEWER_URL"
+    exit 0
+  fi
+  # Stagger the rebuild so two losers do not collide on the next push as well.
+  sleep $(( (RANDOM % 20) + 5 ))
+  build_run_commit
+done
