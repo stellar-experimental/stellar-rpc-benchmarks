@@ -133,12 +133,28 @@ function queryShape(D) {
   if (Object.keys(e).some((k) => CONC_KEY.test(k))) return "closed";
   return rateKeys(e).length ? "open" : null;
 }
-/* The run's read-path latency target, and the rung a verdict table judges —
-   both read exactly the way docs/app.js reads them (checkFor / judgedRate). */
-const queryThr = (D) => ((D.checks_all || [D.checks || {}])
-  .find((c) => c && c.applies_to === "queries") || {}).threshold_ns || 500e6;
+/* The run's read-path latency target for one endpoint in one storage tier, and
+   the rung a verdict table judges — both read exactly the way docs/app.js reads
+   them (checkFor + thresholdFor / judgedRate). A run states its target either
+   per endpoint and tier (targets_ns, the SLA shape) or as one number for the
+   whole run (threshold_ns, the published generation). */
+const queryCheck = (D) => (D.checks_all || [D.checks || {}])
+  .find((c) => c && c.applies_to === "queries") || {};
+const queryThr = (D, qt, tier) => {
+  const c = queryCheck(D);
+  const byTier = c.targets_ns && c.targets_ns[qt];
+  if (byTier && byTier[tier] != null) return byTier[tier];
+  return c.threshold_ns || 500e6;
+};
+/* The two verdict families, read the way docs/app.js reads them. verdict_sla
+   covers every endpoint at its SLA rate; verdict_e2e covers getTransaction at
+   the demand-derived rate and judges the in-RPC time alone. Runs converted
+   before the split carry one verdict_1x that plays the SLA role. */
+const slaVerdict = (qout) => (qout && (qout.verdict_sla || qout.verdict_1x)) || null;
+const e2eVerdict = (qout) => (qout && qout.verdict_e2e) || null;
+const hasE2EFamily = (D) => qEntries(D).some((e) => e2eVerdict(e.qout));
 const judgedKey = (qout) => {
-  const v = qout.verdict_1x;
+  const v = slaVerdict(qout);
   if (v && v.rate && qout[v.rate]) return v.rate;
   const ks = rateKeys(qout);
   return ks.length ? ks[Math.floor((ks.length - 1) / 2)] : null;
@@ -162,6 +178,9 @@ function checkKind(kind, doc, group, data) {
   if (kind === "synthetic" && data.queries) {
     exp.sections += 1;
     exp.minFigures += queryShape(data) === "open" ? 5 : 4;
+    // A run that also carries the E2E-budget family draws its table as a
+    // figure of its own — the two requirements never share one.
+    if (hasE2EFamily(data)) exp.minFigures += 1;
     exp.minSvgs += 3;
   }
   const report = doc.getElementById("report");
@@ -199,10 +218,12 @@ function checkSyntheticQueries(doc, group, D) {
   if (!sec) return;
   const shape = queryShape(D);
   // Exact per-section counts, both generations: three charts either way, plus
-  // the table figures each shape adds.
+  // the table figures each shape adds — and one more when the run carries the
+  // E2E-budget family, which gets a table of its own rather than a column in
+  // the SLA one.
   const figs = sec.querySelectorAll("figure.fig").length;
   const svgs = sec.querySelectorAll("svg").length;
-  const wantFigs = shape === "open" ? 5 : 4;
+  const wantFigs = (shape === "open" ? 5 : 4) + (hasE2EFamily(D) ? 1 : 0);
   check(group, `queries section emits exactly ${wantFigs} figures (${shape}-loop)`, figs === wantFigs, figs + " figures");
   check(group, "queries section emits exactly 3 charts", svgs === 3, svgs + " svgs");
   const picker = sec.querySelectorAll("#profile-filter .chunk-btn").length;
@@ -271,7 +292,6 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   const tiers = Object.keys(D.queries);
   const units = D.dataset.unit_order;
   const types = qTypes(D);
-  const thr = queryThr(D);
 
   // Human endpoint names everywhere; the CSV's machine names nowhere.
   check(group, "endpoint display names rendered", types.every((t) => !ENDPOINT[t] || secTxt.includes(ENDPOINT[t])),
@@ -280,17 +300,17 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   check(group, "no raw CSV tokens in the rendered section", rawTokens.length === 0, rawTokens.slice(0, 6).join(","));
 
   // Verdict table: one row per endpoint × profile × tier, and one chip per
-  // budget the run actually judged — headline, plus getTransaction's in-RPC
-  // budget and getEvents' page budget as separate verdicts.
+  // budget the run actually judged — the headline against this endpoint and
+  // tier's own target, plus getTransaction's in-RPC budget as its own verdict.
   const tbl = doc.getElementById("query-verdict-table");
   check(group, "verdict table rendered", !!tbl, "missing");
   if (!tbl) return;
   let checks = 0, fails = 0, rows = 0, unfloored = 0;
-  const judged = [];
+  const judged = [], thresholds = [];
   for (const qt of types) for (const u of units) for (const tier of tiers) {
     const qout = ((D.queries[tier] || {})[u] || {})[qt];
     if (!qout) continue;
-    const v = qout.verdict_1x;
+    const v = slaVerdict(qout);
     const key = judgedKey(qout);
     if (!key) continue;
     rows++;
@@ -298,12 +318,17 @@ function checkOpenLoopQueries(doc, sec, group, D) {
     const cell = qout[key] || {};
     judged.push({ qt, u, tier, cell, v });
     // A row with no phase floor still gets a headline chip — the viewer judges
-    // it on the latency target alone (docs/app.js openVerdictTable), so the
-    // hand count has to judge it the same way.
+    // it on this endpoint and tier's own latency target, with no rate to meet
+    // it at (docs/app.js openVerdictTable), so the hand count judges it the
+    // same way rather than against one number for the whole run. The in-RPC
+    // chip is counted here ONLY on the published runs that fold that budget
+    // into the same verdict; where the run splits the families it is judged in
+    // the E2E-budget table instead, and this table shows it as context.
     const p99 = v && v.p99_ns != null ? v.p99_ns : (cell.p99 || {}).m;
-    for (const ok of [p99 == null ? null : (v ? v.pass : p99 <= thr),
-      v && v.in_rpc ? v.in_rpc.pass : null,
-      v && v.page_budget ? v.page_budget.pass : null]) {
+    const rowThr = v && v.threshold_ns != null ? v.threshold_ns : queryThr(D, qt, tier);
+    thresholds.push(rowThr);
+    for (const ok of [p99 == null ? null : (v ? v.pass : p99 <= rowThr),
+      v && v.in_rpc ? v.in_rpc.pass : null]) {
       if (ok === null) continue;
       checks++; if (!ok) fails++;
     }
@@ -329,10 +354,31 @@ function checkOpenLoopQueries(doc, sec, group, D) {
     check(group, "footnote states the unfloored row count",
       foot.includes(`${unfloored} of ${rows} rows carry no phase floor`), foot.slice(0, 260));
   }
-  // The three budgets are separate columns, never folded into one verdict.
+  // The in-RPC budget and the mean page stay their own columns, never folded
+  // into the headline verdict. The headline column heads no single threshold:
+  // the SLA sets one per endpoint and tier, so every row prints its own.
   const heads = [...tbl.querySelectorAll("th")].map(txt);
-  check(group, "in-RPC and mean-page budgets are their own columns",
+  check(group, "in-RPC budget and mean page are their own columns",
     heads.some((h) => /In-RPC p99/.test(h)) && heads.some((h) => /Mean page/.test(h)), heads.join(" | "));
+  // Every row prints the headline target it was judged against, in its own
+  // marked note (.q-thr) so it cannot be confused with the in-RPC one beside
+  // it. The rendered set has to be as varied as the data: as many distinct
+  // targets on the page as the run's own thresholds imply.
+  const verdictRows = [...tbl.querySelectorAll("tr")].slice(1);
+  const printed = verdictRows.map((r) => [...r.querySelectorAll(".q-thr")].map(txt));
+  check(group, `every row prints its own headline target (${verdictRows.length} rows)`,
+    printed.length > 0 && printed.every((n) => n.length === 1 && /^\s*\(≤ \S+.*\)$/.test(n[0])),
+    printed.filter((n) => n.length !== 1).length + " rows without exactly one target note");
+  const wantDistinct = new Set(thresholds).size;
+  const gotDistinct = new Set(printed.flat()).size;
+  check(group, `the page prints as many distinct targets as the run defines (${wantDistinct})`,
+    gotDistinct === wantDistinct, gotDistinct + " distinct printed");
+  // The SLA shape is the point: a run keyed by endpoint and tier must not
+  // collapse to one number on the page.
+  if (queryCheck(D).targets_ns) {
+    check(group, "a per-endpoint run prints more than one distinct target",
+      wantDistinct > 1, wantDistinct + " distinct");
+  }
 
   // Saturation at the top rung is legible: the ladder names the shortfall and
   // both the offered and served rates for the profile the picker opens on.
@@ -351,15 +397,59 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   check(group, "ladder shows the saturated rung's offered and served rates",
     sat.length === 0 || sat.every((s) => ladder.includes(fmtRps(s.target) + " rps") && ladder.includes(fmtRps(s.got) + " rps")),
     ladder.slice(0, 200));
-  // Every rung of every endpoint × tier is listed, labelled by multiplier.
-  const rungRows = judged.filter((j) => j.u === first).length;
-  check(group, "ladder table lists 1× for every endpoint × tier of the profile",
+  // Every rung of every endpoint × tier is listed, labelled by multiplier —
+  // off the floor the run names, else off the campaign ladder by position. A
+  // leg that swept MORE rungs than the ladder has (getTransaction sweeping both
+  // families with no floor to anchor them) is labelled by rate instead, so it
+  // is not counted here.
+  const ladderLen = ((D.campaign || {}).query_load || {}).ladder;
+  const rungRows = judged.filter((j) => j.u === first && (j.v
+    || (Array.isArray(ladderLen) && rateKeys(((D.queries[j.tier] || {})[j.u] || {})[j.qt]).length === ladderLen.length))).length;
+  check(group, `ladder table lists 1× for every anchored endpoint × tier (${rungRows})`,
     (ladder.match(/1×/g) || []).length >= rungRows, ladder.slice(0, 160));
 
   // Latency detail at 1×: the scheduled distribution plus the in-RPC column.
   const detail = txt(doc.querySelector("#figq4-tv"));
   check(group, "1× latency table carries p50/p90/p99/max + in-RPC p99",
     /p50/.test(detail) && /p99/.test(detail) && /In-RPC p99/.test(detail), detail.slice(0, 160));
+  // The E2E-budget probe is a SECOND requirement, measured at a different rate
+  // and judged on a different number. It must have a table of its own, and the
+  // SLA table above must not chip getTransaction's in-RPC time as if the two
+  // were one verdict.
+  const e2eTbl = doc.getElementById("query-e2e-table");
+  const wantE2E = qEntries(D).filter((e) => e2eVerdict(e.qout));
+  check(group, wantE2E.length ? "E2E-budget table rendered" : "no E2E-budget table without the family",
+    !!e2eTbl === wantE2E.length > 0, e2eTbl ? "present" : "missing");
+  if (e2eTbl) {
+    const e2eRows = [...e2eTbl.querySelectorAll("tr")].slice(1);
+    check(group, `E2E table has one row per profile × tier with a probe verdict (${wantE2E.length})`,
+      e2eRows.length === wantE2E.length, e2eRows.length + " rows");
+    const wantFails = wantE2E.filter((e) => !e2eVerdict(e.qout).in_rpc.pass).length;
+    check(group, `E2E breach chips match a hand count of the probe verdicts (${wantFails})`,
+      e2eTbl.querySelectorAll(".e2e-fail").length === wantFails,
+      e2eTbl.querySelectorAll(".e2e-fail").length + " ▲ chips");
+    check(group, "E2E table judges the in-RPC p99 and reports the scheduled one",
+      [...e2eTbl.querySelectorAll("th")].some((h) => /In-RPC p99/.test(txt(h)))
+        && e2eRows.every((r) => /not judged/.test(txt(r))),
+      [...e2eTbl.querySelectorAll("th")].map(txt).join(" | "));
+    // The families never share a row: the SLA table shows getTransaction's
+    // in-RPC time without a verdict chip beside it.
+    // "getTransactions" starts with "getTransaction", so the label is matched
+    // up to its separator rather than as a substring.
+    const slaTxhashCells = [...tbl.querySelectorAll("tr")].slice(1)
+      .filter((r) => /^getTransaction · /.test(txt(r.querySelector("td"))));
+    check(group, "the SLA table chips no in-RPC budget once the families are split",
+      slaTxhashCells.length > 0 && slaTxhashCells.every((r) => /judged as the E2E budget/.test(txt(r))),
+      slaTxhashCells.map((r) => txt(r)).join(" | ").slice(0, 200));
+    // Different requirement, different rate: the offered rates must not all be
+    // the SLA floor, or the split would be cosmetic.
+    const slaRates = new Set(wantE2E.map((e) => slaVerdict(e.qout).target_rps));
+    const probeRates = new Set(wantE2E.map((e) => e2eVerdict(e.qout).target_rps));
+    check(group, "the probe rate is read from the demand model, not the SLA floor",
+      [...probeRates].some((r) => !slaRates.has(r)),
+      `sla=[${[...slaRates].join(",")}] probe=[${[...probeRates].join(",")}]`);
+  }
+
   // Setup/event-scan table still works off `setup`.
   const setup = txt(doc.getElementById("query-setup-table"));
   check(group, "setup table names open", /open/.test(setup), setup.slice(0, 160));
@@ -521,8 +611,8 @@ function summaryQueryRows(D) {
     for (const u of D.dataset.unit_order) {
       for (const [qt, qout] of Object.entries(t[u] || {})) {
         if (qt === "setup") continue;
-        const v = (qout || {}).verdict_1x;
-        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v });
+        const v = slaVerdict(qout);
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, e2e: e2eVerdict(qout) });
       }
     }
     if (rows.length) out[tier] = rows;
@@ -611,8 +701,11 @@ function checkSummarySections(sdoc, group, D) {
       /sendTransaction/.test(tileTxt) && /ingestion/.test(tileTxt) && /getTransaction/.test(tileTxt)
       && (tileTxt.match(/allocation/g) || []).length === 3, tileTxt.slice(0, 160));
     // getTransaction is measured only when the run recorded an in-RPC p99 on a
-    // live-store getTransaction leg; otherwise its allocation stands.
-    const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.v.in_rpc);
+    // live-store getTransaction leg; otherwise its allocation stands. The
+    // number comes from the E2E-budget probe, which is the leg run for exactly
+    // this purpose; runs predating the split fold it into their one verdict.
+    const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash"
+      && (r.e2e ? r.e2e.in_rpc : r.v.in_rpc));
     const f11t = txt(sdoc.querySelector("#fig11-tv"));
     const getRow = f11t.split("getTransaction round trip")[1] || "";
     check(group, measuredGet ? "budget table: getTransaction allocated → measured" : "budget table: getTransaction stays an estimate",
@@ -689,10 +782,10 @@ function checkSummarySections(sdoc, group, D) {
     const hotCell = sdoc.querySelector("#q-table-hot tbody tr:nth-child(1) td:nth-child(2)");
     const coldCell = sdoc.querySelector("#q-table-cold tbody tr:nth-child(2) td:nth-child(2)");
     check(group, "representative hot and cold matrix values render",
-      txt(hotCell && hotCell.querySelector(".q-latency")) === "130 ms"
-        && txt(hotCell && hotCell.querySelector(".q-rate")) === "1,000 rps"
+      txt(hotCell && hotCell.querySelector(".q-latency")) === "12.0 ms"
+        && txt(hotCell && hotCell.querySelector(".q-rate")) === "300 rps"
         && txt(coldCell && coldCell.querySelector(".q-latency")) === "640 ms"
-        && txt(coldCell && coldCell.querySelector(".q-rate")) === "50 rps",
+        && txt(coldCell && coldCell.querySelector(".q-rate")) === "75 rps",
       `${txt(hotCell)} | ${txt(coldCell)}`);
   }
   const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.v.in_rpc);
@@ -717,33 +810,48 @@ function checkSummarySections(sdoc, group, D) {
 const FIXTURE_CHECKS = {
   "fixture-rps-phase3": (doc, group, D) => {
     const es = qEntries(D);
-    check(group, "every endpoint × profile × tier carries a 1× verdict",
-      es.length > 0 && es.every((e) => e.qout.verdict_1x),
-      es.filter((e) => !e.qout.verdict_1x).length + " without a verdict");
+    check(group, "every endpoint × profile × tier carries an SLA verdict",
+      es.length > 0 && es.every((e) => e.qout.verdict_sla),
+      es.filter((e) => !e.qout.verdict_sla).length + " without a verdict");
+    // The second family covers getTransaction and nothing else.
+    const probe = es.filter((e) => e.qout.verdict_e2e);
+    check(group, `only getTransaction carries an E2E-budget verdict (${probe.length})`,
+      probe.length > 0 && probe.every((e) => e.qt === "txhash"),
+      probe.map((e) => e.qt).join(","));
     check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
   },
 
   /* No phase floor: the run is paced off-phase and names no query_phase, so the
-     converter emits r-cells with no verdict_1x at all. The section must still
-     render and must judge every row on the latency target alone, saying so. */
+     converter emits r-cells with no verdict at all. The section must still
+     render and must judge every row on that endpoint and tier's own latency
+     target — never on one run-wide number — saying so. */
   "fixture-rps-unfloored": (doc, group, D) => {
     const es = qEntries(D);
     check(group, "no run phase and no 1× floor anywhere",
-      D.campaign.phase == null && es.every((e) => !e.qout.verdict_1x),
+      D.campaign.phase == null && es.every((e) => !slaVerdict(e.qout) && !e2eVerdict(e.qout)),
       "phase " + D.campaign.phase);
     const tbl = doc.getElementById("query-verdict-table");
     const rows = [...tbl.querySelectorAll("tr")].slice(1);
     check(group, "every verdict row is noted (no floor)",
       rows.length > 0 && rows.every((r) => /\(no floor\)/.test(txt(r))), rows.length + " rows");
     check(group, "no row claims a 1× floor", !rows.some((r) => /\(1× floor\)/.test(txt(r))), "floor note present");
-    // One headline chip per row, judged against the run's own query target.
-    const thr = queryThr(D);
+    // One headline chip per row, each judged against the target its own
+    // endpoint carries in its own tier — the check's targets_ns table, the same
+    // number a verdict would have stated had the run earned one.
     const want = es.filter((e) => judgedKey(e.qout)).length;
     const chips = tbl.querySelectorAll(".q-pass, .q-fail").length;
     check(group, `one latency-target chip per row, no budget chips (${want})`, chips === want, chips + " chips");
-    const over = es.filter((e) => { const k = judgedKey(e.qout); return k && e.qout[k].p99.m > thr; }).length;
-    check(group, `breach chips match the ${Math.round(thr / 1e6)} ms target hand count (${over})`,
+    const over = es.filter((e) => {
+      const k = judgedKey(e.qout);
+      return k && e.qout[k].p99.m > queryThr(D, e.qt, e.tier);
+    }).length;
+    check(group, `breach chips match the per-endpoint target hand count (${over})`,
       tbl.querySelectorAll(".q-fail").length === over, tbl.querySelectorAll(".q-fail").length + " ▲ chips");
+    // The regression this fixture exists to catch: a run with no verdicts must
+    // still show each endpoint's own target, not one fallback number.
+    const printed = new Set([...tbl.querySelectorAll(".q-thr")].map(txt));
+    check(group, "unfloored rows print more than one distinct target",
+      printed.size > 1, [...printed].join(" | "));
     // The three open-loop figures still draw, chart and table view alike.
     for (const id of ["figq2", "figq3", "figq4"]) {
       check(group, `${id} draws a chart and a table view`,

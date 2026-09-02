@@ -2,12 +2,14 @@
 // for the performance goal, and answers the one question the runner asks of it:
 // how fast should each query leg be paced?
 //
-// The floors differ per endpoint type, per dataset profile, and per phase, so
-// nothing here is hardcoded in Go — the file is loaded at campaign time and the
-// numbers it carries become the `--target-rps` ladders in the plan. Everything
-// else in the file (latency budgets, verdict inputs) belongs to the converter
-// and the viewer; this package models only the query_load section and the phase
-// block times it is indexed by.
+// Two families of floor answer that question. The SLA floors belong to the
+// endpoint alone and hold in every phase and every dataset profile; the
+// E2E-probe floors belong to getTransaction and differ per profile and per
+// phase. Nothing here is hardcoded in Go — the file is loaded at campaign time
+// and the numbers it carries become the `--target-rps` ladders in the plan.
+// Everything else in the file (latency budgets, verdict inputs) belongs to the
+// converter and the viewer; this package models only the query_load section and
+// the phase block times it is indexed by.
 package targets
 
 import (
@@ -16,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -37,20 +40,30 @@ type Phase struct {
 	BlockTimeNs int64 `json:"block_time_ns"`
 }
 
-// QueryLoad is the open-loop load model: a floor per (profile, phase, endpoint
-// type), and the ladder of multipliers every leg sweeps around that floor.
+// QueryLoad is the open-loop load model: two families of floor and the ladder
+// of multipliers every leg sweeps around them. SLA floors belong to the
+// endpoint alone; the E2E probe's floors belong to the dataset profile and the
+// phase. getTransaction carries both, so its leg sweeps both ladders.
 type QueryLoad struct {
-	Ladder   []float64          `json:"ladder"`
-	Profiles map[string]Profile `json:"profiles"`
+	Ladder   []float64 `json:"ladder"`
+	SLA      SLA       `json:"sla"`
+	E2EProbe E2EProbe  `json:"e2e_probe"`
 }
 
-// Profile is one dataset model's floors. Each array is indexed by phase minus
-// one, so entry 0 is phase 1.
-type Profile struct {
-	LedgersRPS []float64 `json:"ledgers_rps"`
-	TxpageRPS  []float64 `json:"txpage_rps"`
-	TxhashRPS  []float64 `json:"txhash_rps"`
-	EventsRPS  []float64 `json:"events_rps"`
+// SLA is the read-path requirement: one arrival rate and one p99 per endpoint,
+// the same in every phase and every profile. P99Ns is keyed by endpoint then
+// storage tier; the runner reads only the floors, the converter judges the p99.
+type SLA struct {
+	FloorsRPS map[string]float64          `json:"floors_rps"`
+	P99Ns     map[string]map[string]int64 `json:"p99_ns"`
+}
+
+// E2EProbe is getTransaction's second leg: the demand-derived floors of work
+// item 856, per profile, each array indexed by phase minus one so entry 0 is
+// phase 1. It answers for its in-RPC p99 alone.
+type E2EProbe struct {
+	InRPCP99Ns int64                `json:"in_rpc_p99_ns"`
+	FloorsRPS  map[string][]float64 `json:"floors_rps"`
 }
 
 // Load reads and validates the targets file at path. The validation is
@@ -68,23 +81,33 @@ func Load(path string) (*Targets, error) {
 	if len(t.Phases) == 0 {
 		return nil, fmt.Errorf("targets: %s: phases is empty", path)
 	}
-	if len(t.QueryLoad.Profiles) == 0 {
-		return nil, fmt.Errorf("targets: %s: query_load.profiles is empty — this file predates the paced-RPS query model", path)
+	if len(t.QueryLoad.E2EProbe.FloorsRPS) == 0 {
+		return nil, fmt.Errorf("targets: %s: query_load.e2e_probe.floors_rps is empty — this file predates the two-family query model", path)
 	}
 	if len(t.QueryLoad.Ladder) == 0 {
 		return nil, fmt.Errorf("targets: %s: query_load.ladder must list at least one multiplier", path)
 	}
-	for _, name := range sortedKeys(t.QueryLoad.Profiles) {
-		p := t.QueryLoad.Profiles[name]
-		for _, qtype := range QueryTypes {
-			rps, err := p.rates(qtype)
-			if err != nil {
-				return nil, fmt.Errorf("targets: %s: %w", path, err)
-			}
-			if len(rps) != len(t.Phases) {
-				return nil, fmt.Errorf("targets: %s: query_load.profiles.%s.%s_rps has %d entries, want one per phase (%d)",
-					path, name, qtype, len(rps), len(t.Phases))
-			}
+	// The SLA family names every endpoint, twice: once for the rate it is
+	// driven at and once for the p99 it answers for. A missing entry would
+	// otherwise surface hours later as a leg paced at zero.
+	for _, qtype := range QueryTypes {
+		if _, ok := t.QueryLoad.SLA.FloorsRPS[qtype]; !ok {
+			return nil, fmt.Errorf("targets: %s: query_load.sla.floors_rps has no %s floor, want one per endpoint (%s)",
+				path, qtype, strings.Join(QueryTypes, ", "))
+		}
+		if len(t.QueryLoad.SLA.P99Ns[qtype]) == 0 {
+			return nil, fmt.Errorf("targets: %s: query_load.sla.p99_ns has no %s entry, want one per endpoint (%s)",
+				path, qtype, strings.Join(QueryTypes, ", "))
+		}
+	}
+	if extra := extraKeys(t.QueryLoad.SLA.FloorsRPS); extra != "" {
+		return nil, fmt.Errorf("targets: %s: query_load.sla.floors_rps names %s, which is not a query type (%s)",
+			path, extra, strings.Join(QueryTypes, ", "))
+	}
+	for _, name := range sortedKeys(t.QueryLoad.E2EProbe.FloorsRPS) {
+		if rps := t.QueryLoad.E2EProbe.FloorsRPS[name]; len(rps) != len(t.Phases) {
+			return nil, fmt.Errorf("targets: %s: query_load.e2e_probe.floors_rps.%s has %d entries, want one per phase (%d)",
+				path, name, len(rps), len(t.Phases))
 		}
 	}
 	return &t, nil
@@ -137,50 +160,64 @@ func (t *Targets) MatchPhase(closeIntervalNs int64) int {
 // plan's leg order is its own; this list is the vocabulary of the file.
 var QueryTypes = []string{"ledgers", "txpage", "txhash", "events"}
 
-// Rates is the RPS ladder one query leg targets: the (profile, phase, qtype)
-// floor multiplied by each ladder step, in ladder order.
+// Rates is the RPS ladder one query leg targets, ascending.
+//
+// Three of the four endpoints answer to the SLA family alone, so their ladder
+// is the endpoint's SLA floor times each ladder step — the same list in every
+// phase and every profile. getTransaction answers to both families and runs as
+// ONE leg: its ladder is the union of the SLA ladder and the (profile, phase)
+// E2E-probe ladder, deduplicated. Where the two floors coincide the shared cell
+// carries both verdicts, which is why the union is deduplicated rather than
+// concatenated.
 func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, error) {
-	profile, ok := t.QueryLoad.Profiles[profileKey]
+	if !slices.Contains(QueryTypes, qtype) {
+		return nil, fmt.Errorf("targets: unknown query type '%s' (known types: %s)", qtype, strings.Join(QueryTypes, ", "))
+	}
+	// Every leg resolves the profile and the phase, even the three that do not
+	// pace by them: a run that names neither is a run nobody can judge.
+	e2eFloors, ok := t.QueryLoad.E2EProbe.FloorsRPS[profileKey]
 	if !ok {
 		return nil, fmt.Errorf("targets: no query_load profile '%s' (known profiles: %s)",
-			profileKey, strings.Join(sortedKeys(t.QueryLoad.Profiles), ", "))
+			profileKey, strings.Join(sortedKeys(t.QueryLoad.E2EProbe.FloorsRPS), ", "))
 	}
-	floors, err := profile.rates(qtype)
-	if err != nil {
-		return nil, err
+	if phase < 1 || phase > len(e2eFloors) {
+		return nil, fmt.Errorf("targets: phase %d has no floors (query_load carries phases 1-%d)", phase, len(e2eFloors))
 	}
-	if phase < 1 || phase > len(floors) {
-		return nil, fmt.Errorf("targets: phase %d has no floors (query_load carries phases 1-%d)", phase, len(floors))
-	}
-	floor := floors[phase-1]
-	rates := make([]float64, len(t.QueryLoad.Ladder))
-	for i, step := range t.QueryLoad.Ladder {
-		rates[i] = floor * step
+	rates := t.ladderAround(t.QueryLoad.SLA.FloorsRPS[qtype])
+	if qtype == "txhash" {
+		rates = append(rates, t.ladderAround(e2eFloors[phase-1])...)
+		slices.Sort(rates)
+		rates = slices.Compact(rates)
 	}
 	return rates, nil
 }
 
-// rates picks the floor array one endpoint type is paced from.
-func (p Profile) rates(qtype string) ([]float64, error) {
-	switch qtype {
-	case "ledgers":
-		return p.LedgersRPS, nil
-	case "txpage":
-		return p.TxpageRPS, nil
-	case "txhash":
-		return p.TxhashRPS, nil
-	case "events":
-		return p.EventsRPS, nil
+// ladderAround is one floor times every ladder step, in ladder order.
+func (t *Targets) ladderAround(floor float64) []float64 {
+	rates := make([]float64, len(t.QueryLoad.Ladder))
+	for i, step := range t.QueryLoad.Ladder {
+		rates[i] = floor * step
 	}
-	return nil, fmt.Errorf("targets: unknown query type '%s' (known types: %s)", qtype, strings.Join(QueryTypes, ", "))
+	return rates
 }
 
 // sortedKeys keeps every message that lists profiles stable.
-func sortedKeys(profiles map[string]Profile) []string {
-	names := make([]string, 0, len(profiles))
-	for name := range profiles {
+func sortedKeys[V any](m map[string]V) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+// extraKeys names the keys of m that are not query types, or "" when none are.
+func extraKeys[V any](m map[string]V) string {
+	var extra []string
+	for _, name := range sortedKeys(m) {
+		if !slices.Contains(QueryTypes, name) {
+			extra = append(extra, "'"+name+"'")
+		}
+	}
+	return strings.Join(extra, ", ")
 }

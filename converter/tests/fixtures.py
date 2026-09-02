@@ -260,19 +260,23 @@ def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
 # leg (<qtype>_r<rate>{,_millirps,_lag,_shed}) beside the usual setup rows.
 # Rates are spelled the way Go's strconv.FormatFloat(rps,'f',-1,64) spells them.
 #
-# The default ladder is the sac profile's phase-3 floors x 0.5/1/2, so the
-# MIDDLE rung of every type is the 1x cell a phase-3 run is judged at.
+# The default ladder is a phase-3 sac run: every endpoint sweeps its SLA floor
+# x 0.5/1/2, so the MIDDLE rung is the cell the SLA verdict lands on. txhash
+# carries BOTH families in one leg, so its ladder is the SLA one (150/300/600)
+# unioned with sac's phase-3 demand ladder (500/1000/2000): the SLA verdict
+# lands on r300 and the E2E-budget verdict on r1000.
 RPS_DATASET = "sac-6000"
 RPS_RATES = {
-    "ledgers": ["0.835", "1.67", "3.34"],
-    "txpage":  ["25", "50", "100"],
-    "txhash":  ["500", "1000", "2000"],
-    "events":  ["5", "10", "20"],
+    "ledgers": ["12.5", "25", "50"],
+    "txpage":  ["37.5", "75", "150"],
+    "txhash":  ["150", "300", "500", "600", "1000", "2000"],
+    "events":  ["50", "100", "200"],
 }
 RPS_ANSWERED = 100                 # answered requests per leg
-RPS_SCHED_P99_NS = 200_000_000     # scheduled p99, inside the 500 ms read SLA
+RPS_SCHED_P99_NS = 15_000_000      # scheduled p99, inside every endpoint's SLA
+                                   # (the tightest is getTransaction hot, 20 ms)
 RPS_SERVICE_P99_NS = 5_000_000     # service p99, inside the 10 ms in-RPC budget
-RPS_MEAN_PAGE_NS = 80_000_000      # getEvents mean page, inside phase-3 sac's 100 ms
+RPS_MEAN_PAGE_NS = 80_000_000      # getEvents mean page — reported, not judged
 RPS_SHED = 7                       # dropped at the in-flight cap (top rung only)
 
 

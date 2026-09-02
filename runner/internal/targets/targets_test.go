@@ -29,9 +29,26 @@ func TestLoadRepoTargets(t *testing.T) {
 		t.Errorf("ladder = %v, want [0.5 1 2]", tg.QueryLoad.Ladder)
 	}
 	for _, name := range []string{"sac", "custom_token", "soroswap"} {
-		if _, ok := tg.QueryLoad.Profiles[name]; !ok {
-			t.Errorf("query_load has no profile %q", name)
+		if _, ok := tg.QueryLoad.E2EProbe.FloorsRPS[name]; !ok {
+			t.Errorf("query_load.e2e_probe has no profile %q", name)
 		}
+	}
+	// The SLA family is stored once, not per profile: one floor and one p99
+	// pair per endpoint.
+	for qtype, want := range map[string]float64{
+		"txhash": 300, "txpage": 75, "events": 100, "ledgers": 25,
+	} {
+		if got := tg.QueryLoad.SLA.FloorsRPS[qtype]; got != want {
+			t.Errorf("sla floor for %s = %v, want %v", qtype, got, want)
+		}
+		for _, tier := range []string{"hot", "cold"} {
+			if tg.QueryLoad.SLA.P99Ns[qtype][tier] == 0 {
+				t.Errorf("sla p99 for %s/%s is missing", qtype, tier)
+			}
+		}
+	}
+	if got := tg.QueryLoad.E2EProbe.InRPCP99Ns; got != 10000000 {
+		t.Errorf("e2e_probe in_rpc_p99_ns = %d, want 10000000", got)
 	}
 	if len(tg.Phases) != 3 {
 		t.Fatalf("phases = %d, want 3", len(tg.Phases))
@@ -51,14 +68,25 @@ func TestRates(t *testing.T) {
 		qtype   string
 		want    []float64
 	}{
-		{"sac", 1, "txhash", []float64{150, 300, 600}},
-		{"sac", 3, "txhash", []float64{500, 1000, 2000}},
-		{"sac", 3, "ledgers", []float64{0.835, 1.67, 3.34}},
-		{"sac", 2, "txpage", []float64{12.5, 25, 50}},
-		{"sac", 1, "events", []float64{1.5, 3, 6}},
-		{"custom_token", 2, "txhash", []float64{200, 400, 800}},
-		{"soroswap", 1, "txpage", []float64{1.875, 3.75, 7.5}},
-		{"soroswap", 3, "events", []float64{7.5, 15, 30}},
+		// getTransaction sweeps ONE leg carrying both ladders: the SLA one
+		// (150, 300, 600 in every phase and profile) unioned with the
+		// demand-derived E2E-probe one, deduplicated and sorted.
+		{"sac", 1, "txhash", []float64{150, 300, 600}},        // e2e floor 300 == the SLA floor
+		{"sac", 2, "txhash", []float64{150, 250, 300, 500, 600, 1000}},
+		{"sac", 3, "txhash", []float64{150, 300, 500, 600, 1000, 2000}},
+		{"custom_token", 1, "txhash", []float64{100, 150, 200, 300, 400, 600}},
+		{"custom_token", 2, "txhash", []float64{150, 200, 300, 400, 600, 800}},
+		{"custom_token", 3, "txhash", []float64{150, 300, 600, 1200}},
+		{"soroswap", 1, "txhash", []float64{37.5, 75, 150, 300, 600}},
+		{"soroswap", 3, "txhash", []float64{150, 300, 600}},   // e2e floor 300 again
+		// The other three answer to the SLA family alone: the mix share of
+		// 500 rps, the same ladder in every phase and every profile.
+		{"sac", 3, "ledgers", []float64{12.5, 25, 50}},
+		{"sac", 2, "txpage", []float64{37.5, 75, 150}},
+		{"sac", 1, "events", []float64{50, 100, 200}},
+		{"soroswap", 1, "txpage", []float64{37.5, 75, 150}},
+		{"soroswap", 3, "events", []float64{50, 100, 200}},
+		{"custom_token", 2, "ledgers", []float64{12.5, 25, 50}},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%s-phase%d-%s", tc.profile, tc.phase, tc.qtype), func(t *testing.T) {
@@ -151,17 +179,22 @@ func fixture(t *testing.T, body string) string {
 }
 
 func TestLoadRejects(t *testing.T) {
-	// A two-phase file with one whole profile, edited per case below.
+	// A two-phase file with both families whole, edited per case below.
 	const good = `{
   "query_load": {
     "ladder": [1, 2],
-    "profiles": {
-      "sac": {
-        "ledgers_rps": [1, 2],
-        "txpage_rps": [10, 20],
-        "txhash_rps": [100, 200],
-        "events_rps": [3, 6]
+    "sla": {
+      "floors_rps": {"ledgers": 1, "txpage": 10, "txhash": 100, "events": 3},
+      "p99_ns": {
+        "ledgers": {"hot": 1, "cold": 2},
+        "txpage": {"hot": 1, "cold": 2},
+        "txhash": {"hot": 1, "cold": 2},
+        "events": {"hot": 1, "cold": 2}
       }
+    },
+    "e2e_probe": {
+      "in_rpc_p99_ns": 10000000,
+      "floors_rps": {"sac": [100, 200]}
     }
   },
   "phases": [{"phase": 1, "block_time_ns": 2000000000}, {"phase": 2, "block_time_ns": 1000000000}]
@@ -179,7 +212,7 @@ func TestLoadRejects(t *testing.T) {
 		{
 			name: "no query_load",
 			body: `{"phases": [{"phase": 1, "block_time_ns": 2000000000}]}`,
-			want: []string{"query_load.profiles is empty", "paced-RPS"},
+			want: []string{"query_load.e2e_probe.floors_rps is empty", "two-family"},
 		},
 		{
 			name: "no phases",
@@ -192,14 +225,24 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{"query_load.ladder must list at least one multiplier"},
 		},
 		{
-			name: "short floor array",
-			body: strings.Replace(good, `"txhash_rps": [100, 200]`, `"txhash_rps": [100]`, 1),
-			want: []string{"query_load.profiles.sac.txhash_rps has 1 entries", "one per phase (2)"},
+			name: "short e2e floor array",
+			body: strings.Replace(good, `"floors_rps": {"sac": [100, 200]}`, `"floors_rps": {"sac": [100]}`, 1),
+			want: []string{"query_load.e2e_probe.floors_rps.sac has 1 entries", "one per phase (2)"},
 		},
 		{
-			name: "missing floor array",
-			body: strings.Replace(good, `"events_rps": [3, 6]`, `"events_rps": []`, 1),
-			want: []string{"query_load.profiles.sac.events_rps has 0 entries"},
+			name: "missing sla floor",
+			body: strings.Replace(good, `"events": 3`, `"eventz": 3`, 1),
+			want: []string{"query_load.sla.floors_rps has no events floor", "one per endpoint"},
+		},
+		{
+			name: "sla floor that is not an endpoint",
+			body: strings.Replace(good, `"events": 3}`, `"events": 3, "blocks": 9}`, 1),
+			want: []string{"query_load.sla.floors_rps names 'blocks'", "not a query type"},
+		},
+		{
+			name: "missing sla p99",
+			body: strings.Replace(good, `"txpage": {"hot": 1, "cold": 2},`, ``, 1),
+			want: []string{"query_load.sla.p99_ns has no txpage entry", "one per endpoint"},
 		},
 	}
 	for _, tc := range cases {

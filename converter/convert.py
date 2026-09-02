@@ -424,21 +424,24 @@ def ingest_p99_target(block_time_ns, e2e_budget_ns, block_count=2):
     return e2e_budget_ns - block_count * block_time_ns - FIXED_E2E_NS
 
 
-# Read-path design target: the p99 no query cell may exceed. One number for
-# every phase, so it lives beside the phase list rather than inside it.
-QUERY_P99_TARGET_NS = _TARGETS["query_p99_target_ns"]
-
-# Open-loop query load model: per endpoint x profile x phase RPS floors, the
-# 0.5/1/2 ladder they are paced at, and the two budgets that are judged beside
-# the headline p99 (getTransaction's in-RPC p99, getEvents' mean page latency).
+# Open-loop query load model: the two families of requirement the read path
+# answers to, and the 0.5/1/2 ladder every leg is paced on.
 # Copied verbatim into campaign runs that carry RPS query cells, the way
 # PHASE_TARGETS is, so the viewer reads the floors as data.
 QUERY_LOAD = _TARGETS["query_load"]
 
-# targets.json keys its floors by endpoint; the bundle names its legs by query
-# type. One mapping, in one place.
-_QTYPE_RPS_KEY = {"ledgers": "ledgers_rps", "txpage": "txpage_rps",
-                  "txhash": "txhash_rps", "events": "events_rps"}
+# Family 1 — the SLA: one arrival rate per endpoint (its share of the 500 rps
+# Standard watermark) and one p99 per endpoint and storage tier (hot = the SLA's
+# Live window, cold = Recent). Neither depends on the phase or the profile.
+SLA_FLOORS_RPS = QUERY_LOAD["sla"]["floors_rps"]
+SLA_P99_NS = QUERY_LOAD["sla"]["p99_ns"]
+
+# Family 2 — the E2E-budget probe: getTransaction alone, at the demand-derived
+# floors of work item 856 (per profile, indexed by phase), answering only for
+# its in-RPC p99, which is its slice of the end-to-end lifecycle budget. The
+# scheduled p99 of that cell is reported and never judged.
+E2E_IN_RPC_P99_NS = QUERY_LOAD["e2e_probe"]["in_rpc_p99_ns"]
+E2E_FLOORS_RPS = QUERY_LOAD["e2e_probe"]["floors_rps"]
 
 PHASE_TARGETS = _TARGETS["phases"]
 
@@ -843,8 +846,8 @@ def query_profile(unit):
 def rps_cells(qout):
     """The rate cells of one qtype entry, keyed r<rate>.
 
-    The key match carries the weight: verdict_1x is a sibling of the cells that
-    also carries target_rps, so matching on that field alone would count the
+    The key match carries the weight: each verdict is a sibling of the cells
+    that also carries target_rps, so matching on that field alone would count a
     verdict as a cell on any second pass over converted data.
     """
     return {k: v for k, v in qout.items()
@@ -857,66 +860,97 @@ def has_rps_cells(queries):
                for qt, qout in entry.items() if qt != "setup")
 
 
-def _verdict_1x(cell, rate_key, floor, qt, idx, prof):
-    """Pass/fail at the 1x cell. The headline is the SCHEDULED p99 against the
-    read-path SLA; getTransaction's in-RPC budget and getEvents' mean-page
-    budget are separate columns, never folded into it."""
-    p99 = cell["p99"]["m"]
+def _cell_at(cells, floor):
+    """The rate cell paced at `floor`, or None. Matched by VALUE, so the rate
+    token's spelling never has to be guessed."""
+    return next((k for k, c in cells.items()
+                 if abs(c["target_rps"] - floor) <= 1e-9), None)
+
+
+def _verdict_head(cell, rate_key, floor):
+    """The fields both families state about the cell they judge."""
     v = {"rate": rate_key, "target_rps": float(floor)}
     if "achieved_rps" in cell:
         v["achieved_rps_m"] = cell["achieved_rps"]["m"]
-    v["p99_ns"] = p99
-    v["threshold_ns"] = QUERY_P99_TARGET_NS
-    v["pass"] = p99 <= QUERY_P99_TARGET_NS
-    if qt == "txhash" and "service" in cell:
-        budget = QUERY_LOAD["get_tx_in_rpc_p99_ns"]
-        in_rpc = cell["service"]["p99"]["m"]
-        v["in_rpc"] = {"p99_ns": in_rpc, "threshold_ns": budget,
-                       "pass": in_rpc <= budget}
-    if qt == "events" and "mean_page_ns" in cell:
-        budgets = prof.get("events_page_budget_ns") or []
-        if idx < len(budgets):
-            mean = cell["mean_page_ns"]["m"]
-            v["page_budget"] = {"mean_ns": mean, "budget_ns": budgets[idx],
-                                "pass": mean <= budgets[idx]}
+    v["p99_ns"] = cell["p99"]["m"]
+    return v
+
+
+def _verdict_sla(cell, rate_key, floor, qt, tier):
+    """The SLA verdict: the SCHEDULED p99 at this endpoint's SLA rate, against
+    the p99 that endpoint carries in this storage tier. Every endpoint has one,
+    getTransaction included."""
+    v = _verdict_head(cell, rate_key, floor)
+    threshold = SLA_P99_NS[qt][tier]
+    v["threshold_ns"] = threshold
+    v["pass"] = v["p99_ns"] <= threshold
+    return v
+
+
+def _verdict_e2e(cell, rate_key, floor):
+    """The E2E-budget verdict: getTransaction's time INSIDE the RPC at the
+    demand-derived rate, against its slice of the end-to-end budget. The
+    scheduled p99 rides along as context and is never judged — the arrival rate
+    this cell is paced at is a demand estimate, not an SLA the tail answers to."""
+    v = _verdict_head(cell, rate_key, floor)
+    in_rpc = cell["service"]["p99"]["m"]
+    v["in_rpc"] = {"p99_ns": in_rpc, "threshold_ns": E2E_IN_RPC_P99_NS,
+                   "pass": in_rpc <= E2E_IN_RPC_P99_NS}
+    v["pass"] = v["in_rpc"]["pass"]
     return v
 
 
 def attach_query_verdicts(queries, phase):
-    """Attach each qtype's verdict_1x beside its rate cells, in place.
+    """Attach each qtype's verdicts beside its rate cells, in place.
 
-    The 1x rate IS the floor the load model sets for this profile and phase;
-    the ladder's 0.5x/2x cells are context around it. A cell is matched to the
-    floor by value, so the rate token's spelling never has to be guessed.
+    Two families, never folded together. verdict_sla sits on every endpoint's
+    cell at that endpoint's SLA floor. verdict_e2e sits on getTransaction's cell
+    at the demand-derived floor for this profile and phase. Where the two floors
+    coincide the one cell carries both.
     """
     idx = phase["phase"] - 1
     for tier, units in queries.items():
         for unit, entry in units.items():
             profile = query_profile(unit)
-            prof = QUERY_LOAD["profiles"].get(profile)
+            e2e_floors = E2E_FLOORS_RPS.get(profile)
             for qt, qout in entry.items():
                 if qt == "setup":
                     continue
                 cells = rps_cells(qout)
                 if not cells:
                     continue
-                if prof is None:
-                    warn(f"query-{tier}-{unit}: no query_load profile {profile!r} "
-                         f"in targets.json; no 1x verdict")
-                    break
-                floors = prof.get(_QTYPE_RPS_KEY.get(qt, "")) or []
-                if idx >= len(floors):
-                    warn(f"query-{tier}-{unit} {qt}: no phase-{phase['phase']} RPS "
-                         f"floor in targets.json; no 1x verdict")
+                # --- the SLA family: one floor and one p99 per endpoint ---
+                floor = SLA_FLOORS_RPS.get(qt)
+                if floor is None or tier not in SLA_P99_NS.get(qt, {}):
+                    warn(f"query-{tier}-{unit} {qt}: no SLA floor or p99 in "
+                         f"targets.json; no SLA verdict")
+                elif (hit := _cell_at(cells, floor)) is None:
+                    warn(f"query-{tier}-{unit} {qt}: no cell at the SLA floor "
+                         f"of {floor} rps; no SLA verdict")
+                else:
+                    qout["verdict_sla"] = _verdict_sla(cells[hit], hit, floor, qt, tier)
+                # --- the E2E-budget probe: getTransaction alone ---
+                if qt != "txhash":
                     continue
-                floor = floors[idx]
-                hit = next((k for k, c in cells.items()
-                            if abs(c["target_rps"] - floor) <= 1e-9), None)
+                if e2e_floors is None:
+                    warn(f"query-{tier}-{unit}: no query_load profile {profile!r} "
+                         f"in targets.json; no E2E-budget verdict")
+                    continue
+                if idx >= len(e2e_floors):
+                    warn(f"query-{tier}-{unit} {qt}: no phase-{phase['phase']} "
+                         f"E2E-probe floor in targets.json; no E2E-budget verdict")
+                    continue
+                e2e_floor = e2e_floors[idx]
+                hit = _cell_at(cells, e2e_floor)
                 if hit is None:
                     warn(f"query-{tier}-{unit} {qt}: no cell at the phase-"
-                         f"{phase['phase']} floor of {floor} rps; no 1x verdict")
-                    continue
-                qout["verdict_1x"] = _verdict_1x(cells[hit], hit, floor, qt, idx, prof)
+                         f"{phase['phase']} E2E-probe floor of {e2e_floor} rps; "
+                         f"no E2E-budget verdict")
+                elif "service" not in cells[hit]:
+                    warn(f"query-{tier}-{unit} {qt}: no service row at the "
+                         f"E2E-probe floor of {e2e_floor} rps; no E2E-budget verdict")
+                else:
+                    qout["verdict_e2e"] = _verdict_e2e(cells[hit], hit, e2e_floor)
 
 
 def build_golden(results_dir, unit):
@@ -1206,9 +1240,11 @@ def convert(args):
         if goal_phase is not None:
             campaign["phase"] = goal_phase["phase"]
         campaign["phase_targets"] = PHASE_TARGETS
-        # RPS query cells are judged against the load-model floors, which are
-        # per phase: embed the table (as phase_targets is) and, when the run
-        # has a goal phase, attach each qtype's verdict at its 1x cell.
+        # RPS query cells are judged against the load-model floors: embed the
+        # table (as phase_targets is) and, when the run has a goal phase, attach
+        # each qtype's verdicts at the cells those floors name. The SLA floors
+        # do not depend on the phase, but the E2E probe's do, so a run still
+        # needs a goal phase before either family can be judged.
         if has_rps_cells(queries):
             campaign["query_load"] = QUERY_LOAD
             if goal_phase is not None:
@@ -1255,9 +1291,20 @@ def convert(args):
     # two answer different questions about different sections. `checks` carries
     # the first for readers that predate the list; `checks_all` carries them all.
     checks = []
-    query_check = {"kind": "query_p99_threshold", "threshold_ns": QUERY_P99_TARGET_NS,
-                   "label": f"query p99 ≤ {QUERY_P99_TARGET_NS // 1_000_000} ms",
-                   "applies_to": "queries"}
+    # The read path answers to two requirements, so it earns two checks. The
+    # SLA one carries the whole target table rather than a single threshold_ns:
+    # every cell already states the number it was judged against. The probe one
+    # carries the single in-RPC budget, which is the same for every profile,
+    # phase and tier. The legacy query_p99_threshold kind is read-side only now.
+    query_checks = [
+        {"kind": "query_sla", "targets_ns": SLA_P99_NS, "floors_rps": SLA_FLOORS_RPS,
+         "label": "query p99 ≤ the per-endpoint SLA at the SLA rate",
+         "applies_to": "queries"},
+        {"kind": "query_e2e_probe", "threshold_ns": E2E_IN_RPC_P99_NS,
+         "label": "getTransaction in-RPC p99 ≤ "
+                  f"{E2E_IN_RPC_P99_NS // 1_000_000} ms at the demand-derived rate",
+         "applies_to": "queries"},
+    ]
     if layout == "campaign":
         # The keep-up check derives from the run's own pace: a matched phase
         # names it, any other pace is judged as itself, and an unpaced
@@ -1269,14 +1316,14 @@ def convert(args):
             checks.append({"kind": "block_keepup", "interval_ns": close_interval_ns,
                            "label": label, "applies_to": "ingest_hot"})
         if queries:
-            checks.append(query_check)
+            checks.extend(query_checks)
     elif args.dataset_kind == "synthetic":
         checks.append({"kind": "block_keepup", "interval_ns": 600000000,
                        "label": "600 ms block model", "applies_to": "ingest_hot"})
         if queries:
-            checks.append(query_check)
+            checks.extend(query_checks)
     elif queries:
-        checks.append(query_check)
+        checks.extend(query_checks)
 
     if checks:
         data["checks"] = checks[0]
