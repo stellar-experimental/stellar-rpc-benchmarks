@@ -32,6 +32,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -121,11 +122,12 @@ def ladder(profile, qt, phase):
 
 
 def load_level(qt, tok):
-    """Which of the three latency levels a rate sits at, read off its distance
-    from that endpoint's SLA floor. getTransaction's demand rungs run far above
-    that floor, so they land on the heavy level and pay the heavy latency."""
+    """Which of the three latency levels a rate sits at: the ladder rung nearest
+    its multiple of that endpoint's SLA floor, measured in log space because the
+    ladder is geometric."""
     ratio = float(tok) / C.SLA_FLOORS_RPS[qt]
-    return 0 if ratio <= 0.75 else 1 if ratio <= 1.5 else 2
+    steps = C.QUERY_LOAD["ladder"]
+    return min(range(len(steps)), key=lambda i: abs(math.log(ratio / steps[i])))
 
 
 def cell_spec(tier, profile, qt, tok, top=False):
@@ -256,11 +258,8 @@ def build_bundle(root, spec):
 
 
 def rate_cells(qout):
-    """The r<rate> cells of one qtype entry. The verdicts are siblings of theirs
-    that also carry a target_rps, so they are named out rather than sniffed."""
-    return {k: v for k, v in qout.items()
-            if not k.startswith("verdict_") and isinstance(v, dict)
-            and "target_rps" in v}
+    """The r<rate> cells of one qtype entry — the converter's own selector."""
+    return C.rps_cells(qout)
 
 
 def qtype_entries(D):

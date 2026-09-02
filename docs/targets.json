@@ -29,17 +29,13 @@
     },
     "derivation": {
       "full_record": "docs/sla-derivation.md",
-      "source": "team RPC SLA doc, sections 3.3, 3.4 and 4.1",
       "derived": "2026-09-01",
       "aggregate_rps": 500,
       "mix": {"txhash": 0.6, "events": 0.2, "txpage": 0.15, "ledgers": 0.05},
       "sla_tiers_rps": {"light": 250, "standard": 500, "heavy": 1000},
-      "tier_windows": {"hot": "Live", "cold": "Recent (frozen-NVMe)"},
-      "out_of_scope": "Historical (frozen-EBS): the benchmark boxes carry no EBS tier, so no leg measures it",
       "txpage_page_limit": 200,
       "events_page_limit": 10,
-      "ledgers_span": 10,
-      "e2e_probe_floors": "demand-derived values from work item 856 — getTransaction is the E2E-budget probe"
+      "ledgers_span": 10
     }
   },
   "phases": [

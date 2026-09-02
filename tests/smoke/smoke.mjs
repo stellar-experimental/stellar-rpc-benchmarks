@@ -135,11 +135,14 @@ function queryShape(D) {
 }
 /* The run's read-path latency target for one endpoint in one storage tier, and
    the rung a verdict table judges — both read exactly the way docs/app.js reads
-   them (checkFor + thresholdFor / judgedRate). A run states its target either
+   them (queryCheck + thresholdFor / judgedRate). A run states its target either
    per endpoint and tier (targets_ns, the SLA shape) or as one number for the
    whole run (threshold_ns, the published generation). */
-const queryCheck = (D) => (D.checks_all || [D.checks || {}])
-  .find((c) => c && c.applies_to === "queries") || {};
+const allChecks = (D) => D.checks_all || [D.checks || {}];
+// Matched on kind first: two checks share applies_to "queries" once the
+// families are split. The applies_to fallback is the legacy single check.
+const queryCheck = (D) => allChecks(D).find((c) => c && c.kind === "query_sla")
+  || allChecks(D).find((c) => c && c.applies_to === "queries") || {};
 const queryThr = (D, qt, tier) => {
   const c = queryCheck(D);
   const byTier = c.targets_ns && c.targets_ns[qt];
@@ -152,7 +155,8 @@ const queryThr = (D, qt, tier) => {
    before the split carry one verdict_1x that plays the SLA role. */
 const slaVerdict = (qout) => (qout && (qout.verdict_sla || qout.verdict_1x)) || null;
 const e2eVerdict = (qout) => (qout && qout.verdict_e2e) || null;
-const hasE2EFamily = (D) => qEntries(D).some((e) => e2eVerdict(e.qout));
+const e2eEntries = (D) => qEntries(D).filter((e) => e2eVerdict(e.qout));
+const hasE2EFamily = (D) => e2eEntries(D).length > 0;
 const judgedKey = (qout) => {
   const v = slaVerdict(qout);
   if (v && v.rate && qout[v.rate]) return v.rate;
@@ -316,7 +320,7 @@ function checkOpenLoopQueries(doc, sec, group, D) {
     rows++;
     if (!v) unfloored++;
     const cell = qout[key] || {};
-    judged.push({ qt, u, tier, cell, v });
+    judged.push({ qt, u, tier, qout, cell, v });
     // A row with no phase floor still gets a headline chip — the viewer judges
     // it on this endpoint and tier's own latency target, with no rate to meet
     // it at (docs/app.js openVerdictTable), so the hand count judges it the
@@ -402,9 +406,9 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   // leg that swept MORE rungs than the ladder has (getTransaction sweeping both
   // families with no floor to anchor them) is labelled by rate instead, so it
   // is not counted here.
-  const ladderLen = ((D.campaign || {}).query_load || {}).ladder;
-  const rungRows = judged.filter((j) => j.u === first && (j.v
-    || (Array.isArray(ladderLen) && rateKeys(((D.queries[j.tier] || {})[j.u] || {})[j.qt]).length === ladderLen.length))).length;
+  const ladderSteps = ((D.campaign || {}).query_load || {}).ladder;
+  const anchored = (j) => j.v || (Array.isArray(ladderSteps) && rateKeys(j.qout).length === ladderSteps.length);
+  const rungRows = judged.filter((j) => j.u === first && anchored(j)).length;
   check(group, `ladder table lists 1× for every anchored endpoint × tier (${rungRows})`,
     (ladder.match(/1×/g) || []).length >= rungRows, ladder.slice(0, 160));
 
@@ -417,7 +421,7 @@ function checkOpenLoopQueries(doc, sec, group, D) {
   // SLA table above must not chip getTransaction's in-RPC time as if the two
   // were one verdict.
   const e2eTbl = doc.getElementById("query-e2e-table");
-  const wantE2E = qEntries(D).filter((e) => e2eVerdict(e.qout));
+  const wantE2E = e2eEntries(D);
   check(group, wantE2E.length ? "E2E-budget table rendered" : "no E2E-budget table without the family",
     !!e2eTbl === wantE2E.length > 0, e2eTbl ? "present" : "missing");
   if (e2eTbl) {
@@ -643,6 +647,11 @@ function checkSummarySections(sdoc, group, D) {
   const sreport = sdoc.getElementById("report");
   const wantBudget = summaryHasBudget(D);
   const QR = summaryQueryRows(D);
+  // getTransaction is measured only when a live-store leg recorded an in-RPC
+  // p99 — from the E2E-budget probe where the run has one, else folded into the
+  // single legacy verdict. Otherwise its allocation stands.
+  const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && (r.e2e ? r.e2e.in_rpc : r.v.in_rpc));
+  const probedGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.e2e);
   const qTiers = ["hot", "cold"].filter((t) => QR[t]);
   const wantQueries = qTiers.length > 0;
 
@@ -700,12 +709,6 @@ function checkSummarySections(sdoc, group, D) {
     check(group, "tiles name the three slices and their allocations",
       /sendTransaction/.test(tileTxt) && /ingestion/.test(tileTxt) && /getTransaction/.test(tileTxt)
       && (tileTxt.match(/allocation/g) || []).length === 3, tileTxt.slice(0, 160));
-    // getTransaction is measured only when the run recorded an in-RPC p99 on a
-    // live-store getTransaction leg; otherwise its allocation stands. The
-    // number comes from the E2E-budget probe, which is the leg run for exactly
-    // this purpose; runs predating the split fold it into their one verdict.
-    const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash"
-      && (r.e2e ? r.e2e.in_rpc : r.v.in_rpc));
     const f11t = txt(sdoc.querySelector("#fig11-tv"));
     const getRow = f11t.split("getTransaction round trip")[1] || "";
     check(group, measuredGet ? "budget table: getTransaction allocated → measured" : "budget table: getTransaction stays an estimate",
@@ -788,11 +791,12 @@ function checkSummarySections(sdoc, group, D) {
         && txt(coldCell && coldCell.querySelector(".q-rate")) === "75 rps",
       `${txt(hotCell)} | ${txt(coldCell)}`);
   }
-  const measuredGet = (QR.hot || []).some((r) => r.qt === "txhash" && r.v.in_rpc);
   if (wantBudget && measuredGet) {
+    // A run with the probe family names the probe leg and its rate in the note.
+    const want = new RegExp("^The end-to-end budget in §01 uses the highest measured getTransaction p99"
+      + (probedGet ? ", taken from its end-to-end probe leg at [\\d,.]+ rps" : "") + "\\.$");
     check(group, "hot matrix links its highest getTransaction p99 to the E2E budget",
-      txt(qsecLive.querySelector(".q-foot")) === "The end-to-end budget in §01 uses the highest measured getTransaction p99.",
-      txt(qsecLive.querySelector(".q-foot")));
+      want.test(txt(qsecLive.querySelector(".q-foot"))), txt(qsecLive.querySelector(".q-foot")));
   }
 }
 

@@ -95,8 +95,8 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   sla family (one floor and one p99 per endpoint
                                            //   and tier), the e2e_probe family (getTransaction's
                                            //   demand floors per profile × phase and its in-RPC
-                                           //   budget), and the derivation the numbers come
-                                           //   from — see "queries" below.
+                                           //   budget), and the derivation inputs (aggregate
+                                           //   rate and mix) — see "queries" below.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs,

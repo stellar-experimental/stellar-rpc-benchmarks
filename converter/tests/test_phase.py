@@ -176,6 +176,11 @@ class PhaseEmissionTests(unittest.TestCase):
         })
         self.assertEqual(convert.E2E_IN_RPC_P99_NS, 10_000_000)
         self.assertEqual(convert.E2E_FLOORS_RPS["sac"], [300, 500, 1000])
+        # The floors are derived numbers, so pin them to the inputs they come from.
+        deriv = convert.QUERY_LOAD["derivation"]
+        self.assertAlmostEqual(sum(deriv["mix"].values()), 1.0)
+        for qt, floor in convert.SLA_FLOORS_RPS.items():
+            self.assertAlmostEqual(floor, deriv["aggregate_rps"] * deriv["mix"][qt])
 
     def test_legacy_layouts_unchanged(self):
         tmp = tempfile.mkdtemp()

@@ -565,11 +565,11 @@
   }
   function verNum(s, re) { const m = (s || "").match(re); return m ? m[1] : ""; }
 
-  // The run's check for one section, matched on applies_to. A run can carry
-  // several — a paced campaign that also swept queries is judged on keeping up
-  // AND on the read-path target — so checks_all is the list and checks is its
-  // first entry. Runs published before the list carry only the single object,
-  // hence the fallback: never read a verdict by position.
+  // The run's checks. A run can carry several — a paced campaign that also
+  // swept queries is judged on keeping up AND on the read path — so checks_all
+  // is the list and checks is its first entry. Runs published before the list
+  // carry only the single object, hence the fallback: never read a verdict by
+  // position.
   function allChecks(D) {
     return Array.isArray(D.checks_all) ? D.checks_all : (D.checks ? [D.checks] : []);
   }
@@ -579,28 +579,40 @@
   function checkOfKind(D, kind) {
     return allChecks(D).find(c => c && c.kind === kind) || null;
   }
+  // The read-path SLA check. Two checks now share applies_to "queries", so it
+  // is matched on kind; the applies_to fallback picks up the single
+  // query_p99_threshold check of runs converted before the split.
+  const queryCheck = D => checkOfKind(D, "query_sla") || checkFor(D, "queries");
 
-  // The p99 one query cell answers to. The SLA states a target per endpoint AND
-  // storage tier, which the check carries as targets_ns; runs converted before
-  // that state one number for the whole run in threshold_ns. A cell that earned
-  // no verdict of its own has to resolve the same way its verdict would have,
-  // so every judgement outside a verdict goes through here.
+  // The p99 one query cell answers to. The SLA check states a target per
+  // endpoint AND storage tier in targets_ns; older runs state one number for
+  // the whole run in threshold_ns. A cell that earned no verdict of its own
+  // resolves the same way its verdict would have, so every judgement outside a
+  // verdict goes through here.
   function thresholdFor(check, qt, tier) {
     const byTier = check && check.targets_ns && check.targets_ns[qt];
     if (byTier && byTier[tier] != null) return byTier[tier];
     return check && check.threshold_ns ? check.threshold_ns : 500e6;
   }
+  // Everything a renderer needs to judge query cells: the check, a per-row
+  // resolver, whether the run states targets per endpoint, and — when it does
+  // not — the single number the prose and the reference lines can name.
+  function queryTargets(D) {
+    const check = queryCheck(D);
+    const perEndpoint = !!(check && check.targets_ns);
+    return {
+      check, perEndpoint,
+      thrFor: (qt, tier) => thresholdFor(check, qt, tier),
+      single: perEndpoint ? null : thresholdFor(check),
+    };
+  }
 
-  // The read path answers to two requirements and carries a verdict for each.
-  // verdict_sla is the SLA family — every endpoint, at its share of the
-  // sustained watermark, against the p99 of its storage tier. verdict_e2e is
-  // getTransaction's E2E-budget probe — the demand-derived rate, judged on the
-  // time inside the RPC alone. Runs converted before the split carry one
-  // verdict_1x that plays the SLA role and folds the in-RPC budget into itself;
-  // it is read here so those published runs still render, with their in-RPC
-  // chip intact. Their retired page_budget verdict is deliberately NOT chipped
-  // any more: the mean page is reported and judged by nothing, so those runs
-  // show one fewer check than they used to.
+  // The read path answers to two requirements and carries a verdict for each:
+  // verdict_sla (every endpoint, at its SLA rate, against its tier's p99) and
+  // verdict_e2e (getTransaction at the demand-derived rate, judged on its
+  // in-RPC time alone). Runs converted before the split carry one verdict_1x
+  // that plays the SLA role with the in-RPC budget folded in; it still renders,
+  // minus its retired page_budget chip.
   const slaVerdict = qout => (qout && (qout.verdict_sla || qout.verdict_1x)) || null;
   const e2eVerdict = qout => (qout && qout.verdict_e2e) || null;
 
@@ -637,6 +649,35 @@
   const rpsTxt = v => v == null || !isFinite(v) ? "—" : fmtRps(v) + " rps";
   const cellTarget = (qout, k) =>
     (qout[k] && qout[k].target_rps != null ? qout[k].target_rps : +k.slice(1));
+
+  // Builders the query tables share. `cls` on a note marks one a reader (and
+  // the smoke test) has to find on its own, like each row's headline target.
+  const cellTd = (parent, ...kids) => {
+    const c = document.createElement("td");
+    for (const k of kids) c.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
+    parent.appendChild(c);
+    return c;
+  };
+  const noteEl = (text, cls) => {
+    const s = document.createElement("span");
+    s.className = cls ? "cell-note " + cls : "cell-note";
+    s.textContent = " " + text;
+    return s;
+  };
+  const tierTag = (tier, C) => {
+    const tag = document.createElement("span");
+    tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
+    return tag;
+  };
+  // Served short of offered by more than the saturation margin: the shortfall
+  // as a whole percent, or null while the pacer kept up.
+  const underTarget = (ach, target) =>
+    ach && target > 0 && ach.m < target * SATURATED ? Math.round((1 - ach.m / target) * 100) : null;
+  const underWarn = pct => {
+    const w = document.createElement("span");
+    w.className = "cell-warn"; w.textContent = ` ▲ ${pct} % under`;
+    return w;
+  };
 
   // The judged rung of one endpoint entry: the cell the run names as the SLA
   // floor, else the middle of whatever ladder it swept — an unfloored run still
@@ -789,17 +830,10 @@
       // the ROW; the concurrency columns all answer to the same number.
       const thr = thrFor(qt, tier);
       const r = document.createElement("tr");
-      const name = document.createElement("td");
-      const tag = document.createElement("span"); tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
-      name.appendChild(tag); name.appendChild(document.createTextNode(`${qt} · ${tier}`));
+      const name = cellTd(r, tierTag(tier, C), `${qt} · ${tier}`);
       // Only a run with per-endpoint targets needs the number here: with one
       // target for the whole run the section intro already states it.
-      if (perEndpoint) {
-        const n = document.createElement("span");
-        n.className = "cell-note"; n.textContent = ` (≤ ${fmtNsAxis(thr)})`;
-        name.appendChild(n);
-      }
-      r.appendChild(name);
+      if (perEndpoint) name.appendChild(noteEl(`(≤ ${fmtNsAxis(thr)})`));
       for (const cc of CONC) {
         const w = worstQueryCell(Q, units, tier, qt, cc, thr);
         const td = document.createElement("td");
@@ -808,7 +842,7 @@
         td.textContent = fmtMs(w.cell.p99.m) + " ms";
         // Name the worst unit, and say when it is not the only one over.
         const extra = w.overCount > 1 ? ` +${w.overCount - 1} more` : "";
-        const note = document.createElement("span"); note.className = "cell-note"; note.textContent = ` (${w.unit}${extra})`; td.appendChild(note);
+        td.appendChild(noteEl(`(${w.unit}${extra})`));
         const ok = document.createElement("span");
         if (w.cell.p99.m > thr) { ok.className = "cell-warn"; ok.textContent = " ▲"; breaches++; unitBreaches += w.overCount; }
         else if (w.cell.p99.hi > thr) { ok.className = "cell-ok"; ok.textContent = " ✓†"; over.push(`${qt} · ${tier} · ${cc} on ${w.unit} (worst run ${fmtMs(w.cell.p99.hi)} ms)`); }
@@ -844,7 +878,7 @@
     const tr = document.createElement("tr");
     head.forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
     t.appendChild(tr);
-    let checks = 0, fails = 0, rows = 0, unfloored = 0;
+    let checks = 0, fails = 0, rows = 0, unfloored = 0, probed = 0;
     // A verdict chip is its own element so a hand count of breaches can be read
     // straight off the table.
     const chip = pass => {
@@ -854,79 +888,56 @@
       s.textContent = pass ? " ✓" : " ▲";
       return s;
     };
-    // `extra` marks a note a reader has to be able to find on its own — the
-    // headline target, which is per endpoint and tier and so cannot be read off
-    // the column head.
-    const note = (text, extra) => {
-      const s = document.createElement("span");
-      s.className = extra ? "cell-note " + extra : "cell-note";
-      s.textContent = " " + text;
-      return s;
-    };
-    const td = (parent, ...kids) => {
-      const c = document.createElement("td");
-      for (const k of kids) c.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
-      parent.appendChild(c);
-      return c;
-    };
     for (const qt of QT) for (const u of units) for (const tier of TIERS) {
       const qout = ((Q[tier] || {})[u] || {})[qt];
       const key = qout && judgedRate(qout);
       if (!key) continue;
-      const cell = qout[key] || {}, v = slaVerdict(qout);
+      const cell = qout[key] || {}, v = slaVerdict(qout), e2e = e2eVerdict(qout);
       if (!v) unfloored++;
+      if (e2e) probed++;
       rows++;
       const r = document.createElement("tr");
-      const name = td(r, "");
-      const tag = document.createElement("span");
-      tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
-      name.appendChild(tag);
-      name.appendChild(document.createTextNode(`${endpointLabel(qt)} · ${short(u)} · ${tier}`));
+      cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
       // Offered: the phase floor when the run names one, else the rate the leg
       // was actually paced at.
       const target = v && v.target_rps != null ? v.target_rps : cell.target_rps;
-      td(r, rpsTxt(target), v ? note("(1× floor)") : note("(no floor)"));
+      cellTd(r, rpsTxt(target), noteEl(v ? "(1× floor)" : "(no floor)"));
       // Served: the achieved arrival rate, flagged when the pacer fell behind.
       const ach = cell.achieved_rps;
-      const sTd = td(r, ach ? rpsTxt(ach.m) : "—");
+      const sTd = cellTd(r, ach ? rpsTxt(ach.m) : "—");
       if (ach) {
-        sTd.appendChild(note(`(${fmtRps(ach.lo)} – ${fmtRps(ach.hi)})`));
-        if (target > 0 && ach.m < target * SATURATED) {
-          const w = document.createElement("span"); w.className = "cell-warn";
-          w.textContent = ` ▲ ${Math.round((1 - ach.m / target) * 100)} % under`;
-          sTd.appendChild(w);
-        }
+        sTd.appendChild(noteEl(`(${fmtRps(ach.lo)} – ${fmtRps(ach.hi)})`));
+        const under = underTarget(ach, target);
+        if (under != null) sTd.appendChild(underWarn(under));
       }
       // Headline: the SCHEDULED p99 — queue-inclusive, so a leg that fell behind
-      // its schedule shows the delay it caused.
+      // its schedule shows the delay it caused. Each row states the target it
+      // was judged against: the SLA sets one per endpoint and storage tier, so
+      // no single number heads the column, and a row with no verdict is judged
+      // on the same target its verdict would have used.
       const p99 = v && v.p99_ns != null ? v.p99_ns : (cell.p99 || {}).m;
-      const pTd = td(r, p99 == null ? "—" : fmtNs(p99));
-      // Each row states the target it was judged against: the SLA sets one per
-      // endpoint and storage tier, so no single number heads the column. A row
-      // with no verdict is judged on the same target its verdict would have
-      // used, never on a run-wide number this endpoint does not answer to.
+      const pTd = cellTd(r, p99 == null ? "—" : fmtNs(p99));
       const rowThr = v && v.threshold_ns != null ? v.threshold_ns : thrFor(qt, tier);
       if (p99 != null) {
         pTd.appendChild(chip(v ? v.pass : p99 <= rowThr));
-        pTd.appendChild(note(`(≤ ${fmtNsAxis(rowThr)})`, "q-thr"));
+        pTd.appendChild(noteEl(`(≤ ${fmtNsAxis(rowThr)})`, "q-thr"));
       }
-      // The in-RPC time belongs to getTransaction alone; every other row leaves
-      // it empty rather than showing a number no budget applies to. It is
-      // JUDGED here only on the published runs that fold it into verdict_1x —
-      // where the run splits the families, the E2E-budget table judges it at
-      // its own rate and this column is context. getEvents' mean page is
-      // reported beside it, judged by nothing.
+      // In-RPC time: judged here only where the run folds it into the SLA
+      // verdict (legacy verdict_1x). A row with its own verdict_e2e is judged in
+      // the E2E-budget table, so its number is context here. Every other row
+      // leaves the column empty rather than showing a number no budget applies
+      // to — except an unfloored getTransaction leg, which shows the measurement.
       const inR = v && v.in_rpc;
       const svc = (cell.service || {}).p99;
       if (inR) {
-        const c = td(r, fmtNs(inR.p99_ns));
+        const c = cellTd(r, fmtNs(inR.p99_ns));
         c.appendChild(chip(inR.pass));
-        c.appendChild(note(`(≤ ${fmtNsAxis(inR.threshold_ns)})`));
-      } else if (qt === "txhash" && svc) {
-        td(r, fmtNs(svc.m), note(o.hasE2E ? "(judged as the E2E budget)" : "(no budget)"));
-      } else td(r, "—");
-      if (qt === "events" && cell.mean_page_ns) td(r, fmtNs(cell.mean_page_ns.m));
-      else td(r, "—");
+        c.appendChild(noteEl(`(≤ ${fmtNsAxis(inR.threshold_ns)})`));
+      } else if (e2e) cellTd(r, svc ? fmtNs(svc.m) : "—", noteEl("(judged as the E2E budget)"));
+      else if (qt === "txhash" && svc) cellTd(r, fmtNs(svc.m), noteEl("(no budget)"));
+      else cellTd(r, "—");
+      // getEvents' mean page (the only cells that carry one): reported, not judged.
+      cellTd(r, cell.mean_page_ns ? fmtNs(cell.mean_page_ns.m) : "—");
       t.appendChild(r);
     }
     const foot = document.getElementById(footId);
@@ -938,9 +949,10 @@
         : `${checks - fails} of ${checks} checks pass at the 1× rate; ${fails} breach. `;
       foot.appendChild(verdict);
       foot.appendChild(document.createTextNode(
-        (o.hasE2E
-          ? "Each row is judged on the scheduled p99 against its own endpoint and tier target, shown beside it. getTransaction's time inside the RPC is shown as context here and judged in the E2E-budget table, at the rate that budget applies to."
-          : "Each row is judged on the scheduled p99 against its own endpoint and tier target, shown beside it; getTransaction also carries an in-RPC budget, counted here as a check of its own.")
+        "Each row is judged on the scheduled p99 against its own endpoint and tier target, shown beside it"
+        + (probed
+          ? ". getTransaction's time inside the RPC is shown as context here and judged in the E2E-budget table, at the rate that budget applies to."
+          : "; getTransaction also carries an in-RPC budget, counted here as a check of its own.")
         + " getEvents' mean page is reported, not judged."
         + (unfloored ? ` ${unfloored} of ${rows} rows carry no phase floor — those are judged on their endpoint and tier's latency target alone, with no load-model rate to meet it at.` : "")));
     }
@@ -955,48 +967,36 @@
   // the SLA table on purpose — the two answer different questions at different
   // rates, and one row carrying both would read as one requirement.
   function e2eProbeTable(tableId, footId, o) {
-    const { Q, TIERS, C, units, short, budgetNs } = o;
+    const { Q, TIERS, C, units, short } = o;
     const t = document.getElementById(tableId);
-    if (!t) return { checks: 0, fails: 0, rows: 0 };
-    const head = ["Profile · tier", "Offered", "Served",
+    if (!t) return;
+    // A row is whatever entry carries a verdict_e2e: the data names the
+    // endpoint, the table does not.
+    const probes = [];
+    for (const u of units) for (const tier of TIERS) {
+      for (const [qt, qout] of Object.entries((Q[tier] || {})[u] || {})) {
+        const v = e2eVerdict(qout);
+        if (v) probes.push({ qt, u, tier, v, cell: qout[v.rate] || {} });
+      }
+    }
+    // Every probe verdict carries the one budget, so the header names it once.
+    const budgetNs = probes.length ? probes[0].v.in_rpc.threshold_ns : null;
+    const head = ["Endpoint · profile · tier", "Offered", "Served",
       `In-RPC p99 (≤ ${fmtNsAxis(budgetNs)})`, "Scheduled p99"];
     const tr = document.createElement("tr");
     head.forEach(h => { const th = document.createElement("th"); th.textContent = h; tr.appendChild(th); });
     t.appendChild(tr);
-    let checks = 0, fails = 0, rows = 0;
-    for (const u of units) for (const tier of TIERS) {
-      const qout = ((Q[tier] || {})[u] || {}).txhash;
-      const v = e2eVerdict(qout);
-      if (!v) continue;
-      const cell = qout[v.rate] || {};
-      rows++;
+    let checks = 0, fails = 0;
+    for (const { qt, u, tier, v, cell } of probes) {
       const r = document.createElement("tr");
-      const name = document.createElement("td");
-      const tag = document.createElement("span");
-      tag.className = "tier-tag"; tag.style.background = tier === "cold" ? C.cold : C.hot;
-      name.appendChild(tag);
-      name.appendChild(document.createTextNode(`${short(u)} · ${tier}`));
-      r.appendChild(name);
-      const td = (...kids) => {
-        const c = document.createElement("td");
-        for (const k of kids) c.appendChild(typeof k === "string" ? document.createTextNode(k) : k);
-        r.appendChild(c);
-        return c;
-      };
-      const note = text => {
-        const s = document.createElement("span");
-        s.className = "cell-note"; s.textContent = " " + text; return s;
-      };
-      td(rpsTxt(v.target_rps), note("(demand floor)"));
+      cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
+      cellTd(r, rpsTxt(v.target_rps), noteEl("(demand floor)"));
       const ach = cell.achieved_rps;
-      const sTd = td(ach ? rpsTxt(ach.m) : "—");
-      if (ach && v.target_rps > 0 && ach.m < v.target_rps * SATURATED) {
-        const w = document.createElement("span"); w.className = "cell-warn";
-        w.textContent = ` ▲ ${Math.round((1 - ach.m / v.target_rps) * 100)} % under`;
-        sTd.appendChild(w);
-      }
+      const sTd = cellTd(r, ach ? rpsTxt(ach.m) : "—");
+      const under = underTarget(ach, v.target_rps);
+      if (under != null) sTd.appendChild(underWarn(under));
       const inR = v.in_rpc || {};
-      const iTd = td(inR.p99_ns == null ? "—" : fmtNs(inR.p99_ns));
+      const iTd = cellTd(r, inR.p99_ns == null ? "—" : fmtNs(inR.p99_ns));
       if (inR.p99_ns != null) {
         checks++; if (!inR.pass) fails++;
         const s = document.createElement("span");
@@ -1004,7 +1004,7 @@
         s.textContent = inR.pass ? " ✓" : " ▲";
         iTd.appendChild(s);
       }
-      td(v.p99_ns == null ? "—" : fmtNs(v.p99_ns), note("(context, not judged)"));
+      cellTd(r, v.p99_ns == null ? "—" : fmtNs(v.p99_ns), noteEl("(context, not judged)"));
       t.appendChild(r);
     }
     const foot = document.getElementById(footId);
@@ -1018,14 +1018,13 @@
       foot.appendChild(document.createTextNode(
         `The budget is ${fmtNsAxis(budgetNs)} — getTransaction's slice of the end-to-end transaction-lifecycle target, the one number this leg answers for. Scheduled p99 includes the client's queueing and the network model, neither of which the E2E slice owns, so it is reported and not judged. The same endpoint's SLA verdict, at a different rate and against a different number, is in the table above.`));
     }
-    return { checks, fails, rows };
   }
 
   // The three profile-scoped open-loop figures. ids: [offered-vs-served,
   // p99 ladder, latency detail at the 1× rate]. o.unit() is read on every draw,
   // so the profile picker just re-invokes the returned function.
   function openQueryFigs(o) {
-    const { Q, QT, TIERS, C, ids, thr, perEndpoint, ladder } = o;
+    const { Q, QT, TIERS, C, ids, thr, ladder } = o;
     const tierColor = t => (t === "cold" ? C.cold : C.hot);
     const entry = (tier, qt) => ((Q[tier] || {})[o.unit()] || {})[qt] || null;
     // Panels share one x axis, so only entries that swept the same number of
@@ -1064,9 +1063,8 @@
         g.all.flatMap(p => p.rows.map(r => {
           const c = r.cell || {}, ach = c.achieved_rps;
           let s = ach ? rpsTxt(ach.m) : "—";
-          if (ach && r.target > 0 && ach.m < r.target * SATURATED) {
-            s += ` ▲ ${Math.round((1 - ach.m / r.target) * 100)} % under target`;
-          }
+          const under = underTarget(ach, r.target);
+          if (under != null) s += ` ▲ ${under} % under target`;
           return [endpointLabel(p.qt), p.tier, r.label, rpsTxt(r.target), s,
             c.p99 ? fmtNs(c.p99.m) : "—", c.shed ? fmtInt(c.shed.m) : "—"];
         })));
@@ -1114,10 +1112,10 @@
       }
       if (rows.length) {
         // One reference line only when one number judges every lane. A run with
-        // per-endpoint targets draws none: the lanes are the endpoints, so a
-        // single line would name a target most of them are not judged against.
+        // per-endpoint targets passes no thr and draws none: the lanes are the
+        // endpoints, so a single line would name a target most are not judged against.
         dotRangeChart(ids[2] + "-body", rows, {
-          reflines: perEndpoint ? [] : [{ ns: thr, label: fmtNsAxis(thr) + " — latency target" }],
+          reflines: thr == null ? [] : [{ ns: thr, label: fmtNsAxis(thr) + " — latency target" }],
           groupSeparators: true,
         });
       } else document.getElementById(ids[2] + "-body").replaceChildren();
@@ -1399,14 +1397,10 @@
     const PH = phaseState(D);   // phase targets, campaign runs only (null otherwise)
     // discover query types + concurrency levels from data (degrade gracefully)
     const { QT, CONC, TIERS } = queryGrid(Q, CH);
-    const qCheck = checkFor(D, "queries");
     // The pubnet page draws the CLOSED-LOOP grid, whose cells carry no verdict
-    // of their own, so every judgement here resolves its own target from the
-    // check — per endpoint and tier when the run states it that way.
-    const thrFor = (qt, tier) => thresholdFor(qCheck, qt, tier);
-    const qPerEndpoint = !!(qCheck && qCheck.targets_ns);
-    // The one number the section intro names, for a run that states one.
-    const qThr = qPerEndpoint ? null : (qCheck && qCheck.threshold_ns) || 500e6;
+    // of their own, so every judgement resolves its target from the check —
+    // per endpoint and tier when the run states it that way.
+    const { check: qCheck, thrFor, perEndpoint: qPerEndpoint, single: qThr } = queryTargets(D);
     const qLabel = qCheck ? qCheck.label : "query p99 target";
 
     const chunkSub = c => `${fmtK(um[c].events)} ev`;
@@ -1806,27 +1800,18 @@
     // two share nothing but the cell grid, so the section branches whole.
     const qMode = qGrid ? qGrid.mode : null;
     const qLadder = (D.campaign && D.campaign.query_load && D.campaign.query_load.ladder) || null;
-    const qCheck = checkFor(D, "queries");
-    // A run states its read-path target either as one number (the published
-    // generation) or as a table keyed by endpoint and storage tier (targets_ns,
-    // the SLA shape). qThrFor resolves whichever it carries, for every cell that
-    // earned no verdict of its own.
-    const qThrFor = (qt, tier) => thresholdFor(qCheck, qt, tier);
-    const qPerEndpoint = !!(qCheck && qCheck.targets_ns);
-    // One number for the figures that span every endpoint at once; the runs
-    // that state a target per endpoint draw no such line at all.
-    const qThr = qPerEndpoint ? null : (qCheck && qCheck.threshold_ns) || 500e6;
-    // The E2E-budget probe is a second, independent requirement: getTransaction
-    // at the demand-derived rate, judged on its time inside the RPC. It gets its
-    // own table, and the whole figure disappears on a run that carries no such
-    // verdict — every published run predating the split.
-    const e2eCheck = checkOfKind(D, "query_e2e_probe");
-    const hasE2E = !!(Q && e2eCheck && Object.values(Q).some(units =>
-      Object.values(units).some(entry => e2eVerdict((entry || {}).txhash))));
-    // Figure numbers inside the queries section. Slot 2 is the E2E-budget
-    // table; a run without that family closes the gap rather than skipping a
-    // number, so every figure after it shifts down by one.
-    const qFig = slot => `Fig ${+secQueries}.${hasE2E || slot < 2 ? slot : slot - 1}`;
+    // qThr is the one number the prose and the reference lines can name; null
+    // when the run states a target per endpoint and tier instead.
+    const { check: qCheck, thrFor: qThrFor, perEndpoint: qPerEndpoint, single: qThr } = queryTargets(D);
+    // The E2E-budget probe is a second, independent requirement with a table
+    // of its own. The figure disappears on a run that carries no such verdict —
+    // every published run predating the split.
+    const hasE2E = !!Q && Object.values(Q).some(units =>
+      Object.values(units || {}).some(entry => Object.values(entry || {}).some(e2eVerdict)));
+    // Figures in the queries section are numbered in the order the template
+    // emits them, so a run without the E2E-budget table closes the gap.
+    let qFigN = 0;
+    const qFig = () => `Fig ${+secQueries}.${++qFigN}`;
     let secN = 2;
     const secNum = () => String(++secN).padStart(2, "0");
     const secCold = hasCold ? secNum() : null;
@@ -1973,14 +1958,14 @@
       <p class="sec-intro">The read side of the same stores the sections above filled, driven <strong>open-loop</strong>: every endpoint gets a fixed number of requests per second on a fixed schedule, rather than a fixed pool of clients that only asks again once the last answer came back. A server that slows down therefore builds a queue instead of quietly being asked for less. Each endpoint runs three legs — at <strong>half, exactly, and twice</strong> the request rate the load model asks of it — for a fixed span each. The latency reported everywhere below is the <strong>scheduled</strong> one: the clock starts when a request was <em>due</em>, not when the client got round to sending it, so queueing counts against the server rather than disappearing. The verdict is read at the 1× leg; the half and double legs are the context on either side of it. Cold legs drop the profile's files from the OS page cache before measuring; hot legs warm them first, because a warm cache is the hot tier's steady state.</p>
       ${hasE2E ? `<p class="sec-intro">This section answers <strong>two separate requirements</strong>, and keeps them apart. The <strong>SLA</strong> asks every endpoint to hold its latency target while serving its share of the sustained request rate. The <strong>end-to-end budget</strong> asks one endpoint, getTransaction, to answer inside a fixed slice of the transaction-lifecycle target, at the rate the phase's own demand model predicts. The two are measured at different rates and judged on different numbers, so they get a table each and never share a row.</p>` : ""}
       <figure class="fig" id="figq1">
-        <div class="fig-head"><div><span class="fig-no">${qFig(1)}</span><span class="fig-title">${hasE2E ? "SLA verdict at the 1× request rate" : "Verdict at the 1× request rate"}</span></div></div>
+        <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">${hasE2E ? "SLA verdict at the 1× request rate" : "Verdict at the 1× request rate"}</span></div></div>
         <div class="fig-body"><div class="target-table-wrap"><table class="target" id="query-verdict-table"></table></div></div>
         <figcaption>One row per endpoint, profile and tier, at the rate the SLA asks of that endpoint. <strong>Offered</strong> is that rate; <strong>served</strong> is what the client actually managed to place (${medRuns}, spread in brackets) — well under offered means the endpoint saturated. <strong>Scheduled p99</strong> is the headline, judged against ${qPerEndpoint ? "the target this endpoint carries in this tier, printed beside it" : esc(fmtNsAxis(qThr))}. ${hasE2E ? "getTransaction's time inside the RPC is context in this table; it is judged in the next one, at the rate its budget applies to." : "getTransaction additionally answers for its time inside the RPC alone — a separate verdict, never folded into the headline."} getEvents' mean page, the wait a sequential subscriber accumulates, is reported beside it and judged by nothing.</figcaption>
       </figure>
       <p id="query-verdict-footnote" style="color:var(--muted); font-size:12.5px; margin-top:10px"></p>
       ${hasE2E ? `
       <figure class="fig fig-alt" id="figqe">
-        <div class="fig-head"><div><span class="fig-no">${qFig(2)}</span><span class="fig-title">End-to-end budget — getTransaction at the demand-derived rate</span></div></div>
+        <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">End-to-end budget — getTransaction at the demand-derived rate</span></div></div>
         <div class="fig-body"><div class="target-table-wrap"><table class="target" id="query-e2e-table"></table></div></div>
         <figcaption>A different question from the table above, asked of one endpoint. <strong>Offered</strong> is the rate this phase's demand model predicts for this profile, not the SLA rate. <strong>In-RPC p99</strong> is the only judged number: the time getTransaction spent inside the RPC, which is its slice of the end-to-end transaction-lifecycle budget. The scheduled p99 beside it carries the client's queueing and is reported for context alone.</figcaption>
       </figure>
@@ -1988,11 +1973,11 @@
       <h3 class="sub-h">The rate ladder, one profile at a time</h3>
       <p class="sec-intro">Pick a profile to scope the three figures below to it.</p>
       <div class="filter-row" id="profile-filter"><span class="filter-lab">${esc(ds.unit_label)}</span></div>
-      ${figHTML("figq2", qFig(3), "Offered vs served request rate", "figq2-legend", `What the client asked for against what it managed to place, at each rung (${medRuns}; log scale, shared across panels). The two lines sit on top of each other while the endpoint keeps up; the served line falling away is the endpoint refusing more load. The table view names the shortfall and the requests dropped at the in-flight cap.`)}
-      ${figHTML("figq3", qFig(4), "Scheduled p99 as the request rate climbs", "figq3-legend", `The tail latency each rung bought (${medRuns}; log scale, shared across panels). A rung far above its neighbour is the knee — past it the endpoint is queueing, not serving.`)}
-      ${figHTML("figq4", qFig(5), "Latency at the 1× rate — the whole distribution", "figq4-legend", `Scheduled-latency percentiles over every request of the 1× leg (${medRuns}; log scale). ${qPerEndpoint ? "Each endpoint carries its own latency target, so " + qFig(1) + " states them row by row rather than one dashed line here." : "The dashed line is the " + esc(fmtNsAxis(qThr)) + " latency target."} The table view adds each endpoint's time inside the RPC.`)}
+      ${figHTML("figq2", qFig(), "Offered vs served request rate", "figq2-legend", `What the client asked for against what it managed to place, at each rung (${medRuns}; log scale, shared across panels). The two lines sit on top of each other while the endpoint keeps up; the served line falling away is the endpoint refusing more load. The table view names the shortfall and the requests dropped at the in-flight cap.`)}
+      ${figHTML("figq3", qFig(), "Scheduled p99 as the request rate climbs", "figq3-legend", `The tail latency each rung bought (${medRuns}; log scale, shared across panels). A rung far above its neighbour is the knee — past it the endpoint is queueing, not serving.`)}
+      ${figHTML("figq4", qFig(), "Latency at the 1× rate — the whole distribution", "figq4-legend", `Scheduled-latency percentiles over every request of the 1× leg (${medRuns}; log scale). ${qPerEndpoint ? `Each endpoint carries its own latency target, so Fig ${+secQueries}.1 states them row by row rather than one dashed line here.` : "The dashed line is the " + esc(fmtNsAxis(qThr)) + " latency target."} The table view adds each endpoint's time inside the RPC.`)}
       <figure class="fig" id="figq5">
-        <div class="fig-head"><div><span class="fig-no">${qFig(6)}</span><span class="fig-title">Per-leg setup and event-scan detail</span></div></div>
+        <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">Per-leg setup and event-scan detail</span></div></div>
         <div class="fig-body"><div class="tv-scroll"><table class="data" id="query-setup-table" style="width:100%"></table></div></div>
         <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> builds the read fixture, and <code>evict</code> drops the cold artifacts from the page cache once per leg — a hot leg has nothing to evict, so the row is absent. The event columns are what getEvents actually returned at the 1× rate.</figcaption>
       </figure>
@@ -2364,7 +2349,7 @@
       const { QT, CONC, TIERS } = qGrid;
       let curProfile = ORDER[0];
       const draw = qMode === "open"
-        ? openQueryFigs({ Q, QT, TIERS, C, ids: ["figq2", "figq3", "figq4"], thr: qThr, perEndpoint: qPerEndpoint, ladder: qLadder, unit: () => curProfile })
+        ? openQueryFigs({ Q, QT, TIERS, C, ids: ["figq2", "figq3", "figq4"], thr: qThr, ladder: qLadder, unit: () => curProfile })
         : queryFigs({ Q, QT, CONC, TIERS, C, ids: ["figq1", "figq2", "figq3"], unit: () => curProfile });
       const holder = document.getElementById("profile-filter");
       for (const p of ORDER) {
@@ -2431,11 +2416,8 @@
       if (qMode === "open") {
         const short = u => (parts(u) || {}).name || disp(u);
         openVerdictTable("query-verdict-table", "query-verdict-footnote",
-          { Q, QT, TIERS, C, units: ORDER, thrFor: qThrFor, hasE2E, short });
-        if (hasE2E) {
-          e2eProbeTable("query-e2e-table", "query-e2e-footnote",
-            { Q, TIERS, C, units: ORDER, short, budgetNs: e2eCheck.threshold_ns });
-        }
+          { Q, QT, TIERS, C, units: ORDER, thrFor: qThrFor, short });
+        if (hasE2E) e2eProbeTable("query-e2e-table", "query-e2e-footnote", { Q, TIERS, C, units: ORDER, short });
         return;
       }
 

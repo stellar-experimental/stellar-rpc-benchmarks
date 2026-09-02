@@ -1291,11 +1291,9 @@ def convert(args):
     # two answer different questions about different sections. `checks` carries
     # the first for readers that predate the list; `checks_all` carries them all.
     checks = []
-    # The read path answers to two requirements, so it earns two checks. The
-    # SLA one carries the whole target table rather than a single threshold_ns:
-    # every cell already states the number it was judged against. The probe one
-    # carries the single in-RPC budget, which is the same for every profile,
-    # phase and tier. The legacy query_p99_threshold kind is read-side only now.
+    # The read path answers to two requirements, so it earns two checks: the SLA
+    # one carries the whole target table (every cell states its own number), the
+    # probe one the single in-RPC budget shared by every profile, phase and tier.
     query_checks = [
         {"kind": "query_sla", "targets_ns": SLA_P99_NS, "floors_rps": SLA_FLOORS_RPS,
          "label": "query p99 ≤ the per-endpoint SLA at the SLA rate",
@@ -1315,14 +1313,10 @@ def convert(args):
                      else f"{format_interval(close_interval_ns)} pace")
             checks.append({"kind": "block_keepup", "interval_ns": close_interval_ns,
                            "label": label, "applies_to": "ingest_hot"})
-        if queries:
-            checks.extend(query_checks)
     elif args.dataset_kind == "synthetic":
         checks.append({"kind": "block_keepup", "interval_ns": 600000000,
                        "label": "600 ms block model", "applies_to": "ingest_hot"})
-        if queries:
-            checks.extend(query_checks)
-    elif queries:
+    if queries:
         checks.extend(query_checks)
 
     if checks:

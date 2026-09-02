@@ -15,11 +15,11 @@ package targets
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -100,9 +100,11 @@ func Load(path string) (*Targets, error) {
 				path, qtype, strings.Join(QueryTypes, ", "))
 		}
 	}
-	if extra := extraKeys(t.QueryLoad.SLA.FloorsRPS); extra != "" {
-		return nil, fmt.Errorf("targets: %s: query_load.sla.floors_rps names %s, which is not a query type (%s)",
-			path, extra, strings.Join(QueryTypes, ", "))
+	for _, name := range sortedKeys(t.QueryLoad.SLA.FloorsRPS) {
+		if !slices.Contains(QueryTypes, name) {
+			return nil, fmt.Errorf("targets: %s: query_load.sla.floors_rps names '%s', which is not a query type (%s)",
+				path, name, strings.Join(QueryTypes, ", "))
+		}
 	}
 	for _, name := range sortedKeys(t.QueryLoad.E2EProbe.FloorsRPS) {
 		if rps := t.QueryLoad.E2EProbe.FloorsRPS[name]; len(rps) != len(t.Phases) {
@@ -160,17 +162,14 @@ func (t *Targets) MatchPhase(closeIntervalNs int64) int {
 // plan's leg order is its own; this list is the vocabulary of the file.
 var QueryTypes = []string{"ledgers", "txpage", "txhash", "events"}
 
-// Rates is the RPS ladder one query leg targets, ascending.
-//
-// Three of the four endpoints answer to the SLA family alone, so their ladder
-// is the endpoint's SLA floor times each ladder step — the same list in every
-// phase and every profile. getTransaction answers to both families and runs as
-// ONE leg: its ladder is the union of the SLA ladder and the (profile, phase)
-// E2E-probe ladder, deduplicated. Where the two floors coincide the shared cell
-// carries both verdicts, which is why the union is deduplicated rather than
-// concatenated.
+// Rates is the RPS ladder one query leg targets, ascending: the endpoint's SLA
+// floor times every ladder step. txhash runs as ONE leg answering to both
+// families, so its ladder also unions the (profile, phase) E2E-probe ladder,
+// deduplicated and sorted — a floor the two families share becomes one cell
+// carrying both verdicts.
 func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, error) {
-	if !slices.Contains(QueryTypes, qtype) {
+	slaFloor, ok := t.QueryLoad.SLA.FloorsRPS[qtype]
+	if !ok {
 		return nil, fmt.Errorf("targets: unknown query type '%s' (known types: %s)", qtype, strings.Join(QueryTypes, ", "))
 	}
 	// Every leg resolves the profile and the phase, even the three that do not
@@ -183,7 +182,7 @@ func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, 
 	if phase < 1 || phase > len(e2eFloors) {
 		return nil, fmt.Errorf("targets: phase %d has no floors (query_load carries phases 1-%d)", phase, len(e2eFloors))
 	}
-	rates := t.ladderAround(t.QueryLoad.SLA.FloorsRPS[qtype])
+	rates := t.ladderAround(slaFloor)
 	if qtype == "txhash" {
 		rates = append(rates, t.ladderAround(e2eFloors[phase-1])...)
 		slices.Sort(rates)
@@ -203,21 +202,5 @@ func (t *Targets) ladderAround(floor float64) []float64 {
 
 // sortedKeys keeps every message that lists profiles stable.
 func sortedKeys[V any](m map[string]V) []string {
-	names := make([]string, 0, len(m))
-	for name := range m {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// extraKeys names the keys of m that are not query types, or "" when none are.
-func extraKeys[V any](m map[string]V) string {
-	var extra []string
-	for _, name := range sortedKeys(m) {
-		if !slices.Contains(QueryTypes, name) {
-			extra = append(extra, "'"+name+"'")
-		}
-	}
-	return strings.Join(extra, ", ")
+	return slices.Sorted(maps.Keys(m))
 }
