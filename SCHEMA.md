@@ -91,9 +91,12 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   "Phase 1/2/3 performance targets" below.
     "query_load": { … },                   // campaign layout only, and only when the run carries
                                            //   open-loop query cells; targets.json's query_load
-                                           //   block copied verbatim (RPS floors per profile ×
-                                           //   phase, the 0.5/1/2 ladder, and the two extra
-                                           //   budgets) — see "queries" below.
+                                           //   block copied verbatim: the 0.5/1/2 ladder, the
+                                           //   sla family (one floor and one p99 per endpoint
+                                           //   and tier), the e2e_probe family (getTransaction's
+                                           //   demand floors per profile × phase and its in-RPC
+                                           //   budget), and the derivation inputs (aggregate
+                                           //   rate and mix) — see "queries" below.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs,
@@ -106,25 +109,37 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   among the published runs.
   },
   "checks":                                 // this run's PRIMARY pass/fail semantics AS DATA
-    { "kind": "query_p99_threshold", "threshold_ns": 500000000,
-      "label": "query p99 ≤ 500 ms", "applies_to": "queries" }
+    { "kind": "query_sla",
+      "targets_ns": { "<qtype>": { "hot": int, "cold": int } },
+      "floors_rps": { "<qtype>": float },
+      "label": "query p99 ≤ the per-endpoint SLA at the SLA rate", "applies_to": "queries" }
+  | { "kind": "query_e2e_probe", "threshold_ns": 10000000,
+      "label": "getTransaction in-RPC p99 ≤ 10 ms at the demand-derived rate",
+      "applies_to": "queries" }
   | { "kind": "block_keepup", "interval_ns": 600000000,
       "label": "600 ms block model", "applies_to": "ingest_hot" },
       // block_keepup interval_ns: the legacy synthetic layout keeps the constant
       // 600 ms model. The campaign layout derives it from close_interval_ns —
       // label "Phase 1 block model (2 s)" on an exact phase match, "1.5 s pace"
       // otherwise. An unpaced campaign run emits no block_keepup check.
-      // query_p99_threshold threshold_ns comes from docs/targets.json
-      // (query_p99_target_ns) — one number for every phase.
+      // query_sla targets_ns and floors_rps are docs/targets.json
+      // query_load.sla verbatim: one arrival rate and one p99 per endpoint and
+      // storage tier, the same table for every phase and every profile.
+      // query_e2e_probe threshold_ns is query_load.e2e_probe.in_rpc_p99_ns.
+      // LEGACY: runs converted before 2026-09-01 carry a single
+      // "query_p99_threshold" check in place of both, with one
+      // "threshold_ns": 500000000 for every endpoint, tier and phase. Match on
+      // kind, and treat it as the SLA family's check.
   "checks_all": [ … ],                      // EVERY check the run earns, primary first
       // A run can earn more than one: a paced campaign that also swept queries
-      // is judged both on keeping up with the block model (applies_to
-      // "ingest_hot") and on the read-path target (applies_to "queries"), and
-      // the two answer different questions about different sections. Each entry
-      // has the shape of "checks", and checks_all[0] IS "checks" — the single
-      // object stays for readers written before the list, and for the published
-      // runs that predate it. Read a verdict by matching applies_to, never by
-      // position; treat an absent checks_all as the one-element list [checks].
+      // is judged on keeping up with the block model (applies_to "ingest_hot"),
+      // on the read-path SLA, and on getTransaction's end-to-end budget — three
+      // questions about two sections, so TWO entries share applies_to
+      // "queries". Each entry has the shape of "checks", and checks_all[0] IS
+      // "checks" — the single object stays for readers written before the list,
+      // and for the published runs that predate it. Read a verdict by matching
+      // kind (applies_to alone no longer picks one out); treat an absent
+      // checks_all as the one-element list [checks].
   "sections": ["ingest_cold", "ingest_hot", "queries", "golden"],  // exactly the keys present
   "ingest_cold":  { … }, "ingest_hot": { … },
   "queries": { … },                        // pubnet only
@@ -250,7 +265,7 @@ converter warns.
       "items_s": V, "items_r": [int×5]    // events only: n_items / wall per run; raw per-run n_items
     },
     // OPEN-LOOP cells — one per paced target rate. The key is the rate token
-    // verbatim as the CSV spells it ("r0.5", "r3.75", "r300"); cells are
+    // verbatim as the CSV spells it ("r12.5", "r37.5", "r300"); cells are
     // ordered ascending BY VALUE, so r500 precedes r1000.
     "r<rate>": StageAgg & {               // from <qtype>.csv row total_r<rate> — the SCHEDULED
                                           //   latency (due→done). THIS is the headline percentile:
@@ -272,15 +287,22 @@ converter warns.
       "mean_page_ns": V, "items_r": […]   // events only: service total ÷ n (a sequential
                                           //   subscriber's mean page latency); raw per-run n_items
     },
-    "verdict_1x": {                       // open-loop only; sibling of the rate cells, see below
-      "rate": "r1000",                    // the cell whose target_rps IS this phase's floor
-      "target_rps": 1000.0,               // campaign.query_load.profiles.<profile>.<qtype>_rps[phase−1]
+    "verdict_sla": {                      // open-loop only; sibling of the rate cells, see below
+      "rate": "r75",                      // the cell whose target_rps IS this endpoint's SLA floor
+      "target_rps": 75.0,                 // campaign.query_load.sla.floors_rps[<qtype>]
+      "achieved_rps_m": 74.998,           // that cell's achieved_rps median (absent if unmeasured)
+      "p99_ns": 60000000,                 // that cell's SCHEDULED p99 median
+      "threshold_ns": 80000000,           // query_load.sla.p99_ns[<qtype>][<tier>] — the cell's own
+                                          //   target: this row is txpage in the cold tier
+      "pass": true                        // p99_ns ≤ threshold_ns — the SLA verdict
+    },
+    "verdict_e2e": {                      // txhash ONLY; a DIFFERENT requirement at a DIFFERENT rate
+      "rate": "r1000",                    // the cell at this profile and phase's demand-derived floor
+      "target_rps": 1000.0,               // campaign.query_load.e2e_probe.floors_rps.<profile>[phase−1]
       "achieved_rps_m": 999.998,          // that cell's achieved_rps median (absent if unmeasured)
-      "p99_ns": 200000000,                // that cell's SCHEDULED p99 median
-      "threshold_ns": 500000000,          // query_p99_target_ns
-      "pass": true,                       // p99_ns ≤ threshold_ns — the headline verdict
-      "in_rpc":      { "p99_ns": …, "threshold_ns": 10000000,  "pass": true },  // txhash only
-      "page_budget": { "mean_ns": …, "budget_ns": 100000000, "pass": true }     // events only
+      "p99_ns": 15000000,                 // that cell's SCHEDULED p99 median — CONTEXT, never judged
+      "in_rpc": { "p99_ns": 5000000, "threshold_ns": 10000000, "pass": true },  // the only judged number
+      "pass": true                        // == in_rpc.pass; there is no threshold_ns on this object
     }
   },
   "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows belonging to no cell
@@ -302,18 +324,56 @@ open-loop field (`service`, `wall`, `achieved_rps`, `dispatch_lag`, `shed`,
 `mean_page_ns`) is omitted with a converter warning when its row is missing from any
 rep — never zero-filled, so an `r`-array is always one entry per rep.
 
-`verdict_1x` is emitted for campaign-layout runs that have a goal phase (see
-`campaign.phase` — the pace, else the manifest's `query_phase`). The 1×
-cell is the one paced at the phase's RPS floor for that profile and endpoint — the
-ladder's 0.5×/2× cells are context around it — and it is matched by VALUE, so the
-token's spelling never has to be guessed. The profile key is the dataset MODEL name:
-the unit id minus its `-c<chunk>` suffix and minus the trailing per-ledger tx count
-(`sac-6000-c1` → `sac`, `custom_token-3600-c1` → `custom_token`). `in_rpc`
-(getTransaction's additional in-RPC p99 budget) and `page_budget` (getEvents' MEAN
-page-latency budget, which a sequential subscriber accumulates as lag) are **separate
-verdicts** — render them as their own columns and never fold them into `pass`. The
-whole object is omitted, with a warning, when the run has no goal phase, the profile is
-unknown to `targets.json`, or no cell sits at the floor; the data still converts.
+### Query verdicts: two families
+
+An open-loop leg answers to **two separate requirements**, and carries one verdict for
+each. They are measured at different rates and judged on different numbers, so a viewer
+must render them apart — never as one row, and never as one pass/fail. Where every rate
+and every latency target below comes from is recorded in
+[`docs/sla-derivation.md`](docs/sla-derivation.md).
+
+`verdict_sla` is the read-path SLA. Every endpoint has one. The judged cell is the one
+paced at that endpoint's share of the sustained request-rate watermark
+(`query_load.sla.floors_rps[<qtype>]`, the same rate in every phase and every profile),
+and the judged number is the scheduled p99 against
+`query_load.sla.p99_ns[<qtype>][<tier>]`. The tier keys are the SLA's data-age windows:
+`hot` is Live (hot storage tier), `cold` is Recent (frozen-NVMe). The SLA's third window,
+Historical (frozen-EBS), has no tier here — the boxes carry no EBS store, so no leg
+measures it. Two cells of the same endpoint therefore carry different thresholds
+(getTransactions: 60 ms hot, 80 ms cold), and a viewer must state each row's own number
+rather than one number for the run.
+
+`verdict_e2e` is the end-to-end-budget probe, and only `txhash` has one. The judged cell
+is the one paced at the demand-derived floor for this profile and phase
+(`query_load.e2e_probe.floors_rps.<profile>[phase−1]`), and the only judged number is
+`in_rpc.p99_ns` against the 10 ms slice that getTransaction owns in the transaction
+lifecycle. The object's `p99_ns` is the scheduled p99 of the same cell, carried as
+context: it includes the client's queueing and the assumed network model, neither of
+which that slice owns, so it has no threshold beside it and `pass` equals `in_rpc.pass`.
+
+`txhash` sweeps both families in ONE leg, so its rate list is the union of the two
+ladders, deduplicated and sorted. Where the two floors coincide — sac at phase 1, where
+the demand floor is also 300 rps — one cell carries both verdicts, each judged on its
+own number.
+
+Both are emitted for campaign-layout runs that have a goal phase (see `campaign.phase` —
+the pace, else the manifest's `query_phase`). Cells are matched to a floor by VALUE, so
+the rate token's spelling never has to be guessed. The profile key is the dataset MODEL
+name: the unit id minus its `-c<chunk>` suffix and minus the trailing per-ledger tx count
+(`sac-6000-c1` → `sac`, `custom_token-3600-c1` → `custom_token`); only `verdict_e2e`
+depends on it. Either object is omitted, with a warning naming its family, when the run
+has no goal phase, no cell sits at that family's floor, or (for the probe alone) the
+profile is unknown to `targets.json`. The data still converts.
+
+`mean_page_ns` on the events cells is reported, never judged.
+
+**LEGACY**: runs converted before 2026-09-01 carry a single `verdict_1x` in place of
+both. It plays the SLA role — same fields, same meaning — and folds the in-RPC budget in
+as its own `in_rpc` object judged at the SAME cell. Runs converted before 2026-08-31 also
+carry a `page_budget` object beside it (getEvents' mean-page budget) and one 500 ms
+`threshold_ns` for every endpoint and tier. Read `verdict_sla || verdict_1x` for the SLA
+family, and treat a `verdict_1x.in_rpc` as the probe result when there is no
+`verdict_e2e`.
 
 ## Manifest — `docs/runs/index.json`
 

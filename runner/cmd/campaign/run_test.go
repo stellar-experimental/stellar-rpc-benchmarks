@@ -46,7 +46,7 @@ func TestRunCmdDryRunTouchesNothing(t *testing.T) {
 		"== query-cold-sac-6000-c1-txhash-run1\n",
 		"--types=txhash --target-rps=150,300,600 --duration=60s",
 		"== query-hot-soroswap-1500-c2-events-run2\n",
-		"--types=events --target-rps=1.875,3.75,7.5 --duration=60s",
+		"--types=events --target-rps=50,100,200 --duration=60s",
 		"$ campaign publish " + filepath.Join(benchRoot, "results"),
 		"dry run complete",
 	} {

@@ -32,10 +32,12 @@ func goldenInputs() Inputs {
 	}
 }
 
-// goldenRates stands in for what the CLI resolves out of docs/targets.json: the
-// phase-1 ladders of the profiles these tests' datasets name. Build never reads
-// that file, so pinning the numbers keeps the golden plan a function of the
-// config alone.
+// goldenRates stands in for what the CLI resolves out of docs/targets.json.
+// Build never reads that file, so pinning the numbers keeps the golden plan a
+// function of the config alone — and pinned they stay: these are the phase-1
+// ladders of the demand-derived model, not of the SLA floors the file carries
+// today. What the golden plan asserts is that Build lays a leg per endpoint and
+// spells the ladder it is handed, whatever the numbers in it are.
 func goldenRates() map[string]map[string][]float64 {
 	sac := map[string][]float64{
 		"ledgers": {0.25, 0.5, 1},

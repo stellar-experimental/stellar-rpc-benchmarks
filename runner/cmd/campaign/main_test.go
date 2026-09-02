@@ -194,8 +194,10 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		}
 		for _, want := range []string{
 			"== query-cold-sac-6000-c1-ledgers-run1\n",
-			"--types=ledgers --target-rps=0.835,1.67,3.34 --duration=60s",
-			"--types=txhash --target-rps=500,1000,2000 --duration=60s",
+			"--types=ledgers --target-rps=12.5,25,50 --duration=60s",
+			// One txhash leg carries both ladders: the SLA one (150, 300, 600)
+			// unioned with sac's phase-3 demand ladder (500, 1000, 2000).
+			"--types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s",
 		} {
 			if !strings.Contains(stdout, want) {
 				t.Errorf("stdout missing %q, got:\n%s", want, stdout)
@@ -208,7 +210,7 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
 		}
-		if want := "--types=txhash --target-rps=250,500,1000 --duration=120s"; !strings.Contains(stdout, want) {
+		if want := "--types=txhash --target-rps=150,250,300,500,600,1000 --duration=120s"; !strings.Contains(stdout, want) {
 			t.Errorf("stdout missing %q, got:\n%s", want, stdout)
 		}
 	})
@@ -243,7 +245,7 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		if code != 2 {
 			t.Errorf("exit code = %d, want 2", code)
 		}
-		for _, want := range []string{"dataset 'pubnet-63'", "load profile 'pubnet'", "known profiles:"} {
+		for _, want := range []string{"dataset 'pubnet-63'", "e2e_probe profile 'pubnet'", "known profiles:"} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q, got:\n%s", want, stderr)
 			}

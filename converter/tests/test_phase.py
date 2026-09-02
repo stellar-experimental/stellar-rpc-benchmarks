@@ -127,10 +127,11 @@ class PhaseEmissionTests(unittest.TestCase):
         self.assertEqual(data["campaign"]["phase_targets"], convert.PHASE_TARGETS)
         self.assertNotIn("checks", data)
 
-    def test_paced_run_with_queries_carries_both_checks(self):
-        # A paced campaign that also swept queries is judged twice: it must keep
-        # up with the block model AND meet the read-path target. Emitting only
-        # the keep-up check would leave the query cells unjudged.
+    def test_paced_run_with_queries_carries_every_check(self):
+        # A paced campaign that also swept queries is judged three ways: it must
+        # keep up with the block model, meet the read-path SLA, and hold
+        # getTransaction inside its slice of the end-to-end budget. Emitting
+        # only the keep-up check would leave the query cells unjudged.
         tmp = tempfile.mkdtemp()
         fixtures.build_campaign_bundle(os.path.join(tmp, "b"), paced=True,
                                        close_interval="600ms", queries=True)
@@ -140,23 +141,46 @@ class PhaseEmissionTests(unittest.TestCase):
         # list see exactly what they saw before.
         self.assertEqual(data["checks"]["kind"], "block_keepup")
         self.assertEqual([c["kind"] for c in data["checks_all"]],
-                         ["block_keepup", "query_p99_threshold"])
+                         ["block_keepup", "query_sla", "query_e2e_probe"])
         self.assertEqual(data["checks_all"][0], data["checks"])
-        q = next(c for c in data["checks_all"] if c["applies_to"] == "queries")
-        self.assertEqual(q["threshold_ns"], convert.QUERY_P99_TARGET_NS)
-        self.assertEqual(q["label"], "query p99 ≤ 500 ms")
+        sla = next(c for c in data["checks_all"] if c["kind"] == "query_sla")
+        self.assertEqual(sla["targets_ns"], convert.SLA_P99_NS)
+        self.assertEqual(sla["floors_rps"], convert.SLA_FLOORS_RPS)
+        self.assertEqual(sla["applies_to"], "queries")
+        probe = next(c for c in data["checks_all"] if c["kind"] == "query_e2e_probe")
+        self.assertEqual(probe["threshold_ns"], 10_000_000)
+        self.assertEqual(probe["label"],
+                         "getTransaction in-RPC p99 ≤ 10 ms at the demand-derived rate")
+        self.assertEqual(probe["applies_to"], "queries")
 
-    def test_unpaced_run_with_queries_carries_only_the_query_check(self):
+    def test_unpaced_run_with_queries_carries_only_the_query_checks(self):
         tmp = tempfile.mkdtemp()
         fixtures.build_campaign_bundle(os.path.join(tmp, "b"), paced=False, queries=True)
         data, _, _ = run_convert(os.path.join(tmp, "b"))
-        self.assertEqual([c["kind"] for c in data["checks_all"]], ["query_p99_threshold"])
-        self.assertEqual(data["checks"]["kind"], "query_p99_threshold")
+        self.assertEqual([c["kind"] for c in data["checks_all"]],
+                         ["query_sla", "query_e2e_probe"])
+        self.assertEqual(data["checks"]["kind"], "query_sla")
 
-    def test_query_target_comes_from_targets_json(self):
-        # The 500 ms is a design target, not a converter constant: it lives in
-        # docs/targets.json beside the phase goals.
-        self.assertEqual(convert.QUERY_P99_TARGET_NS, 500_000_000)
+    def test_query_targets_come_from_targets_json(self):
+        # The read-path numbers are design targets, not converter constants:
+        # they live in docs/targets.json beside the phase goals. The SLA family
+        # states one rate and one p99 per endpoint and storage tier (hot = the
+        # SLA's Live window, cold = Recent); the probe states one in-RPC budget.
+        self.assertEqual(convert.SLA_FLOORS_RPS,
+                         {"txhash": 300, "txpage": 75, "events": 100, "ledgers": 25})
+        self.assertEqual(convert.SLA_P99_NS, {
+            "txhash": {"hot": 20_000_000, "cold": 30_000_000},
+            "txpage": {"hot": 60_000_000, "cold": 80_000_000},
+            "events": {"hot": 40_000_000, "cold": 40_000_000},
+            "ledgers": {"hot": 150_000_000, "cold": 200_000_000},
+        })
+        self.assertEqual(convert.E2E_IN_RPC_P99_NS, 10_000_000)
+        self.assertEqual(convert.E2E_FLOORS_RPS["sac"], [300, 500, 1000])
+        # The floors are derived numbers, so pin them to the inputs they come from.
+        deriv = convert.QUERY_LOAD["derivation"]
+        self.assertAlmostEqual(sum(deriv["mix"].values()), 1.0)
+        for qt, floor in convert.SLA_FLOORS_RPS.items():
+            self.assertAlmostEqual(floor, deriv["aggregate_rps"] * deriv["mix"][qt])
 
     def test_legacy_layouts_unchanged(self):
         tmp = tempfile.mkdtemp()

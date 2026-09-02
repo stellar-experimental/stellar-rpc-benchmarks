@@ -229,6 +229,13 @@ under it. The rates are not a knob — they come from
 [`docs/targets.json`](../docs/targets.json), this repo's single source of truth for the
 goal, and no floor is hardcoded in the runner.
 
+### Two families of floor
+
+The campaign answers two separate requirements, and the load model keeps them apart. The full derivation of both is in [`docs/sla-derivation.md`](../docs/sla-derivation.md).
+
+- **The SLA family** (`query_load.sla`) asks every endpoint to hold its latency target while it serves its share of the sustained request-rate watermark. Its floor is a property of the endpoint alone — `txhash` 300, `events` 100, `txpage` 75, `ledgers` 25 rps — so it is the same in every phase and every dataset profile.
+- **The end-to-end-budget probe** (`query_load.e2e_probe`) asks one endpoint, `txhash`, to answer inside the 10 ms slice it owns in the transaction-lifecycle budget, at the rate the demand model of work item 856 predicts. Those floors ARE per profile and per phase: sac reads 300 / 500 / 1000, custom_token 200 / 400 / 600, soroswap 75 / 150 / 300.
+
 Three things decide a leg's rate ladder:
 
 - **Endpoint type.** `ledgers`, `txpage`, `txhash`, `events` each have their own floor, so
@@ -236,20 +243,38 @@ Three things decide a leg's rate ladder:
   therefore produces **four legs per tier**, in that order:
   `query-{cold,hot}-<dataset>-c<chunk>-<type>-run<R>`.
 - **Dataset profile.** The dataset name minus a trailing `-<per-ledger tx count>` is the
-  `query_load.profiles` key: `sac-6000` → `sac`, `soroswap-1500` → `soroswap`. A dataset
-  whose name has no profile is refused before the campaign starts, naming both.
+  `query_load.e2e_probe.floors_rps` key: `sac-6000` → `sac`, `soroswap-1500` → `soroswap`. A
+  dataset whose name has no profile is refused before the campaign starts, naming both.
 - **Phase.** `phase = 1|2|3`, or derived from a `close_interval` that is a phase's block
   time (`"2s"` → phase 1, `"1s"` → 2, `"600ms"` → 3). When both are set they must agree —
   pacing ledgers at one phase while measuring another phase's read targets is not a phase
   run. A query campaign with neither is refused.
 
-Each leg then sweeps `query_load.ladder` (`0.5×`, `1×`, `2×`) around that cell's floor and
-passes the result as one `--target-rps` list, so the plan reads:
+Each leg then sweeps `query_load.ladder` (`0.5×`, `1×`, `2×`) around its floor and passes
+the result as one `--target-rps` list, so a `getEvents` leg reads:
 
 ```
 $ …/stellar-rpc-<sha> bench-query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
-    --types=txhash --target-rps=500,1000,2000 --duration=60s --out=…
+    --types=events --target-rps=50,100,200 --duration=60s --out=…
 ```
+
+For the SLA family the ladder IS the SLA's load tiers: `0.5×` is Light (250 rps aggregate),
+`1×` is Standard (500 rps, the sustained watermark), and `2×` is Heavy (1000 rps). The
+verdict is read at `1×`; the other two rungs are the context around it.
+
+**`txhash` carries both families in one leg.** `bench-query --target-rps` already takes a
+list and emits one cell per rate, so no second leg is needed: the ladder is the union of
+the two, deduplicated and sorted ascending. For sac at phase 3 the SLA ladder is
+`150,300,600` and the demand ladder is `500,1000,2000`, so the leg reads:
+
+```
+$ …/stellar-rpc-<sha> bench-query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
+    --types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s --out=…
+```
+
+The converter then judges `r300` against the SLA p99 and `r1000` against the 10 ms in-RPC
+budget. Where the two floors coincide — sac at phase 1, whose demand floor is also 300 rps
+— the ladder collapses to `150,300,600` and the one `r300` cell carries both verdicts.
 
 `--targets <path>` on `run`, `plan`, and `preflight` overrides which targets file is read;
 by default the runner walks up from the working directory to the `docs/targets.json` of

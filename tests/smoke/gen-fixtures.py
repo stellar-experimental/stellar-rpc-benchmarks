@@ -7,7 +7,7 @@ query type, one cell per target rate — in a variation no committed run carries
   fixture-rps-phase3     two profiles, phase 3, mixed 1x verdicts.
   fixture-rps-unfloored  one profile, paced at an interval that matches no
                          phase and with no query_phase in the manifest, so the
-                         converter emits r-cells with NO verdict_1x and no
+                         converter emits r-cells with NO verdict and no
                          campaign.phase — the viewer must judge the rows on the
                          latency target alone and say so.
   fixture-rps-partial    two profiles, phase 3, first profile's COLD query legs
@@ -32,6 +32,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -55,25 +56,45 @@ ANSWERED = 100               # answered requests per leg
 EVENTS_ITEMS_PER_REQ = 10    # events pages carry ten records each
 SHED_TOP = 5                 # dropped at the in-flight cap on the 2x rung
 
-# Per-rung latencies in MILLISECONDS, by tier: [0.5x, 1x, 2x]. `sched` is the
-# scheduled p99 (due->done, the headline), `svc` the service p99 (dispatch->done,
-# getTransaction's in-RPC budget), `page` the mean getEvents page. Cold pays more
-# than hot everywhere, and the 2x rung sits past the knee.
-BASE = {
-    "cold": {"sched": [90, 180, 460], "svc": [3.0, 5.0, 9.5], "page": [35, 55, 95]},
-    "hot":  {"sched": [60, 120, 380], "svc": [2.0, 4.0, 9.0], "page": [25, 40, 80]},
+# Scheduled p99 (due->done, the headline) in MILLISECONDS, by endpoint, tier and
+# LOAD LEVEL: [light, nominal, heavy]. The SLA states a p99 per endpoint and per
+# tier, so one number per tier cannot clear every endpoint — getEvents answers
+# at 40 ms where getLedgers has 200. Cold pays more than hot everywhere, the
+# nominal level clears its own target, and the heavy level sits past the knee.
+SCHED = {
+    "txhash":  {"cold": [12, 18, 60],   "hot": [8, 12, 45]},      # SLA  30 /  20 ms
+    "txpage":  {"cold": [40, 60, 190],  "hot": [28, 45, 150]},    # SLA  80 /  60 ms
+    "events":  {"cold": [18, 30, 110],  "hot": [12, 22, 90]},     # SLA  40 /  40 ms
+    "ledgers": {"cold": [80, 140, 380], "hot": [55, 100, 300]},   # SLA 200 / 150 ms
 }
-# The mixed verdicts, one breach per line. `achieved` is the fraction of the
-# target rate actually served (None = keeps up); `lag_p99` is the dispatch lag.
+# Service p99 (dispatch->done — getTransaction's in-RPC budget) and mean
+# getEvents page, by tier and load level. The mean page is reported, never
+# judged; the service p99 is judged only where the E2E-budget probe lands.
+BASE = {
+    "cold": {"svc": [3.0, 5.0, 9.5], "page": [35, 55, 95]},
+    "hot":  {"svc": [2.0, 4.0, 9.0], "page": [25, 40, 80]},
+}
+# The mixed verdicts, one designed breach per line, keyed by the rate token the
+# cell was paced at (getTransaction sweeps two ladders in one leg, so a rung
+# index would not name a cell). `achieved` is the fraction of the target rate
+# actually served (None = keeps up); `lag_p99` is the dispatch lag.
 OVERRIDES = {
-    # 1x cells: one breached budget each, the other axes still clear.
-    ("cold", "sac", "txpage", 1): {"sched": 640},                    # headline 500 ms
-    ("hot", "sac", "txhash", 1): {"sched": 130, "svc": 14.0},        # in-RPC 10 ms
-    ("cold", "soroswap", "events", 1): {"sched": 150, "page": 88},   # mean page 67 ms
-    # 2x saturation: sac's txhash rung cannot be served at 2000 rps. Cold cannot
-    # be faster than hot at the same rate, so both tiers saturate together.
-    ("cold", "sac", "txhash", 2): {"sched": 1400, "achieved": 0.60, "shed": 140, "lag_p99": 900},
-    ("hot", "sac", "txhash", 2): {"sched": 1400, "achieved": 0.60, "shed": 140, "lag_p99": 900},
+    # An SLA breach on a non-txhash endpoint: 640 ms against getTransactions'
+    # 80 ms cold target.
+    ("cold", "sac", "txpage", "75"): {"sched": 640},
+    ("cold", "soroswap", "events", "100"): {"sched": 150},      # SLA, 40 ms cold
+    # The two families, proven independent on ONE cell: soroswap's phase-3
+    # demand floor is 300 rps, which IS the SLA floor, so r300 carries both
+    # verdicts. 45 ms breaches getTransaction's 30 ms cold SLA while the RPC
+    # itself answers in 5 ms, well inside the 10 ms E2E slice.
+    ("cold", "soroswap", "txhash", "300"): {"sched": 45},
+    # An E2E-budget breach at the demand-derived rate, on a cell the SLA does
+    # not judge at all: sac's phase-3 probe floor is 1000 rps.
+    ("hot", "sac", "txhash", "1000"): {"svc": 14.0},
+    # Saturation at the top rung: sac's txhash leg cannot be served at 2000 rps.
+    # Cold cannot be faster than hot at the same rate, so both tiers go together.
+    ("cold", "sac", "txhash", "2000"): {"sched": 1400, "achieved": 0.60, "shed": 140, "lag_p99": 900},
+    ("hot", "sac", "txhash", "2000"): {"sched": 1400, "achieved": 0.60, "shed": 140, "lag_p99": 900},
 }
 
 
@@ -88,31 +109,46 @@ def rate_token(v):
 
 
 def ladder(profile, qt, phase):
-    """This profile's floor for `phase` times the 0.5/1/2 ladder, as rate tokens.
-    Both come from docs/targets.json, so the middle rung IS the judged 1x cell
-    whenever the run has a goal phase to judge it against."""
-    floors = C.QUERY_LOAD["profiles"][profile][C._QTYPE_RPS_KEY[qt]]
-    return [rate_token(floors[phase - 1] * x) for x in C.QUERY_LOAD["ladder"]]
+    """The rate tokens one leg sweeps, computed the way the runner computes
+    them: this endpoint's SLA floor times the 0.5/1/2 ladder, unioned for
+    getTransaction with the same ladder around this profile and phase's
+    E2E-probe floor, deduplicated and sorted ascending. Everything comes from
+    docs/targets.json, so both judged cells are in the list by construction."""
+    steps = C.QUERY_LOAD["ladder"]
+    rates = [C.SLA_FLOORS_RPS[qt] * x for x in steps]
+    if qt == "txhash":
+        rates += [C.E2E_FLOORS_RPS[profile][phase - 1] * x for x in steps]
+    return [rate_token(r) for r in sorted(set(rates))]
 
 
-def cell_spec(tier, profile, qt, i):
-    spec = {"sched": BASE[tier]["sched"][i], "svc": BASE[tier]["svc"][i],
+def load_level(qt, tok):
+    """Which of the three latency levels a rate sits at: the ladder rung nearest
+    its multiple of that endpoint's SLA floor, measured in log space because the
+    ladder is geometric."""
+    ratio = float(tok) / C.SLA_FLOORS_RPS[qt]
+    steps = C.QUERY_LOAD["ladder"]
+    return min(range(len(steps)), key=lambda i: abs(math.log(ratio / steps[i])))
+
+
+def cell_spec(tier, profile, qt, tok, top=False):
+    i = load_level(qt, tok)
+    spec = {"sched": SCHED[qt][tier][i], "svc": BASE[tier]["svc"][i],
             "page": BASE[tier]["page"][i], "achieved": None,
-            "shed": SHED_TOP if i == len(C.QUERY_LOAD["ladder"]) - 1 else 0,
+            "shed": SHED_TOP if top else 0,
             "lag_p99": 3.0}
-    spec.update(OVERRIDES.get((tier, profile, qt, i), {}))
+    spec.update(OVERRIDES.get((tier, profile, qt, tok), {}))
     return spec
 
 
 def qtype_rows(qt, tokens, tier, profile, run):
     """<qtype>.csv: a scheduled row and a service row per target rate."""
     rows = []
-    for i, tok in enumerate(tokens):
-        c = cell_spec(tier, profile, qt, i)
+    for tok in tokens:
+        c = cell_spec(tier, profile, qt, tok)
         n = ANSWERED
         items = n * EVENTS_ITEMS_PER_REQ if qt == "events" else n
         s, v = _ns(c["sched"]), _ns(c["svc"])
-        # getEvents' mean page is a judged budget, so it is set outright; every
+        # getEvents reports a mean page of its own, so it is set outright; every
         # other type gets a plausible mean under its own service p99.
         mean = _ns(c["page"]) if qt == "events" else v // 2
         rows.append((f"total_r{tok}",) + F._scale(
@@ -134,7 +170,7 @@ def driver_rows(qt, tokens, tier, profile, run):
     if tier == "cold":
         rows.append(("evict", len(tokens), 6, 4000, 500, 600, 700, 700))
     for i, tok in enumerate(tokens):
-        c = cell_spec(tier, profile, qt, i)
+        c = cell_spec(tier, profile, qt, tok, top=i == len(tokens) - 1)
         n, lag, shed = ANSWERED, _ns(c["lag_p99"]), c["shed"]
         # The achieved rate is carried x1000 as an int in the duration columns.
         # A keeping-up leg lands a hair under target; a saturated one lands far
@@ -222,10 +258,8 @@ def build_bundle(root, spec):
 
 
 def rate_cells(qout):
-    """The r<rate> cells of one qtype entry. verdict_1x is a sibling of theirs
-    that also carries a target_rps, so it is named out rather than sniffed."""
-    return {k: v for k, v in qout.items()
-            if k != "verdict_1x" and isinstance(v, dict) and "target_rps" in v}
+    """The r<rate> cells of one qtype entry — the converter's own selector."""
+    return C.rps_cells(qout)
 
 
 def qtype_entries(D):
@@ -238,16 +272,17 @@ def qtype_entries(D):
 
 
 def verdict_failures(D):
-    """Every (tier, unit, qtype) whose 1x verdict breaches some budget, with the
-    axis that broke — the run's whole verdict picture in one comparable set."""
+    """Every (tier, unit, qtype) whose verdict breaches its family's number,
+    with the family that broke — the run's whole verdict picture in one
+    comparable set. The two families are counted apart on purpose: they are
+    measured at different rates and judged on different budgets."""
     out = set()
     for tier, unit, qt, qout in qtype_entries(D):
-        v = qout["verdict_1x"]
-        for axis, ok in [("p99", v["pass"]),
-                         ("in_rpc", v.get("in_rpc", {}).get("pass", True)),
-                         ("page_budget", v.get("page_budget", {}).get("pass", True))]:
-            if not ok:
-                out.add((tier, unit, qt, axis))
+        if not qout["verdict_sla"]["pass"]:
+            out.add((tier, unit, qt, "sla"))
+        e2e = qout.get("verdict_e2e")
+        if e2e and not e2e["pass"]:
+            out.add((tier, unit, qt, "e2e"))
     return out
 
 
@@ -258,11 +293,14 @@ def check_common(D, spec):
     for u in spec["units"]:
         meta = D["dataset"]["unit_meta"][u]
         assert all(k in meta for k in ("ledgers", "txs", "events")), meta
-    assert D["campaign"]["query_load"]["profiles"], "campaign.query_load missing"
+    assert D["campaign"]["query_load"]["sla"], "campaign.query_load missing"
     want = {"target_rps", "achieved_rps", "service", "dispatch_lag", "shed"}
     for tier, unit, qt, qout in qtype_entries(D):
         cells = rate_cells(qout)
-        assert len(cells) == len(C.QUERY_LOAD["ladder"]), (tier, unit, qt, list(cells))
+        # getTransaction sweeps both ladders in one leg, so its cell count is
+        # the size of their union, not the ladder length.
+        wanted = ladder(C.query_profile(unit), qt, spec["ladder_phase"])
+        assert list(cells) == [f"r{t}" for t in wanted], (tier, unit, qt, list(cells))
         for key, cell in cells.items():
             missing = want - set(cell)
             assert not missing, (tier, unit, qt, key, sorted(missing))
@@ -273,18 +311,35 @@ def check_phase3(D, spec):
     drift in the converter or in targets.json breaks generation, not the viewer."""
     assert D["campaign"]["phase"] == spec["phase"], D["campaign"].get("phase")
     for tier, unit, qt, qout in qtype_entries(D):
-        v = qout.get("verdict_1x")
-        assert v, f"no verdict_1x on {tier}/{unit}/{qt}"
+        v = qout.get("verdict_sla")
+        assert v, f"no verdict_sla on {tier}/{unit}/{qt}"
         assert v["target_rps"] == float(v["rate"][1:]), v
+        # Only getTransaction answers to the E2E budget, and it always does.
+        e2e = qout.get("verdict_e2e")
+        assert (e2e is not None) == (qt == "txhash"), (tier, unit, qt, e2e)
+        if e2e:
+            assert e2e["target_rps"] == float(e2e["rate"][1:]), e2e
+            assert "threshold_ns" not in e2e, "the probe judges in_rpc alone"
 
-    # The three designed breaches, and nothing else.
+    # soroswap's phase-3 demand floor IS the SLA floor, so one cell carries both
+    # verdicts; sac's does not, so its two verdicts sit on different cells.
+    soro = D["queries"]["cold"]["soroswap-1500-c1"]["txhash"]
+    assert soro["verdict_sla"]["rate"] == soro["verdict_e2e"]["rate"] == "r300", soro["verdict_sla"]
+    sac = D["queries"]["hot"]["sac-6000-c1"]["txhash"]
+    assert sac["verdict_sla"]["rate"] == "r300", sac["verdict_sla"]
+    assert sac["verdict_e2e"]["rate"] == "r1000", sac["verdict_e2e"]
+
+    # The four designed breaches, and nothing else. The soroswap pair is the
+    # point: the same cell fails the SLA and passes the E2E budget.
     expected = {
-        ("cold", "sac-6000-c1", "txpage", "p99"),
-        ("hot", "sac-6000-c1", "txhash", "in_rpc"),
-        ("cold", "soroswap-1500-c1", "events", "page_budget"),
+        ("cold", "sac-6000-c1", "txpage", "sla"),
+        ("cold", "soroswap-1500-c1", "events", "sla"),
+        ("cold", "soroswap-1500-c1", "txhash", "sla"),
+        ("hot", "sac-6000-c1", "txhash", "e2e"),
     }
     got = verdict_failures(D)
     assert got == expected, f"verdict drift: {sorted(got)}"
+    assert soro["verdict_e2e"]["pass"], "the shared cell must pass the E2E budget"
 
     # Saturation: the 2x sac txhash cell is served far below its target rate.
     for tier in ("cold", "hot"):
@@ -296,11 +351,12 @@ def check_phase3(D, spec):
 
 def check_unfloored(D, spec):
     """No phase means no floor: every rate cell still converts, and not one of
-    them earns a verdict_1x for the viewer to judge against."""
+    them earns a verdict for the viewer to judge against."""
     assert D["campaign"].get("phase") is None, D["campaign"].get("phase")
     assert D["campaign"]["close_interval_ns"] > 0, "the fixture is paced, just off-phase"
     for tier, unit, qt, qout in qtype_entries(D):
-        assert "verdict_1x" not in qout, f"unexpected verdict on {tier}/{unit}/{qt}"
+        for family in ("verdict_sla", "verdict_e2e"):
+            assert family not in qout, f"unexpected {family} on {tier}/{unit}/{qt}"
     # The viewer labels rungs by multiplier off the campaign ladder when no floor
     # names them, so the two lengths have to agree.
     assert len(C.QUERY_LOAD["ladder"]) == len(
@@ -318,16 +374,18 @@ def check_partial(D, spec):
         sorted(D["queries"]["hot"])
     assert D["campaign"]["phase"] == spec["phase"], D["campaign"].get("phase")
     for qt in QTYPES:
-        assert D["queries"]["hot"][first][qt].get("verdict_1x"), qt
-        assert D["queries"]["cold"][second][qt].get("verdict_1x"), qt
+        assert D["queries"]["hot"][first][qt].get("verdict_sla"), qt
+        assert D["queries"]["cold"][second][qt].get("verdict_sla"), qt
+    assert D["queries"]["hot"][first]["txhash"].get("verdict_e2e"), "probe on the hot leg"
 
 
 SPECS = [
     {
         "id": "fixture-rps-phase3",
         "name": "Fixture — open-loop query load (phase 3)",
-        # Two profiles: enough to exercise the profile picker, and soroswap's
-        # floors are the ones that produce fractional rate tokens (r7.5, r30).
+        # Two profiles: enough to exercise the profile picker. Every profile now
+        # shares the SLA floors, so the fractional rate tokens the viewer has to
+        # survive (r12.5, r37.5) come from the 0.5x rung.
         "units": ["sac-6000-c1", "soroswap-1500-c1"],
         "reps": 2,
         "close_interval": "600ms",   # phase 3's block time

@@ -38,6 +38,11 @@ def build_and_convert(**kw):
 UNIT = f"{fixtures.RPS_DATASET}-c1"
 
 
+def rate_keys(qout):
+    """The qtype entry's rate cells, in order — the verdicts are siblings."""
+    return [k for k in qout if not k.startswith("verdict_")]
+
+
 class ProfileKeyTests(unittest.TestCase):
     def test_dataset_model_name(self):
         self.assertEqual(convert.query_profile("sac-6000-c1"), "sac")
@@ -81,11 +86,12 @@ class RpsCellTests(unittest.TestCase):
                          {"ledgers", "txpage", "txhash", "events", "setup"})
 
     def test_cells_are_rate_tokens_sorted_ascending(self):
-        # sorted by VALUE, not by string: r500 < r1000 < r2000.
-        self.assertEqual([k for k in self.cold["txhash"] if k != "verdict_1x"],
-                         ["r500", "r1000", "r2000"])
-        self.assertEqual([k for k in self.cold["ledgers"] if k != "verdict_1x"],
-                         ["r0.835", "r1.67", "r3.34"])
+        # sorted by VALUE, not by string: r500 < r1000 < r2000. getTransaction
+        # sweeps both families in one leg, so its ladder is the union.
+        self.assertEqual(rate_keys(self.cold["txhash"]),
+                         ["r150", "r300", "r500", "r600", "r1000", "r2000"])
+        self.assertEqual(rate_keys(self.cold["ledgers"]),
+                         ["r12.5", "r25", "r50"])
 
     def test_headline_is_the_scheduled_latency(self):
         cell = self.cold["txhash"]["r1000"]
@@ -100,7 +106,7 @@ class RpsCellTests(unittest.TestCase):
         self.assertEqual(cell["achieved_rps"],
                          {"m": 999.998, "lo": 999.998, "hi": 999.998,
                           "r": [999.998, 999.998]})
-        self.assertEqual(self.cold["ledgers"]["r0.835"]["achieved_rps"]["m"], 0.833)
+        self.assertEqual(self.cold["ledgers"]["r12.5"]["achieved_rps"]["m"], 12.498)
 
     def test_wall_dispatch_lag_and_shed(self):
         cell = self.cold["txhash"]["r1000"]
@@ -112,7 +118,7 @@ class RpsCellTests(unittest.TestCase):
         self.assertEqual(self.cold["txhash"]["r2000"]["shed"]["m"], fixtures.RPS_SHED)
 
     def test_events_mean_page_and_items(self):
-        cell = self.cold["events"]["r10"]
+        cell = self.cold["events"]["r100"]
         self.assertEqual(cell["mean_page_ns"]["m"], float(fixtures.RPS_MEAN_PAGE_NS))
         self.assertEqual(cell["items_r"], [1000, 1000])
         self.assertNotIn("mean_page_ns", self.cold["txhash"]["r1000"])
@@ -125,52 +131,98 @@ class RpsCellTests(unittest.TestCase):
     def test_query_load_embedded_in_campaign(self):
         self.assertEqual(self.data["campaign"]["query_load"], convert.QUERY_LOAD)
 
-    def test_verdicts_pass_at_the_phase3_floors(self):
-        for qt, rate in (("ledgers", "r1.67"), ("txpage", "r50"),
-                         ("txhash", "r1000"), ("events", "r10")):
-            v = self.cold[qt]["verdict_1x"]
+    def test_sla_verdict_on_every_endpoint_at_its_sla_floor(self):
+        # The SLA floors belong to the endpoint alone, so the same four rates
+        # are judged in every phase and every profile — getTransaction included.
+        for qt, rate in (("ledgers", "r25"), ("txpage", "r75"),
+                         ("txhash", "r300"), ("events", "r100")):
+            v = self.cold[qt]["verdict_sla"]
             self.assertEqual(v["rate"], rate)
             self.assertTrue(v["pass"])
-            self.assertEqual(v["threshold_ns"], convert.QUERY_P99_TARGET_NS)
+            self.assertEqual(v["threshold_ns"], convert.SLA_P99_NS[qt]["cold"])
             self.assertEqual(v["p99_ns"], fixtures.RPS_SCHED_P99_NS)
-        self.assertEqual(self.cold["txhash"]["verdict_1x"]["target_rps"], 1000.0)
-        self.assertEqual(self.cold["txhash"]["verdict_1x"]["achieved_rps_m"], 999.998)
+            self.assertNotIn("in_rpc", v)
+        self.assertEqual(self.cold["txhash"]["verdict_sla"]["target_rps"], 300.0)
+        self.assertEqual(self.cold["txhash"]["verdict_sla"]["achieved_rps_m"], 299.998)
 
-    def test_txhash_in_rpc_is_a_separate_column(self):
-        v = self.cold["txhash"]["verdict_1x"]
+    def test_e2e_verdict_on_getTransaction_alone_at_the_demand_floor(self):
+        # sac phase 3 asks getTransaction for 1000 rps; the cell answers for its
+        # time inside the RPC, and for nothing else.
+        v = self.cold["txhash"]["verdict_e2e"]
+        self.assertEqual(v["rate"], "r1000")
+        self.assertEqual(v["target_rps"], 1000.0)
         self.assertEqual(v["in_rpc"], {"p99_ns": fixtures.RPS_SERVICE_P99_NS,
                                        "threshold_ns": 10_000_000, "pass": True})
-        self.assertNotIn("in_rpc", self.cold["ledgers"]["verdict_1x"])
+        self.assertTrue(v["pass"])
+        # the scheduled p99 rides along as context, with no threshold beside it
+        self.assertEqual(v["p99_ns"], fixtures.RPS_SCHED_P99_NS)
+        self.assertNotIn("threshold_ns", v)
+        for qt in ("ledgers", "txpage", "events"):
+            self.assertNotIn("verdict_e2e", self.cold[qt])
 
-    def test_events_page_budget_is_a_separate_column(self):
-        v = self.cold["events"]["verdict_1x"]
-        self.assertEqual(v["page_budget"], {"mean_ns": 80_000_000.0,
-                                            "budget_ns": 100_000_000, "pass": True})
-        self.assertNotIn("page_budget", self.cold["txpage"]["verdict_1x"])
+    def test_threshold_follows_the_storage_tier(self):
+        # The SLA reads the tiers as data-age windows — hot is Live, cold is
+        # Recent — so the same endpoint is judged differently in each.
+        hot = self.data["queries"]["hot"][UNIT]
+        self.assertEqual(hot["txpage"]["verdict_sla"]["threshold_ns"], 60_000_000)
+        self.assertEqual(self.cold["txpage"]["verdict_sla"]["threshold_ns"], 80_000_000)
+        self.assertEqual(hot["txhash"]["verdict_sla"]["threshold_ns"], 20_000_000)
+        self.assertEqual(self.cold["txhash"]["verdict_sla"]["threshold_ns"], 30_000_000)
+        # The E2E budget is one number for every tier, profile and phase.
+        for entry in (hot, self.cold):
+            self.assertEqual(entry["txhash"]["verdict_e2e"]["in_rpc"]["threshold_ns"],
+                             10_000_000)
+
+    def test_the_legacy_single_verdict_is_gone(self):
+        for qt in ("ledgers", "txpage", "txhash", "events"):
+            self.assertNotIn("verdict_1x", self.cold[qt])
+
+    def test_no_page_budget_verdict(self):
+        # getEvents' mean page is reported as a cell column, never judged: the
+        # SLA states a p99 per endpoint and nothing else.
+        self.assertNotIn("page_budget", self.cold["events"]["verdict_sla"])
+        self.assertIn("mean_page_ns", self.cold["events"]["r100"])
 
 
 class RpsVerdictFailureTests(unittest.TestCase):
     def test_scheduled_p99_over_the_sla_fails(self):
         data, _, _ = build_and_convert(sched_p99={"txhash": 700_000_000})
-        v = data["queries"]["cold"][UNIT]["txhash"]["verdict_1x"]
+        v = data["queries"]["cold"][UNIT]["txhash"]["verdict_sla"]
         self.assertEqual(v["p99_ns"], 700_000_000)
         self.assertFalse(v["pass"])
         # a sibling type at the same rate ladder is unaffected
-        self.assertTrue(data["queries"]["cold"][UNIT]["ledgers"]["verdict_1x"]["pass"])
+        self.assertTrue(data["queries"]["cold"][UNIT]["ledgers"]["verdict_sla"]["pass"])
 
-    def test_in_rpc_budget_fails_without_failing_the_headline(self):
+    def test_a_p99_between_the_two_tier_targets_fails_hot_only(self):
+        # 70 ms clears getTransactions' 80 ms Recent target but breaches its
+        # 60 ms Live one, so the same latency passes cold and fails hot.
+        data, _, _ = build_and_convert(sched_p99={"txpage": 70_000_000})
+        self.assertTrue(data["queries"]["cold"][UNIT]["txpage"]["verdict_sla"]["pass"])
+        self.assertFalse(data["queries"]["hot"][UNIT]["txpage"]["verdict_sla"]["pass"])
+
+    def test_the_two_families_fail_independently(self):
+        # 40 ms is over getTransaction's SLA p99 in both tiers (20 hot, 30 cold)
+        # but the RPC itself answered in 5 ms: the SLA verdict fails, the
+        # E2E-budget verdict passes, and neither reads the other's number.
+        data, _, _ = build_and_convert(sched_p99={"txhash": 40_000_000})
+        cold = data["queries"]["cold"][UNIT]["txhash"]
+        self.assertFalse(cold["verdict_sla"]["pass"])
+        self.assertTrue(cold["verdict_e2e"]["pass"])
+        self.assertEqual(cold["verdict_e2e"]["p99_ns"], 40_000_000)
+
+    def test_in_rpc_budget_fails_the_e2e_verdict_alone(self):
         data, _, _ = build_and_convert(svc_p99={"txhash": 12_000_000})
-        v = data["queries"]["cold"][UNIT]["txhash"]["verdict_1x"]
-        self.assertTrue(v["pass"])                 # scheduled p99 still inside 500 ms
-        self.assertFalse(v["in_rpc"]["pass"])      # but over the 10 ms in-RPC budget
-        self.assertEqual(v["in_rpc"]["p99_ns"], 12_000_000)
+        cold = data["queries"]["cold"][UNIT]["txhash"]
+        self.assertTrue(cold["verdict_sla"]["pass"])   # the tail is still inside 30 ms
+        self.assertFalse(cold["verdict_e2e"]["pass"])  # but over the 10 ms in-RPC budget
+        self.assertEqual(cold["verdict_e2e"]["in_rpc"]["p99_ns"], 12_000_000)
+        self.assertNotIn("in_rpc", cold["verdict_sla"])
 
-    def test_page_budget_fails_without_failing_the_headline(self):
+    def test_a_slow_mean_page_never_fails_a_verdict(self):
         data, _, _ = build_and_convert(mean_page={"events": 150_000_000})
-        v = data["queries"]["cold"][UNIT]["events"]["verdict_1x"]
+        v = data["queries"]["cold"][UNIT]["events"]["verdict_sla"]
         self.assertTrue(v["pass"])
-        self.assertFalse(v["page_budget"]["pass"])
-        self.assertEqual(v["page_budget"]["mean_ns"], 150_000_000.0)
+        self.assertNotIn("page_budget", v)
 
 
 class RpsVerdictOmissionTests(unittest.TestCase):
@@ -180,33 +232,50 @@ class RpsVerdictOmissionTests(unittest.TestCase):
         self.assertNotIn("phase", data["campaign"])
         self.assertEqual(data["campaign"]["query_load"], convert.QUERY_LOAD)
         for qt in ("ledgers", "txpage", "txhash", "events"):
-            self.assertNotIn("verdict_1x", cold[qt])
+            self.assertNotIn("verdict_sla", cold[qt])
+            self.assertNotIn("verdict_e2e", cold[qt])
         self.assertTrue(any("verdicts omitted" in w for w in warnings))
         self.assertEqual(convert.validate_run(data, reps=2), [])
 
-    def test_unknown_profile_warns_once_per_unit(self):
+    def test_unknown_profile_costs_the_probe_verdict_only(self):
+        # The SLA floors belong to the endpoint, so an unknown dataset profile
+        # still earns every SLA verdict; only the demand-derived probe, which is
+        # keyed by profile, has nothing to judge against.
         data, warnings, _ = build_and_convert(dataset="mystery-9000")
         cold = data["queries"]["cold"]["mystery-9000-c1"]
-        self.assertNotIn("verdict_1x", cold["txhash"])
-        hits = [w for w in warnings if "no query_load profile 'mystery'" in w]
+        self.assertIn("verdict_sla", cold["txhash"])
+        self.assertNotIn("verdict_e2e", cold["txhash"])
+        hits = [w for w in warnings if "no query_load.e2e_probe profile 'mystery'" in w]
         self.assertEqual(len(hits), 2)             # one per tier, not per qtype
         self.assertEqual(convert.validate_run(data, reps=2), [])
 
-    def test_no_cell_at_the_floor(self):
-        # sac phase-3 txpage floor is 50 rps; this ladder never reaches it.
+    def test_no_cell_at_the_sla_floor(self):
+        # the txpage SLA floor is 75 rps; this ladder never reaches it.
         data, warnings, _ = build_and_convert(rates={"txpage": ["1", "2", "4"]})
-        self.assertNotIn("verdict_1x", data["queries"]["cold"][UNIT]["txpage"])
-        self.assertTrue(any("no cell at the phase-3 floor of 50 rps" in w
+        self.assertNotIn("verdict_sla", data["queries"]["cold"][UNIT]["txpage"])
+        self.assertTrue(any("no cell at the SLA floor of 75 rps" in w
                             for w in warnings))
+
+    def test_no_cell_at_the_probe_floor(self):
+        # An SLA-only txhash ladder: the SLA verdict lands, the probe's
+        # phase-3 floor of 1000 rps has no cell and says so.
+        data, warnings, _ = build_and_convert(
+            rates={"txhash": ["150", "300", "600"]})
+        cold = data["queries"]["cold"][UNIT]["txhash"]
+        self.assertEqual(cold["verdict_sla"]["rate"], "r300")
+        self.assertNotIn("verdict_e2e", cold)
+        self.assertTrue(any("E2E-probe floor of 1000 rps" in w for w in warnings))
 
 
 class RpsExplicitPhaseTests(unittest.TestCase):
     """An unpaced campaign has no pace to read a phase from — a cold-only query
     run has nothing to pace — so the manifest states the goal phase outright as
     campaign.query_phase, and the verdicts come from that."""
-    # the sac phase-1 floors x the 0.5/1/2 ladder
-    PHASE1_RATES = {"ledgers": ["0.25", "0.5", "1"], "txpage": ["7.5", "15", "30"],
-                    "txhash": ["150", "300", "600"], "events": ["1.5", "3", "6"]}
+    # A phase-1 sac ladder. sac's phase-1 demand floor is 300 rps, which IS the
+    # SLA floor, so the two txhash ladders coincide exactly and the leg sweeps
+    # one list — the case where a single cell carries both verdicts.
+    PHASE1_RATES = {"ledgers": ["12.5", "25", "50"], "txpage": ["37.5", "75", "150"],
+                    "txhash": ["150", "300", "600"], "events": ["50", "100", "200"]}
 
     @classmethod
     def setUpClass(cls):
@@ -223,23 +292,34 @@ class RpsExplicitPhaseTests(unittest.TestCase):
         self.assertEqual(self.data["campaign"]["phase"], 1)
 
     def test_verdicts_at_the_phase1_floors(self):
-        for qt, rate in (("ledgers", "r0.5"), ("txpage", "r15"),
-                         ("txhash", "r300"), ("events", "r3")):
-            self.assertEqual(self.cold[qt]["verdict_1x"]["rate"], rate)
-        # phase 1's page budget is the loosest of the three
-        self.assertEqual(self.cold["events"]["verdict_1x"]["page_budget"]["budget_ns"],
-                         333_000_000)
+        for qt, rate in (("ledgers", "r25"), ("txpage", "r75"),
+                         ("txhash", "r300"), ("events", "r100")):
+            self.assertEqual(self.cold[qt]["verdict_sla"]["rate"], rate)
+        # the latency target is a property of the endpoint and the tier, not of
+        # the phase: phase 1 is judged at the same p99 as phase 3.
+        self.assertEqual(self.cold["events"]["verdict_sla"]["threshold_ns"],
+                         40_000_000)
+
+    def test_one_cell_carries_both_verdicts_when_the_floors_coincide(self):
+        txhash = self.cold["txhash"]
+        self.assertEqual(txhash["verdict_sla"]["rate"], "r300")
+        self.assertEqual(txhash["verdict_e2e"]["rate"], "r300")
+        # Same cell, two independent judgements against two different numbers.
+        self.assertEqual(txhash["verdict_sla"]["threshold_ns"], 30_000_000)
+        self.assertEqual(txhash["verdict_e2e"]["in_rpc"]["threshold_ns"], 10_000_000)
+        self.assertTrue(txhash["verdict_sla"]["pass"])
+        self.assertTrue(txhash["verdict_e2e"]["pass"])
 
     def test_unpaced_still_earns_no_keepup_check(self):
         # The goal phase judges the READ path; it does not invent a block model
         # for a run that paced nothing.
         self.assertEqual([c["kind"] for c in self.data["checks_all"]],
-                         ["query_p99_threshold"])
+                         ["query_sla", "query_e2e_probe"])
 
     def test_neither_pace_nor_manifest_phase(self):
         data, warnings, _ = build_and_convert(close_interval="0", query_phase=0)
         self.assertNotIn("phase", data["campaign"])
-        self.assertNotIn("verdict_1x", data["queries"]["cold"][UNIT]["txhash"])
+        self.assertNotIn("verdict_sla", data["queries"]["cold"][UNIT]["txhash"])
         self.assertTrue(any("query_phase" in w and "verdicts omitted" in w
                             for w in warnings))
         self.assertEqual(convert.validate_run(data, reps=2), [])
@@ -249,25 +329,28 @@ class RpsExplicitPhaseTests(unittest.TestCase):
         # reaches here, the measured pace is the truth.
         data, _, _ = build_and_convert(close_interval="600ms", query_phase=1)
         self.assertEqual(data["campaign"]["phase"], 3)
+        # phase 3's probe floor, not phase 1's — the SLA rate is the same either way
         self.assertEqual(
-            data["queries"]["cold"][UNIT]["txhash"]["verdict_1x"]["rate"], "r1000")
+            data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]["rate"], "r1000")
 
 
 class RpsCellScanTests(unittest.TestCase):
-    """rps_cells must survive a second pass over already-converted data: the
-    verdict is a sibling of the rate cells and carries target_rps too."""
+    """rps_cells must survive a second pass over already-converted data: both
+    verdicts are siblings of the rate cells and carry target_rps too."""
     def test_verdict_is_not_a_cell(self):
         data, _, _ = build_and_convert()
         qout = data["queries"]["cold"][UNIT]["txhash"]
-        self.assertIn("verdict_1x", qout)
-        self.assertEqual(list(convert.rps_cells(qout)), ["r500", "r1000", "r2000"])
+        self.assertIn("verdict_sla", qout)
+        self.assertIn("verdict_e2e", qout)
+        self.assertEqual(list(convert.rps_cells(qout)),
+                         ["r150", "r300", "r500", "r600", "r1000", "r2000"])
         self.assertTrue(convert.has_rps_cells(data["queries"]))
 
     def test_only_rate_keys_count(self):
         cell = {"target_rps": 1.0}
         self.assertEqual(
-            list(convert.rps_cells({"r1": cell, "r0.5": cell,
-                                    "verdict_1x": cell, "setup_r1": cell})),
+            list(convert.rps_cells({"r1": cell, "r0.5": cell, "verdict_sla": cell,
+                                    "verdict_e2e": cell, "setup_r1": cell})),
             ["r1", "r0.5"])
 
 
@@ -277,24 +360,25 @@ class RpsRateTokenTests(unittest.TestCase):
     def setUpClass(cls):
         cls.data, cls.warnings, _ = build_and_convert(
             dataset="soroswap-1500", close_interval="2s",
-            rates={"ledgers": ["0.25", "0.5", "1"],
-                   "txpage": ["3.75", "7.5", "15"]})
+            rates={"ledgers": ["12.5", "25", "50"],
+                   "txpage": ["37.5", "75", "150"]})
         cls.cold = cls.data["queries"]["cold"]["soroswap-1500-c1"]
 
     def test_tokens_kept_verbatim(self):
-        self.assertEqual([k for k in self.cold["txpage"] if k != "verdict_1x"],
-                         ["r3.75", "r7.5", "r15"])
-        self.assertEqual(self.cold["txpage"]["r3.75"]["target_rps"], 3.75)
-        self.assertEqual(self.cold["ledgers"]["r0.5"]["target_rps"], 0.5)
+        self.assertEqual(rate_keys(self.cold["txpage"]),
+                         ["r37.5", "r75", "r150"])
+        self.assertEqual(self.cold["txpage"]["r37.5"]["target_rps"], 37.5)
+        self.assertEqual(self.cold["ledgers"]["r12.5"]["target_rps"], 12.5)
 
-    def test_phase1_soroswap_floors_matched(self):
-        # soroswap phase 1: txpage 3.75 rps, ledgers 0.5 rps — the 1x cell is
-        # the floor itself, wherever it sits in the ladder the leg swept.
+    def test_soroswap_sla_floors_matched(self):
+        # txpage 75 rps, ledgers 25 rps — the SLA cell is the floor itself,
+        # wherever it sits in the ladder the leg swept. The 0.5x rung is the
+        # fractional token the matching has to survive.
         self.assertEqual(self.data["campaign"]["phase"], 1)
-        self.assertEqual(self.cold["txpage"]["verdict_1x"]["rate"], "r3.75")
-        self.assertEqual(self.cold["txpage"]["verdict_1x"]["target_rps"], 3.75)
-        self.assertEqual(self.cold["ledgers"]["verdict_1x"]["rate"], "r0.5")
-        self.assertEqual(self.cold["ledgers"]["verdict_1x"]["target_rps"], 0.5)
+        self.assertEqual(self.cold["txpage"]["verdict_sla"]["rate"], "r75")
+        self.assertEqual(self.cold["txpage"]["verdict_sla"]["target_rps"], 75.0)
+        self.assertEqual(self.cold["ledgers"]["verdict_sla"]["rate"], "r25")
+        self.assertEqual(self.cold["ledgers"]["verdict_sla"]["target_rps"], 25.0)
 
     def test_clean(self):
         self.assertEqual(self.warnings, [])
@@ -326,7 +410,7 @@ class ClosedLoopStillWorksTests(unittest.TestCase):
     def test_concurrency_cells(self):
         for qt in ("ledgers", "txpage", "txhash", "events"):
             self.assertEqual(list(self.cold[qt]), ["c1", "c4"])
-            self.assertNotIn("verdict_1x", self.cold[qt])
+            self.assertNotIn("verdict_sla", self.cold[qt])
             self.assertNotIn("target_rps", self.cold[qt]["c1"])
             self.assertIn("ops_s", self.cold[qt]["c1"])
 
