@@ -724,6 +724,32 @@
           "p99_ns": 158515574
         }
       ]
+    },
+    {
+      "id": "phase2-500ledgers-pr910-d725b395-20260903T004352Z",
+      "name": "phase2-500ledgers-pr910",
+      "date": "2026-09-03",
+      "kind": "synthetic",
+      "path": "runs/phase2-500ledgers-pr910-d725b395-20260903T004352Z.json",
+      "phase": 2,
+      "machine": "c6id.8xlarge",
+      "hostname": "ip-172-31-95-112",
+      "commit": "d725b395c100f9d201c00de7cba914037029c8c3",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-5000-c1",
+          "p99_ns": 132283171
+        },
+        {
+          "unit": "custom_token-4000-c1",
+          "p99_ns": 91366657
+        },
+        {
+          "unit": "soroswap-1500-c1",
+          "p99_ns": 95020862
+        }
+      ]
     }
   ]
 }
