@@ -776,6 +776,32 @@
           "p99_ns": 96179089
         }
       ]
+    },
+    {
+      "id": "phase1-lazy-snapshot-optimization-500ledgers-6cd08c13-20260904T173853Z",
+      "name": "phase1-lazy-snapshot-optimization-500ledgers",
+      "date": "2026-09-04",
+      "kind": "synthetic",
+      "path": "runs/phase1-lazy-snapshot-optimization-500ledgers-6cd08c13-20260904T173853Z.json",
+      "phase": 1,
+      "machine": "c6id.8xlarge",
+      "hostname": "ip-172-31-70-96",
+      "commit": "6cd08c13d8cc7b59c3ecc16dc11f4370a2013a6b",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-6000-c1",
+          "p99_ns": 155352913
+        },
+        {
+          "unit": "custom_token-4000-c1",
+          "p99_ns": 85826833
+        },
+        {
+          "unit": "soroswap-1500-c1",
+          "p99_ns": 91781506
+        }
+      ]
     }
   ]
 }
