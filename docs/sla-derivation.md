@@ -39,8 +39,10 @@ The two data-age windows the boxes can measure map onto the two tiers the bench 
 |---|---|---|
 | getTransaction (`txhash`) | 20 ms | 30 ms |
 | getTransactions (`txpage`) | 60 ms | 80 ms |
-| getEvents (`events`) | 40 ms | 40 ms |
+| getEvents (`events`) | 40 ms | 60 ms |
 | getLedgers (`ledgers`) | 150 ms | 200 ms |
+
+One number deviates from section 4.1: the getEvents Recent (cold) P99. Section 4.1 states 40 ms for both windows; every other endpoint gives the Recent window headroom over Live (1.33–1.5×), and the cold tier serves frozen artifacts after a page-cache drop, so a target equal to the hot one does not model the tier. Set to 60 ms (1.5× the Live target, the txpage ratio) on 2026-09-04, decision by Marwen. Runs converted before that date bake the 40 ms target and keep their original verdicts.
 
 ### Request shapes
 

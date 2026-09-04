@@ -587,6 +587,11 @@ const summaryFmtNs = (ns) => ns >= 1e9 ? summaryTrim(ns / 1e9) + " s"
   : ns >= 1e3 ? summaryTrim(ns / 1e3) + " µs" : Math.round(ns) + " ns";
 const summaryFmtRps = (v) => (v >= 100 ? Math.round(v).toLocaleString("en-US")
   : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
+const summaryFmtNsAxis = (ns) => {
+  const t = (x) => x >= 10 ? String(Math.round(x)) : String(+x.toFixed(1));
+  return ns >= 1e9 ? t(ns / 1e9) + " s" : ns >= 1e6 ? t(ns / 1e6) + " ms"
+    : ns >= 1e3 ? t(ns / 1e3) + " µs" : Math.round(ns) + " ns";
+};
 const summaryProfileName = (D, unit) => {
   if ((D.campaign || {}).phase == null) return unit;
   const u = String(unit).toLowerCase();
@@ -615,7 +620,7 @@ function summaryQueryRows(D) {
       for (const [qt, qout] of Object.entries(t[u] || {})) {
         if (qt === "setup") continue;
         const v = slaVerdict(qout);
-        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, e2e: e2eVerdict(qout) });
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, sla: !!qout.verdict_sla, e2e: e2eVerdict(qout) });
       }
     }
     if (rows.length) out[tier] = rows;
@@ -726,9 +731,15 @@ function checkSummarySections(sdoc, group, D) {
   const heading = txt(qsecLive.querySelector(".sec-head h2"));
   check(group, "query heading names the phase load",
     heading === `Query latency at ${phase == null ? "target" : `Phase ${phase}`} load`, heading);
+  const judged = qTiers.flatMap((t) => QR[t].map((r) => ({ ...r, tier: t })))
+    .filter((r) => r.v.pass != null && r.v.threshold_ns != null);
+  const jPass = judged.filter((r) => r.v.pass).length;
   const intro = txt(qsecLive.querySelector(":scope > .sec-intro"));
-  check(group, "query intro describes client-observed p99 without a read-path goal",
+  check(group, "query intro describes client-observed p99 without an ingestion-goal word",
     /Each endpoint ran/.test(intro) && /client-observed p99 latency/.test(intro) && !/\bgoal\b/i.test(intro),
+    intro);
+  check(group, judged.length ? "query intro states the per-tier judging" : "query intro claims no judging without verdicts",
+    judged.length ? /judged against its endpoint's own per-tier target/.test(intro) : !/judged/.test(intro),
     intro);
   const subs = qsecLive.querySelectorAll("h3.method-sub").length;
   check(group, `one subsection per tier (${qTiers.length})`, subs === qTiers.length, subs + " subheads");
@@ -762,19 +773,61 @@ function checkSummarySections(sdoc, group, D) {
         }
         const latency = cell.querySelector(".q-latency");
         const rate = cell.querySelector(".q-rate");
-        check(group, `${tier} ${qt}/${unit}: p99 and rate match the source`,
-          latency && latency.tagName === "STRONG" && txt(latency) === summaryFmtNs(v.p99_ns)
+        const judgedCell = v.pass != null && v.threshold_ns != null;
+        check(group, `${tier} ${qt}/${unit}: p99, mark and rate match the source`,
+          latency && latency.tagName === "STRONG"
+          && txt(latency) === summaryFmtNs(v.p99_ns) + (judgedCell ? (v.pass ? "✓" : "▲") : "")
           && txt(rate) === summaryFmtRps(v.target_rps),
           txt(cell));
+        if (judgedCell) {
+          const sla = cell.querySelector(".q-sla");
+          check(group, `${tier} ${qt}/${unit}: target and tint match the verdict`,
+            !!sla && txt(sla) === `≤ ${summaryFmtNsAxis(v.threshold_ns)}`
+            && sla.classList.contains("warn") === !v.pass
+            && cell.classList.contains("q-miss") === !v.pass,
+            txt(cell));
+        }
       }
     }
   }
   const qTxt = txt(qsecLive);
   check(group, "no raw query-cell tokens in the section", !/\b(txhash|txpage)\b/.test(qTxt), (qTxt.match(/\b(txhash|txpage)\b/) || [""])[0]);
-  check(group, "query section has no read-goal verdict UI",
-    !/read-path goal|within the goal|Goal ≤/i.test(qTxt)
-      && !qsecLive.querySelector(".chip, .q-count"),
-    qTxt.slice(0, 180));
+  // The read-path verdict banner and per-cell marks render exactly when the
+  // run baked judged verdicts (threshold_ns + pass); early runs render the
+  // plain matrix with no verdict UI at all.
+  if (judged.length) {
+    const banner = qsecLive.querySelector(".banner");
+    check(group, "query verdict banner rendered", !!banner, "missing");
+    check(group, `banner counts ${jPass} / ${judged.length} passing legs`,
+      txt(banner && banner.querySelector(".banner-figure")) === `${jPass} / ${judged.length}`,
+      txt(banner && banner.querySelector(".banner-figure")));
+    const chip = banner && banner.querySelector(".chip");
+    check(group, "banner chip matches the verdict",
+      !!chip && (jPass === judged.length
+        ? /MEETS (SLA|TARGET)/.test(txt(chip)) && !chip.classList.contains("warn")
+        : new RegExp(`${judged.length - jPass} MISS`).test(txt(chip)) && chip.classList.contains("warn")),
+      txt(chip));
+    const legacy = judged.every((r) => !r.sla);
+    check(group, legacy ? "legacy run is judged on the provisional target, never the SLA" : "SLA run names the read-path SLA",
+      legacy ? /provisional read-path target/.test(txt(banner)) && !/read-path SLA/.test(txt(banner))
+        : /read-path SLA/.test(txt(banner)),
+      txt(banner).slice(0, 160));
+    check(group, "banner separates the read-path verdict from the E2E budget",
+      /separate from the end-to-end transaction budget/.test(txt(banner)), txt(banner).slice(0, 220));
+    const oks = qsecLive.querySelectorAll(".q-cell .cell-ok").length;
+    const warns = qsecLive.querySelectorAll(".q-cell .cell-warn").length;
+    check(group, `one pass/miss mark per judged cell (${jPass} ✓, ${judged.length - jPass} ▲)`,
+      oks === jPass && warns === judged.length - jPass, `${oks} ✓, ${warns} ▲`);
+    const slas = qsecLive.querySelectorAll(".q-sla").length;
+    check(group, `every judged cell prints its own target (${judged.length})`, slas === judged.length, slas + " targets");
+    const tinted = qsecLive.querySelectorAll("td.q-miss").length;
+    check(group, "breaching cells (and only those) are tinted",
+      tinted === judged.length - jPass, tinted + " tinted");
+  } else {
+    check(group, "no verdict UI without judged query legs",
+      !qsecLive.querySelector(".banner, .chip, .q-sla") && !qsecLive.querySelector(".q-cell .cell-ok, .q-cell .cell-warn"),
+      "verdict UI present");
+  }
   const tierNotes = [...qsecLive.querySelectorAll("h3.method-sub + .sec-intro")].map(txt);
   check(group, "tier descriptions use the concise store wording",
     tierNotes.includes("Recent ledgers are served from the live store with a warm page cache.")
@@ -783,10 +836,10 @@ function checkSummarySections(sdoc, group, D) {
   if (D.run_id === "fixture-rps-phase3") {
     const hotCell = sdoc.querySelector("#q-table-hot tbody tr:nth-child(1) td:nth-child(2)");
     const coldCell = sdoc.querySelector("#q-table-cold tbody tr:nth-child(2) td:nth-child(2)");
-    check(group, "representative hot and cold matrix values render",
-      txt(hotCell && hotCell.querySelector(".q-latency")) === "12.0 ms"
+    check(group, "representative hot and cold matrix values render, marked by their own verdicts",
+      txt(hotCell && hotCell.querySelector(".q-latency")) === "12.0 ms✓"
         && txt(hotCell && hotCell.querySelector(".q-rate")) === "300 rps"
-        && txt(coldCell && coldCell.querySelector(".q-latency")) === "640 ms"
+        && txt(coldCell && coldCell.querySelector(".q-latency")) === "640 ms▲"
         && txt(coldCell && coldCell.querySelector(".q-rate")) === "75 rps",
       `${txt(hotCell)} | ${txt(coldCell)}`);
   }

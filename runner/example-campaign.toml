@@ -89,7 +89,11 @@ query = false
 # `aws s3 sync` into $BENCH_ROOT/golden/<name>/ and reused by every later
 # campaign (rm -rf that directory to force a re-fetch). On EC2 the CLI signs
 # with the box's instance role, so a private bucket needs no credentials of its
-# own.
+# own. The pack tree must be in the packfile format the benchmarked build reads:
+# the stellar-rpc synthetic datasets carry one tree per generation
+# (<name>/packs/cold for builds before stellar-rpc#910, <name>/packs-v2/cold
+# from #910 on). The golden cache is keyed by name, not location, so a box that
+# already holds <name> from the other generation needs that directory removed.
 [[dataset]]
 name = "mydata"
 kind = "packs-s3"

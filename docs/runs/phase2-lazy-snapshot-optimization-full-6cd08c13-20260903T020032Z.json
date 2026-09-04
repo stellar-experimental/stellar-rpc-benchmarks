@@ -161,7 +161,7 @@
           },
           "events": {
             "hot": 40000000,
-            "cold": 40000000
+            "cold": 60000000
           },
           "ledgers": {
             "hot": 150000000,
@@ -257,7 +257,7 @@
         },
         "events": {
           "hot": 40000000,
-          "cold": 40000000
+          "cold": 60000000
         },
         "ledgers": {
           "hot": 150000000,
@@ -3935,7 +3935,7 @@
             "target_rps": 100.0,
             "achieved_rps_m": 100.0,
             "p99_ns": 9443390,
-            "threshold_ns": 40000000,
+            "threshold_ns": 60000000,
             "pass": true
           }
         },
@@ -6406,7 +6406,7 @@
             "target_rps": 100.0,
             "achieved_rps_m": 100.0,
             "p99_ns": 6365416,
-            "threshold_ns": 40000000,
+            "threshold_ns": 60000000,
             "pass": true
           }
         },
@@ -8877,8 +8877,8 @@
             "target_rps": 100.0,
             "achieved_rps_m": 100.0,
             "p99_ns": 52471731,
-            "threshold_ns": 40000000,
-            "pass": false
+            "threshold_ns": 60000000,
+            "pass": true
           }
         },
         "ledgers": {

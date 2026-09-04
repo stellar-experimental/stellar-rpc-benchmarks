@@ -81,7 +81,12 @@ class PubnetGoldenTests(unittest.TestCase):
 
     def test_vocabulary_and_checks(self):
         self.assertEqual(self.data["campaign"]["vocabulary"], "old")
-        self.assertEqual(self.data["checks"]["kind"], "query_p99_threshold")
+        # A fresh conversion emits the current check families; the legacy
+        # query_p99_threshold kind survives only in runs published before the
+        # 2026-09-01 SLA/E2E-budget split (SCHEMA.md).
+        self.assertEqual(self.data["checks"]["kind"], "query_sla")
+        self.assertEqual([c["kind"] for c in self.data["checks_all"]],
+                         ["query_sla", "query_e2e_probe"])
 
 
 @unittest.skipUnless(_readable_dir(SYNTH_DIR),

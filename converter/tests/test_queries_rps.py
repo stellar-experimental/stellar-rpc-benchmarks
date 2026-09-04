@@ -298,7 +298,7 @@ class RpsExplicitPhaseTests(unittest.TestCase):
         # the latency target is a property of the endpoint and the tier, not of
         # the phase: phase 1 is judged at the same p99 as phase 3.
         self.assertEqual(self.cold["events"]["verdict_sla"]["threshold_ns"],
-                         40_000_000)
+                         60_000_000)
 
     def test_one_cell_carries_both_verdicts_when_the_floors_coincide(self):
         txhash = self.cold["txhash"]

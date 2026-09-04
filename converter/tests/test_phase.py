@@ -171,7 +171,9 @@ class PhaseEmissionTests(unittest.TestCase):
         self.assertEqual(convert.SLA_P99_NS, {
             "txhash": {"hot": 20_000_000, "cold": 30_000_000},
             "txpage": {"hot": 60_000_000, "cold": 80_000_000},
-            "events": {"hot": 40_000_000, "cold": 40_000_000},
+            # events cold is 1.5x hot by decision (2026-09-04) — the Recent
+            # window gets headroom over Live like every other endpoint.
+            "events": {"hot": 40_000_000, "cold": 60_000_000},
             "ledgers": {"hot": 150_000_000, "cold": 200_000_000},
         })
         self.assertEqual(convert.E2E_IN_RPC_P99_NS, 10_000_000)
