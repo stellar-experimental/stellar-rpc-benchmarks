@@ -693,9 +693,11 @@
     ? "—"
     : (v >= 100 ? fmtInt(v) : v >= 10 ? String(+v.toFixed(1)) : String(+v.toFixed(2))) + " rps";
   // Every (tier, profile, endpoint) leg carrying an SLA result, grouped by tier
-  // and ordered endpoint-first. The summary presents its p99 and request rate
-  // without a read-path verdict. Runs converted before the SLA and E2E-budget
-  // families were split carry one verdict_1x that plays the SLA role.
+  // and ordered endpoint-first. Each leg is judged on its own verdict's
+  // threshold_ns/pass, so old and new runs alike render from what they baked.
+  // Runs converted before the SLA and E2E-budget families were split carry one
+  // verdict_1x that plays the SLA role (a flat provisional threshold);
+  // `sla` distinguishes the real per-endpoint SLA family.
   function queryVerdicts(Q, order) {
     const out = {};
     for (const tier of TIER_ORDER) {
@@ -712,7 +714,7 @@
       for (const qt of qts) for (const u of order) {
         const qout = (t[u] || {})[qt] || {};
         const v = qout.verdict_sla || qout.verdict_1x;
-        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, e2e: qout.verdict_e2e || null });
+        if (v && v.p99_ns != null) rows.push({ unit: u, qt, v, sla: !!qout.verdict_sla, e2e: qout.verdict_e2e || null });
       }
       if (rows.length) out[tier] = rows;
     }
@@ -1001,6 +1003,39 @@
     const qDuration = ((camp.config || {}).query_duration || "").trim().replace(/(\d)\s*([a-z])/i, "$1 $2");
     const qRateTxt = sel ? `Phase ${sel.phase} request rate` : "target request rate";
     const qLoadTxt = sel ? `Phase ${sel.phase} load` : "target load";
+    // Read-path verdict: every judged leg across both tiers. A leg is judged
+    // only when its own verdict baked a threshold and a pass — early runs
+    // without one keep today's plain p99 + rate cell.
+    const qJudged = qTiers.flatMap(t => QV[t].map(r => ({ ...r, tier: t })))
+      .filter(r => r.v.pass != null && r.v.threshold_ns != null);
+    const qPassN = qJudged.filter(r => r.v.pass).length;
+    const qSlaMet = qJudged.length > 0 && qPassN === qJudged.length;
+    // Legacy family: one flat provisional threshold, predating the
+    // per-endpoint SLA — named honestly so old reports don't claim the SLA.
+    const qLegacy = qJudged.length > 0 && qJudged.every(r => !r.sla);
+    const qSlaName = qLegacy ? "provisional read-path target" : "read-path SLA";
+    const qWorst = qJudged.reduce((a, r) =>
+      (!a || r.v.p99_ns / r.v.threshold_ns > a.v.p99_ns / a.v.threshold_ns) ? r : a, null);
+    const qBanner = qJudged.length ? (() => {
+      const w = qWorst;
+      const wName = `${endpointLabel(w.qt)} · ${disp(w.unit)} (${w.tier})`;
+      const sep = `This verdict covers the read path alone — it is separate from the end-to-end transaction budget${canBudget ? ` in <a href="#budget">§${secNo("budget")}</a>` : ""}.`;
+      const note = qSlaMet
+        ? `${sep} The tightest margin is ${esc(wName)}: p99 ${fmtNs(w.v.p99_ns)} — ${(w.v.p99_ns / w.v.threshold_ns * 100).toFixed(0)} % of its ${fmtNsAxis(w.v.threshold_ns)} target.`
+        : `${sep} The worst breach is ${esc(wName)}: p99 ${fmtNs(w.v.p99_ns)} against ≤ ${fmtNsAxis(w.v.threshold_ns)}.`;
+      return `<div class="banner${qSlaMet ? "" : " warn-tail"}">
+        <div class="banner-figure">${qPassN}<span class="of"> / ${qJudged.length}</span></div>
+        <div class="banner-copy">
+          <div class="lead">${qSlaMet
+            ? `All ${qJudged.length} query legs meet the ${qSlaName}: each endpoint's p99 within its own per-tier target. <span class="chip">✓ MEETS ${qLegacy ? "TARGET" : "SLA"}</span>`
+            : `${qPassN} of ${qJudged.length} query legs meet the ${qSlaName}. <span class="chip warn">▲ ${qJudged.length - qPassN} MISS</span>`}</div>
+          <p>${note}</p>
+        </div>
+      </div>`;
+    })() : "";
+    const qJudgeTxt = qJudged.length
+      ? ` Each cell is judged against its endpoint's own per-tier target${qLegacy ? "" : " from the read-path SLA"}.`
+      : "";
     const queryTableHTML = tier => {
       const rows = QV[tier];
       const cells = new Map(rows.map(r => [`${r.qt}\0${r.unit}`, r.v]));
@@ -1009,9 +1044,11 @@
           <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}</th>
           ${ORDER.map(unit => {
             const v = cells.get(`${qt}\0${unit}`);
-            return v
-              ? `<td class="q-cell"><strong class="q-latency">${esc(fmtNs(v.p99_ns))}</strong><span class="q-rate">${esc(fmtRps(v.target_rps))}</span></td>`
-              : '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';
+            if (!v) return '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';
+            const j = v.pass != null && v.threshold_ns != null;
+            const mark = j ? `<span class="${v.pass ? "cell-ok" : "cell-warn"}">${v.pass ? "✓" : "▲"}</span>` : "";
+            const sla = j ? `<span class="q-sla${v.pass ? "" : " warn"}">≤ ${esc(fmtNsAxis(v.threshold_ns))}</span>` : "";
+            return `<td class="q-cell${j && !v.pass ? " q-miss" : ""}"><strong class="q-latency">${esc(fmtNs(v.p99_ns))}${mark}</strong><span class="q-rate">${esc(fmtRps(v.target_rps))}</span>${sla}</td>`;
           }).join("")}
         </tr>`).join("");
       return `<div class="tv-scroll"><table class="data q-table" id="q-table-${tier}" style="width:100%">
@@ -1021,7 +1058,8 @@
     const queriesSection = hasQueries ? `
     <section id="queries">
       <div class="sec-head"><span class="sec-num">${secNo("queries")}</span><h2>Query latency at ${esc(qLoadTxt)}</h2></div>
-      <p class="sec-intro">Each endpoint ran${qDuration ? ` for ${esc(qDuration)}` : ""} at its workload's ${esc(qRateTxt)}. Values are client-observed p99 latency.</p>
+      <p class="sec-intro">Each endpoint ran${qDuration ? ` for ${esc(qDuration)}` : ""} at its workload's ${esc(qRateTxt)}. Values are client-observed p99 latency.${qJudgeTxt}</p>
+      ${qBanner}
       ${qTiers.map(tier => `<h3 class="method-sub">${esc(TIER_TITLE[tier] || tier)}</h3>
       <p class="sec-intro">${esc(TIER_NOTE[tier] || "")}</p>
       ${queryTableHTML(tier)}
