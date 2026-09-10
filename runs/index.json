@@ -830,6 +830,32 @@
       ]
     },
     {
+      "id": "phase2-full-packs-v3-19e3bbb4-20260910T005340Z",
+      "name": "phase2-full-packs-v3",
+      "date": "2026-09-10",
+      "kind": "synthetic",
+      "path": "runs/phase2-full-packs-v3-19e3bbb4-20260910T005340Z.json",
+      "phase": 2,
+      "machine": "c6id.8xlarge",
+      "hostname": "ip-172-31-15-248",
+      "commit": "19e3bbb42e3cba2116059f56594beca5d55a4481",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-5000-c1",
+          "p99_ns": 158122826
+        },
+        {
+          "unit": "custom_token-4000-c1",
+          "p99_ns": 97435904
+        },
+        {
+          "unit": "soroswap-1500-c1",
+          "p99_ns": 98848368
+        }
+      ]
+    },
+    {
       "id": "phase3-full-packs-v3-19e3bbb4-20260910T005436Z",
       "name": "phase3-full-packs-v3",
       "date": "2026-09-10",
