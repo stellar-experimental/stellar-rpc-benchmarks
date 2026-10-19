@@ -395,6 +395,16 @@ query = true
 			want: []string{"dataset name must match [A-Za-z0-9._-]+", "my data"},
 		},
 		{
+			name: "dot dataset name",
+			src:  strings.Replace(minimal, `name = "local"`, `name = "."`, 1),
+			want: []string{"dataset name must not be '.' or '..'", "'.'"},
+		},
+		{
+			name: "dot-dot dataset name",
+			src:  strings.Replace(minimal, `name = "local"`, `name = ".."`, 1),
+			want: []string{"dataset name must not be '.' or '..'", "'..'"},
+		},
+		{
 			name: "duplicate dataset names",
 			src: minimal + `
 [[dataset]]

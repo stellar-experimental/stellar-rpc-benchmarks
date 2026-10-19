@@ -243,6 +243,11 @@ func (d *Dataset) validate(seen map[string]bool) error {
 	if !reName.MatchString(d.Name) {
 		return fmt.Errorf("config: dataset name must match [A-Za-z0-9._-]+ (got '%s')", d.Name)
 	}
+	// The name is a path segment under golden/, scratch/ and hot/, where . and
+	// .. would resolve to the parent directories the plan pre-cleans.
+	if d.Name == "." || d.Name == ".." {
+		return fmt.Errorf("config: dataset name must not be '.' or '..' (got '%s')", d.Name)
+	}
 	if seen[d.Name] {
 		return fmt.Errorf("config: duplicate dataset name '%s'", d.Name)
 	}
