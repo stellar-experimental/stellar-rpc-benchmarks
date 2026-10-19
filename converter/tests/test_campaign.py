@@ -299,6 +299,41 @@ class RunRecordTests(unittest.TestCase):
         self.assertEqual(data["ingest_hot"]["sac-6000-c1"]["peak_rss_bytes"]["m"], 14_000_000_000)
         self.assertFalse(any("FAILED" in w or "never finished" in w for w in warnings))
 
+    def test_run_json_bundle_keeps_hostname_and_query_peak(self):
+        root = os.path.join(tempfile.mkdtemp(), "rps")
+        fixtures.build_rps_bundle(root)
+        before, _, _ = run_convert(root)
+        fixtures.to_run_records(root)
+        # Without the manifest's hostname the run.json one is the only source.
+        meta = os.path.join(root, "metadata.json")
+        with open(meta) as f:
+            m = json.load(f)
+        m.pop("hostname", None)
+        with open(meta, "w") as f:
+            json.dump(m, f)
+        data, _, _ = run_convert(root)
+        self.assertEqual(data["hostname"], "user-dev-063a")
+        unit = next(iter(data["queries"]["cold"]))
+        for tier in ("cold", "hot"):
+            self.assertEqual(data["queries"][tier][unit]["setup"]["peak_rss_bytes"],
+                             before["queries"][tier][unit]["setup"]["peak_rss_bytes"])
+
+    def test_run_json_failed_status_warns(self):
+        root = os.path.join(tempfile.mkdtemp(), "failed")
+        fixtures.build_campaign_bundle(root, paced=True)
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")
+        with open(p) as f:
+            inv = json.load(f)
+        inv["error"] = "context deadline exceeded"
+        with open(p, "w") as f:
+            json.dump(inv, f)
+        fixtures.to_run_records(root)
+        with open(os.path.join(root, "ingest-hot-sac-6000-c1-run1", "run.json")) as f:
+            self.assertEqual(json.load(f)["status"], "failed")
+        _, warnings, _ = run_convert(root)
+        self.assertTrue(any("FAILED run" in w and "ingest-hot-sac-6000-c1-run1" in w
+                            for w in warnings))
+
     def test_run_json_wins_over_invocation_json(self):
         root = self._bundle(keep_invocation=True)
         p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")

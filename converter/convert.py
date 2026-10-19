@@ -757,7 +757,7 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
     along as a secondary column. txhash also splits found/miss sub-stages; like
     the closed-loop found_c<W> rows, they are ignored here.
     """
-    entry, setup_drivers = {}, None
+    entry, setup_drivers, setup_dirs = {}, None, None
     for qt in qtypes:
         dirs = rps_run_dirs(results_dir, tier, unit, qt, reps)
         rows = read_all(dirs, f"{qt}.csv")
@@ -768,7 +768,7 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         # Every leg's driver repeats the same setup rows (they measure the same
         # open/evict prep), so the first type's leg stands for the whole cell.
         if setup_drivers is None:
-            setup_drivers = drivers
+            setup_drivers, setup_dirs = drivers, dirs
         tokens = sorted({m.group(1) for st in rows[0]
                          for m in [_TOTAL_R.match(st)] if m}, key=float)
         qout = {}
@@ -818,6 +818,12 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         v = stat([d[st]["total_ns"] for d in setup_drivers])
         v["n_items"] = setup_drivers[0][st]["n_items"]
         setup[st] = v
+    # From stellar-rpc#1066 the peak RSS is in run.json, not driver.csv; keep
+    # it in the same setup row either way.
+    peak = _peak_rss_bytes(setup_dirs, setup_drivers)
+    if peak is not None:
+        peak["n_items"] = setup.get(PEAK_RSS, {}).get("n_items", 0)
+        setup[PEAK_RSS] = peak
     entry["setup"] = setup
     return entry
 
