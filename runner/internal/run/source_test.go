@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
 // git runs a git command in dir and fails the test if it does not succeed.
@@ -208,4 +210,70 @@ func TestResolveRef(t *testing.T) {
 			t.Errorf("ResolveRef = %s, want an error naming the missing clone", got)
 		}
 	})
+}
+
+// TestDetectBenchCLI checks that a commit whose bench package declares the
+// bench-ingest command reads as the legacy CLI and a later one as the bench
+// root CLI, per commit rather than per checkout.
+func TestDetectBenchCLI(t *testing.T) {
+	repo, _ := originRepo(t)
+	pkg := filepath.Join(repo, "cmd", "stellar-rpc", "internal", "rpcv2", "bench")
+	mustMkdir(t, pkg)
+	legacy := commit(t, repo, "cmd/stellar-rpc/internal/rpcv2/bench/command.go",
+		"package bench\n\nvar c = cobra.Command{\n\tUse:   \"bench-ingest\",\n}\n")
+	root := commit(t, repo, "cmd/stellar-rpc/internal/rpcv2/bench/command.go",
+		"package bench\n\nvar c = cobra.Command{\n\tUse:   \"bench\",\n}\n")
+
+	for _, tc := range []struct {
+		commit string
+		want   plan.BenchCLI
+	}{
+		{legacy, plan.BenchCLILegacy},
+		{root, plan.BenchCLIRoot},
+	} {
+		got, err := DetectBenchCLI(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("DetectBenchCLI(%s): %v", tc.commit[:8], err)
+		}
+		if got != tc.want {
+			t.Errorf("DetectBenchCLI(%s) = %q, want %q", tc.commit[:8], got, tc.want)
+		}
+	}
+
+	if _, err := DetectBenchCLI(repo, "0000000000000000000000000000000000000000"); err == nil {
+		t.Error("DetectBenchCLI of a commit the clone lacks succeeded, want an error")
+	}
+}
+
+// TestHasQueryCLI checks the query bench probe in both CLI shapes: `query`
+// under the bench root, `bench-query` on a legacy commit.
+func TestHasQueryCLI(t *testing.T) {
+	repo, _ := originRepo(t)
+	mustMkdir(t, filepath.Join(repo, "cmd"))
+	path := "cmd/command.go"
+	ingestOnly := commit(t, repo, path, "var c = cobra.Command{Use: \"bench-ingest\"}\n")
+	legacy := commit(t, repo, path, "var c = cobra.Command{Use: \"bench-ingest\"}\nvar q = cobra.Command{Use: \"bench-query\"}\n")
+	rootOnly := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\n")
+	root := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\nvar q = cobra.Command{Use:   \"query\"}\n")
+
+	for _, tc := range []struct {
+		name   string
+		commit string
+		cli    plan.BenchCLI
+		want   bool
+	}{
+		{"legacy without bench-query", ingestOnly, plan.BenchCLILegacy, false},
+		{"legacy with bench-query", legacy, plan.BenchCLILegacy, true},
+		{"root without query", rootOnly, plan.BenchCLIRoot, false},
+		{"root with query", root, plan.BenchCLIRoot, true},
+		{"a legacy bench-query is not the root query", legacy, plan.BenchCLIRoot, false},
+	} {
+		got, err := HasQueryCLI(repo, tc.commit, tc.cli)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: HasQueryCLI = %t, want %t", tc.name, got, tc.want)
+		}
+	}
 }

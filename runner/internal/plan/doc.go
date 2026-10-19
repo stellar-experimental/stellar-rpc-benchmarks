@@ -11,7 +11,7 @@
 // Step ordering and argv follow the bench subcommands' own flags, which are a
 // cross-repo contract with stellar-rpc; a stable argv is what keeps the golden
 // plan meaningful. The query suites emit one leg per endpoint type, because
-// each type is paced at its own arrival rate and one bench-query invocation
+// each type is paced at its own arrival rate and one query bench invocation
 // drives one rate — the rates themselves arrive through [Inputs], already
 // resolved from docs/targets.json.
 package plan

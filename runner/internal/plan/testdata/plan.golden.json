@@ -4,6 +4,7 @@
   "bench_root": "/bench",
   "src": "/bench/src",
   "bin": "/bench/bin/stellar-rpc-deadbeef",
+  "bench_cli": "bench",
   "results_dir": "/bench/results/golden-deadbeef-20260101T000000Z",
   "tarball": "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",
   "steps": [
@@ -135,7 +136,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -162,7 +164,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -189,7 +192,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -216,7 +220,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -243,7 +248,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -270,7 +276,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -297,7 +304,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -324,7 +332,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -351,7 +360,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -378,7 +388,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -405,7 +416,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -432,7 +444,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -459,7 +472,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -486,7 +500,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -513,7 +528,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -540,7 +556,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -567,7 +584,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -592,7 +610,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -617,7 +636,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -642,7 +662,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -667,7 +688,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -692,7 +714,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -717,7 +740,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -742,7 +766,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -770,7 +795,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -795,7 +821,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -820,7 +847,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -845,7 +873,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -870,7 +899,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -895,7 +925,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -920,7 +951,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -945,7 +977,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -973,7 +1006,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -998,7 +1032,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1023,7 +1058,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1048,7 +1084,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1073,7 +1110,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1098,7 +1136,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1123,7 +1162,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1148,7 +1188,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1176,7 +1217,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1201,7 +1243,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1226,7 +1269,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1251,7 +1295,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1276,7 +1321,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1301,7 +1347,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1326,7 +1373,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1351,7 +1399,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1379,7 +1428,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1405,7 +1455,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1431,7 +1482,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1457,7 +1509,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1483,7 +1536,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1509,7 +1563,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1535,7 +1590,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1561,7 +1617,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1587,7 +1644,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1613,7 +1671,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1639,7 +1698,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1665,7 +1725,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1691,7 +1752,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1717,7 +1779,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1743,7 +1806,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1769,7 +1833,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1795,7 +1860,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1821,7 +1887,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1847,7 +1914,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1873,7 +1941,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1899,7 +1968,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1925,7 +1995,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1951,7 +2022,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1977,7 +2049,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -2003,7 +2076,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2029,7 +2103,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2055,7 +2130,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2081,7 +2157,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2107,7 +2184,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2133,7 +2211,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2159,7 +2238,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2185,7 +2265,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",

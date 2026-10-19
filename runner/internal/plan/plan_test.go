@@ -556,6 +556,47 @@ chunks = [4]
 	}
 }
 
+// TestBenchCLIShapes checks that every bench leg spells its command in the
+// plan's CLI shape: `bench ingest|query <tier>` by default, and
+// `bench-ingest|bench-query <tier>` for a legacy build.
+func TestBenchCLIShapes(t *testing.T) {
+	cfg, err := config.Load("testdata/campaign.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		cli     BenchCLI
+		want    BenchCLI
+		command func(group, tier string) []string
+	}{
+		{"", BenchCLIRoot, func(g, tr string) []string { return []string{"bench", g, tr} }},
+		{BenchCLIRoot, BenchCLIRoot, func(g, tr string) []string { return []string{"bench", g, tr} }},
+		{BenchCLILegacy, BenchCLILegacy, func(g, tr string) []string { return []string{"bench-" + g, tr} }},
+	} {
+		in := goldenInputs()
+		in.BenchCLI = tc.cli
+		p := Build(cfg, in)
+		if p.BenchCLI != tc.want {
+			t.Errorf("BenchCLI %q: plan records %q, want %q", tc.cli, p.BenchCLI, tc.want)
+		}
+		legs := 0
+		for _, s := range p.Steps {
+			if s.Kind != KindLeg {
+				continue
+			}
+			legs++
+			parts := strings.SplitN(s.ID, "-", 3) // ingest-cold-..., query-hot-...
+			want := tc.command(parts[0], parts[1])
+			if got := s.Argv[0][1 : 1+len(want)]; !slices.Equal(got, want) {
+				t.Errorf("BenchCLI %q: %s argv = %v, want it to start %v", tc.cli, s.ID, s.Argv[0], want)
+			}
+		}
+		if legs == 0 {
+			t.Fatalf("BenchCLI %q: the golden config planned no legs", tc.cli)
+		}
+	}
+}
+
 func TestFixtureStepGeneratesThenFreezes(t *testing.T) {
 	p := buildGolden(t)
 	ds := stepByID(t, p, "dataset-soroswap-1500")
@@ -697,7 +738,7 @@ chunks = [4]
 	for _, want := range []string{
 		"== note: query = true with ingest = cold leaves no hot DB",
 		"== build\n  $ git -C /bench/src -c advice.detachedHead=false checkout -q --detach deadbeefcafebabefeedface1234567890abcdef\n",
-		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench-ingest cold",
+		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench ingest cold",
 		"== ingest-cold-mainnet-c4-run1\n  $ rm -rf /bench/scratch/mainnet/4\n",
 		// The whole pre_clean list on one line, as the executor wipes it.
 		"== dataset-mainnet\n  $ rm -rf /bench/golden/mainnet /bench/golden/mainnet.partial\n",

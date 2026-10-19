@@ -1,12 +1,15 @@
 package run
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
 // EnsureSrc converges the persistent build clone at src onto repo: clone once,
@@ -57,4 +60,51 @@ func ResolveRef(src, ref string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("ref '%s' does not resolve to a commit in %s", ref, src)
+}
+
+// DetectBenchCLI reports the bench command shape of commit in the build clone
+// at src. A commit whose cmd/ tree still declares the `bench-ingest` command
+// predates stellar-rpc#1105 and gets plan.BenchCLILegacy; any other commit gets
+// plan.BenchCLIRoot. Reading the source rather than probing the binary is what
+// lets the plan, which is built before the binary, carry the right argv.
+func DetectBenchCLI(src, commit string) (plan.BenchCLI, error) {
+	legacy, err := declaresCommand(src, commit, "bench-ingest")
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("probe the bench command shape of %s in %s: %w", commit, src, err)
+	case legacy:
+		return plan.BenchCLILegacy, nil
+	default:
+		return plan.BenchCLIRoot, nil
+	}
+}
+
+// HasQueryCLI reports whether commit declares the query bench in shape cli:
+// `query` under the bench root, or `bench-query` on a legacy commit.
+func HasQueryCLI(src, commit string, cli plan.BenchCLI) (bool, error) {
+	use := "query"
+	if cli == plan.BenchCLILegacy {
+		use = "bench-query"
+	}
+	ok, err := declaresCommand(src, commit, use)
+	if err != nil {
+		return false, fmt.Errorf("probe the query bench of %s in %s: %w", commit, src, err)
+	}
+	return ok, nil
+}
+
+// declaresCommand reports whether commit's cmd/ tree declares a cobra command
+// with Use: "<use>".
+func declaresCommand(src, commit, use string) (bool, error) {
+	err := exec.Command("git", "-C", src, "grep", "-q", "-E",
+		`Use:[[:space:]]*"`+use+`"`, commit, "--", "cmd").Run()
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return false, nil
+	default:
+		return false, err
+	}
 }

@@ -60,8 +60,8 @@ type Options struct {
 
 // legSentinel is leg.json: the runner's own record that a leg ran to
 // completion, written whether it succeeded or not. The bench subcommands'
-// invocation.json cannot play this role — it is written by the process being
-// measured, so a process killed before it got there leaves no trace at all.
+// run.json cannot play this role: the measured process writes it, so it cannot
+// record how that process itself ended.
 //
 // ExitCode carries no omitempty on purpose: exit 0 is the success record resume
 // reads, and a sentinel without the field is not trusted (see legSentinelView).

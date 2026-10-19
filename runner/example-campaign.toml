@@ -62,7 +62,7 @@ query = false
 # a paced campaign derives the phase from it, and the two must agree.
 #phase = 1
 
-# bench-ingest cold --workers. Default 1.
+# bench ingest cold --workers. Default 1.
 #workers = 1
 
 # Cap the hot ingest at this many ledgers. Default 0 = the whole range.

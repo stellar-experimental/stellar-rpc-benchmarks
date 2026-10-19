@@ -39,6 +39,18 @@ func QueryTypes() []string {
 	return slices.Clone(queryTypes)
 }
 
+// BenchCLI is the command shape the stellar-rpc binary under test answers to.
+type BenchCLI string
+
+const (
+	// BenchCLIRoot is `bench ingest|query <tier>` with run.json, from
+	// stellar-rpc#1105 on. It is the zero value's meaning too.
+	BenchCLIRoot BenchCLI = "bench"
+	// BenchCLILegacy is the `bench-ingest|bench-query <tier>` shape of older
+	// refs, which write invocation.json.
+	BenchCLILegacy BenchCLI = "legacy"
+)
+
 // Inputs carries everything about the environment that Build would otherwise
 // have to discover for itself. Keeping them in a struct is what makes Build
 // pure: the caller resolves the ref, reads the clock, and picks the storage
@@ -57,6 +69,9 @@ type Inputs struct {
 	// QueryDuration is how long each query leg holds its rate, as a Go duration.
 	// Empty when the campaign has no query legs.
 	QueryDuration string
+	// BenchCLI is the command shape of the built commit; empty means
+	// BenchCLIRoot. The CLI probes it from the build clone (run.DetectBenchCLI).
+	BenchCLI BenchCLI
 }
 
 // Step is one unit of scheduling, skipping, and failure. Argv is a *list* of
@@ -72,8 +87,9 @@ type Step struct {
 	Argv  [][]string        `json:"argv"`  // external commands, in order
 	Env   map[string]string `json:"env,omitempty"`
 	// OutDir is a leg's --out directory: where the bench subcommand writes
-	// driver.csv and invocation.json, and what the executor inspects to decide
-	// whether a resumed leg is already finished.
+	// driver.csv and run.json (invocation.json before stellar-rpc#1066), and
+	// what the executor inspects to decide whether a resumed leg is already
+	// finished.
 	OutDir string `json:"out_dir,omitempty"`
 	// PreClean lists directories to rm -rf before the step runs, so every leg
 	// starts from a known-empty scratch or hot DB and every dataset
@@ -114,6 +130,7 @@ type Plan struct {
 	BenchRoot     string   `json:"bench_root"`
 	Src           string   `json:"src"`         // <bench_root>/src
 	Bin           string   `json:"bin"`         // <bench_root>/bin/stellar-rpc-<sha8>
+	BenchCLI      BenchCLI `json:"bench_cli"`   // bench | legacy: the argv shape of every bench leg
 	ResultsDir    string   `json:"results_dir"` // <bench_root>/results/<run_id>
 	Tarball       string   `json:"tarball"`     // /tmp/bench-results-<run_id>.tgz
 	Notes         []string `json:"notes,omitempty"`
@@ -132,6 +149,10 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 		Bin:           filepath.Join(in.BenchRoot, "bin", "stellar-rpc-"+in.Sha8),
 		ResultsDir:    filepath.Join(in.BenchRoot, "results", runID),
 		Tarball:       "/tmp/bench-results-" + runID + ".tgz",
+		BenchCLI:      in.BenchCLI,
+	}
+	if p.BenchCLI == "" {
+		p.BenchCLI = BenchCLIRoot
 	}
 
 	// Both query suites read a database this campaign builds. Query-cold needs
@@ -205,6 +226,15 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	return p
 }
 
+// benchArgv is the head of a bench leg's argv: the binary, then the command
+// path of group (ingest or query) and tier in the plan's CLI shape.
+func (p *Plan) benchArgv(group, tier string) []string {
+	if p.BenchCLI == BenchCLILegacy {
+		return []string{p.Bin, "bench-" + group, tier}
+	}
+	return []string{p.Bin, "bench", group, tier}
+}
+
 // forEachCell visits every (dataset, chunk, rep) cell in config order — the
 // loop nesting every bash suite function shares.
 func forEachCell(cfg *config.Config, visit func(d *config.Dataset, chunk, rep int)) {
@@ -227,7 +257,7 @@ func buildStep(p *Plan, in Inputs) Step {
 			{"make", "-C", p.Src, "build-libs"},
 			// build-rpc-v2 goes through the Makefile so the binary carries the
 			// repo's GOLDFLAGS (version, commit, branch, build timestamp) that
-			// `stellar-rpc-v2 version` and invocation.json report. The target
+			// `stellar-rpc-v2 version` and run.json report. The target
 			// writes ./stellar-rpc-v2 in the clone root; move it into the
 			// versioned path the campaign runs.
 			{"make", "-C", p.Src, "build-rpc-v2"},
@@ -285,14 +315,13 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		// s3` calls.
 		step.Env = map[string]string{"AWS_EC2_METADATA_DISABLED": "true"}
 		for _, chunk := range d.Chunks {
-			step.Argv = append(step.Argv, []string{
-				p.Bin, "bench-ingest", "cold",
+			step.Argv = append(step.Argv, append(p.benchArgv("ingest", "cold"),
 				"--source=bsb", "--datastore-type=S3", "--region=us-east-2",
-				"--bucket-path=" + d.Location,
-				"--start-chunk=" + strconv.Itoa(chunk), "--num-chunks=1",
-				"--cold-out-dir=" + root + ".partial",
-				"--out=" + filepath.Join(p.ResultsDir, fmt.Sprintf("golden-%s-c%d", d.Name, chunk)),
-			})
+				"--bucket-path="+d.Location,
+				"--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1",
+				"--cold-out-dir="+root+".partial",
+				"--out="+filepath.Join(p.ResultsDir, fmt.Sprintf("golden-%s-c%d", d.Name, chunk)),
+			))
 		}
 	case config.KindFixture:
 		stage := filepath.Join(in.BenchRoot, "fixture", d.Name, "ledgers")
@@ -336,14 +365,13 @@ func ingestColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, ch
 		ID:    id,
 		Kind:  KindLeg,
 		Timed: true,
-		Argv: [][]string{{
-			p.Bin, "bench-ingest", "cold",
-			"--source=pack", "--pack-dir=" + filepath.Join(datasetRoot(in, d), "ledgers"),
-			"--start-chunk=" + strconv.Itoa(chunk), "--num-chunks=1",
-			"--workers=" + strconv.Itoa(cfg.Workers),
-			"--cold-out-dir=" + scratch,
-			"--out=" + out,
-		}},
+		Argv: [][]string{append(p.benchArgv("ingest", "cold"),
+			"--source=pack", "--pack-dir="+filepath.Join(datasetRoot(in, d), "ledgers"),
+			"--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1",
+			"--workers="+strconv.Itoa(cfg.Workers),
+			"--cold-out-dir="+scratch,
+			"--out="+out,
+		)},
 		OutDir: out,
 		// The cold store is wiped before each rep, so every rep is timed
 		// against bare ground. Every rep of a cell builds the same chunk, so
@@ -365,12 +393,11 @@ func ingestHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	id := fmt.Sprintf("ingest-hot-%s-c%d-run%d", d.Name, chunk, rep)
 	out := filepath.Join(p.ResultsDir, id)
 	hot := hotDir(in, d, chunk)
-	argv := []string{
-		p.Bin, "bench-ingest", "hot",
-		"--source=pack", "--pack-dir=" + filepath.Join(datasetRoot(in, d), "ledgers"),
-		"--start-chunk=" + strconv.Itoa(chunk), "--hot-dir=" + hot,
-		"--close-interval=" + cfg.CloseInterval,
-	}
+	argv := append(p.benchArgv("ingest", "hot"),
+		"--source=pack", "--pack-dir="+filepath.Join(datasetRoot(in, d), "ledgers"),
+		"--start-chunk="+strconv.Itoa(chunk), "--hot-dir="+hot,
+		"--close-interval="+cfg.CloseInterval,
+	)
 	if cfg.HotNumLedgers > 0 {
 		argv = append(argv, "--num-ledgers="+strconv.Itoa(cfg.HotNumLedgers))
 	}
@@ -398,19 +425,18 @@ func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 		ID:    id,
 		Kind:  KindLeg,
 		Timed: true,
-		Argv: [][]string{{
-			p.Bin, "bench-query", "cold",
+		Argv: [][]string{append(p.benchArgv("query", "cold"),
 			// The store this campaign's own cold ingest built, not the cold
 			// tree banked inside the golden dataset: that one was frozen by
 			// another binary, and the on-disk index format is allowed to
 			// change under it.
-			"--cold-dir=" + cold,
-			"--start-chunk=" + strconv.Itoa(chunk), "--num-chunks=1",
-			"--types=" + qtype,
-			"--target-rps=" + targetRPS(in, d, qtype),
-			"--duration=" + in.QueryDuration,
-			"--out=" + out,
-		}},
+			"--cold-dir="+cold,
+			"--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1",
+			"--types="+qtype,
+			"--target-rps="+targetRPS(in, d, qtype),
+			"--duration="+in.QueryDuration,
+			"--out="+out,
+		)},
 		OutDir: out,
 		// The dependency is on the *last* cold-ingest rep of this cell, not on
 		// this leg's own rep number: each rep wipes and rebuilds the cold
@@ -436,14 +462,13 @@ func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chun
 	id := fmt.Sprintf("query-hot-%s-c%d-%s-run%d", d.Name, chunk, qtype, rep)
 	out := filepath.Join(p.ResultsDir, id)
 	hot := hotDir(in, d, chunk)
-	argv := []string{
-		p.Bin, "bench-query", "hot",
-		"--hot-dir=" + hot, "--chunk=" + strconv.Itoa(chunk),
-		"--types=" + qtype,
-		"--target-rps=" + targetRPS(in, d, qtype),
-		"--duration=" + in.QueryDuration,
+	argv := append(p.benchArgv("query", "hot"),
+		"--hot-dir="+hot, "--chunk="+strconv.Itoa(chunk),
+		"--types="+qtype,
+		"--target-rps="+targetRPS(in, d, qtype),
+		"--duration="+in.QueryDuration,
 		"--warmup=20",
-	}
+	)
 	// A capped hot ingest leaves a truncated DB; keep the query sampler inside
 	// what was ingested.
 	if cfg.HotNumLedgers > 0 {

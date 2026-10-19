@@ -97,11 +97,15 @@ func TestE2E(t *testing.T) {
 		mustExist(t, filepath.Join(bundle, "golden-sac-6000-c1"))
 		for _, leg := range legNames {
 			dir := filepath.Join(bundle, leg)
-			for _, f := range []string{"driver.csv", "invocation.json", "leg.json"} {
+			for _, f := range []string{"driver.csv", "run.json", "leg.json"} {
 				mustExist(t, filepath.Join(dir, f))
 			}
-			if got := readLeg(t, dir).ExitCode; got != 0 {
-				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, got)
+			l := readLeg(t, dir)
+			if l.ExitCode != 0 {
+				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, l.ExitCode)
+			}
+			if want := []string{"bench", strings.SplitN(leg, "-", 2)[0]}; len(l.Argv) < 3 || !slices.Equal(l.Argv[1:3], want) {
+				t.Errorf("%s argv = %v, want the %v command", leg, l.Argv, want)
 			}
 		}
 		for _, f := range []string{"plan.json", "binary.txt", "machine-metadata.txt", "campaign.log"} {
@@ -227,8 +231,8 @@ func TestE2E(t *testing.T) {
 			t.Errorf("failed leg.json = exit_code %d, error %q; want exit_code 1 with an error",
 				leg.ExitCode, leg.Error)
 		}
-		if inv := readFile(t, filepath.Join(failed, "invocation.json")); !strings.Contains(inv, `"error": "induced failure"`) {
-			t.Errorf("failed leg's invocation.json carries no error:\n%s", inv)
+		if inv := readFile(t, filepath.Join(failed, "run.json")); !strings.Contains(inv, `"error": "induced failure"`) {
+			t.Errorf("failed leg's run.json carries no error:\n%s", inv)
 		}
 
 		meta := readMetadata(t, bundle)
@@ -309,28 +313,51 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("LegacyCLI", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "legacy"), cfgPath)
+		sc.cli = "legacy"
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+		}
+		bundle := sc.bundle(t)
+		for _, leg := range legNames {
+			dir := filepath.Join(bundle, leg)
+			mustExist(t, filepath.Join(dir, "invocation.json"))
+			mustNotExist(t, filepath.Join(dir, "run.json"))
+			argv := readLeg(t, dir).Argv
+			if want := "bench-" + strings.SplitN(leg, "-", 2)[0]; len(argv) < 2 || argv[1] != want {
+				t.Errorf("%s argv = %v, want the legacy %s command", leg, argv, want)
+			}
+		}
+		convertBundle(t, bundle)
+	})
+
+	t.Run("QueryCampaignOnACommitWithoutTheQueryBench", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "noquery"), cfgPath)
+		sc.noQuery = true
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want a failure; output:\n%s", out)
+		}
+		if !strings.Contains(out, "has no query bench") {
+			t.Errorf("output does not name the missing query bench:\n%s", out)
+		}
+		// It fails before the build: no binary, no bundle.
+		mustNotExist(t, filepath.Join(sc.root, "bin", "stellar-rpc-"+stubSha8))
+		mustNotExist(t, filepath.Join(sc.root, "results"))
+
+		code, out = sc.run(t, "plan", sc.cfg)
+		if code != 0 || !strings.Contains(out, "has no query bench") {
+			t.Errorf("plan: exit code = %d, want 0 with a note; output:\n%s", code, out)
+		}
+	})
+
 	t.Run("ConverterOverBundle", func(t *testing.T) {
 		if happyBundle == "" {
 			t.Skip("HappyPath produced no bundle to convert")
 		}
-		python, err := exec.LookPath("python3")
-		if err != nil {
-			t.Skip("python3 not available")
-		}
-		convert := absPath(t, filepath.Join("..", "..", "..", "converter", "convert.py"))
-		outDir := t.TempDir()
-		ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, python, convert, happyBundle,
-			"--run-id", "e2e-test", "--run-name", "E2E", "--run-date", "2026-08-01",
-			"--dataset-kind", "synthetic", "--out-dir", outDir)
-		// Warnings are expected: the golden-* prep dirs are dataset preparation,
-		// and the converter says so every time it skips them.
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("convert.py: %v\n%s", err, out)
-		}
-		mustExist(t, filepath.Join(outDir, "e2e-test.json"))
+		convertBundle(t, happyBundle)
 	})
 
 	t.Run("TarFailureGatesPublish", func(t *testing.T) {
@@ -378,7 +405,33 @@ type scenario struct {
 	cfg     string   // the config path passed on the CLI
 	root    string   // BENCH_ROOT
 	control string   // STUB_RPC_CONTROL
+	cli     string   // STUB_RPC_CLI: legacy makes the clone look like a pre-#1105 commit
+	noQuery bool     // STUB_RPC_NO_QUERY: the clone's commit has no query bench
 	path    []string // dirs prepended to PATH, in order
+}
+
+// convertBundle runs the real converter over bundle and fails the test unless
+// it writes a run JSON.
+func convertBundle(t *testing.T, bundle string) {
+	t.Helper()
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available")
+	}
+	convert := absPath(t, filepath.Join("..", "..", "..", "converter", "convert.py"))
+	outDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, python, convert, bundle,
+		"--run-id", "e2e-test", "--run-name", "E2E", "--run-date", "2026-08-01",
+		"--dataset-kind", "synthetic", "--out-dir", outDir)
+	// Warnings are expected: the golden-* prep dirs are dataset preparation,
+	// and the converter says so every time it skips them.
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("convert.py: %v\n%s", err, out)
+	}
+	mustExist(t, filepath.Join(outDir, "e2e-test.json"))
 }
 
 func newScenario(t *testing.T, bin, root, cfg string) *scenario {
@@ -394,14 +447,28 @@ func newScenario(t *testing.T, bin, root, cfg string) *scenario {
 	mkdirAll(t, stubs)
 	writeExec(t, filepath.Join(stubs, "git"), fmt.Sprintf(`#!/bin/sh
 # Fake git: every rev-parse resolves to one fixed commit, and the clone,
-# fetch, reset, and checkout the runner drives are no-ops.
+# fetch, reset, and checkout the runner drives are no-ops. The bench CLI probes
+# (git grep for a command's Use: line) answer as a commit of the STUB_RPC_CLI
+# shape would: bench-ingest and bench-query exist only on a legacy commit, the
+# root query command only on a bench one, and STUB_RPC_NO_QUERY removes the
+# query bench from either.
+grep=
 for arg in "$@"; do
 	if [ "$arg" = rev-parse ]; then
 		echo %s
 		exit 0
 	fi
+	if [ "$arg" = grep ]; then grep=1; fi
 done
-exit 0
+[ -n "$grep" ] || exit 0
+for arg in "$@"; do
+	case $arg in
+	*'"bench-ingest"'*) [ "${STUB_RPC_CLI:-}" = legacy ]; exit ;;
+	*'"bench-query"'*) [ "${STUB_RPC_CLI:-}" = legacy ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
+	*'"query"'*) [ "${STUB_RPC_CLI:-}" != legacy ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
+	esac
+done
+exit 1
 `, stubCommit))
 	writeExec(t, filepath.Join(stubs, "make"), fmt.Sprintf(`#!/bin/sh
 # Fake make: build-rpc-v2 installs the stub binary where the real target leaves
@@ -476,6 +543,8 @@ func (sc *scenario) env() []string {
 		"BENCH_ROOT="+sc.root,
 		"STUB_RPC_CONTROL="+sc.control,
 		"STUB_RPC_COMMIT="+stubCommit,
+		"STUB_RPC_CLI="+sc.cli,
+		"STUB_RPC_NO_QUERY="+map[bool]string{true: "1"}[sc.noQuery],
 	)
 }
 

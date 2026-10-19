@@ -2,8 +2,9 @@
 
 The operations side of this repo: a config-driven runner that produces the result
 bundles the rest of the pipeline consumes. It treats **stellar-rpc as a black box** — it
-clones it, builds the requested ref, and drives its `bench-ingest` / `bench-query`
-subcommands; it never lives inside a stellar-rpc checkout and never modifies one.
+clones it, builds the requested ref, and drives its `bench ingest` / `bench query`
+subcommands (`bench-ingest` / `bench-query` on refs before stellar-rpc#1105); it never
+lives inside a stellar-rpc checkout and never modifies one.
 
 ```
 runner/
@@ -119,11 +120,11 @@ ignored: a misspelled key fails in the first second of the campaign, naming itse
 | `ref` | string | `feature/full-history` | Git ref to benchmark, resolved inside `$BENCH_ROOT/src` after fetching `repo`'s branches and tags. Built into `$BENCH_ROOT/bin/stellar-rpc-<sha>`. |
 | `ingest` | string | — (required) | `cold` \| `hot` \| `both` \| `none`. |
 | `query` | bool | — (required) | Run the query suites after ingest. Both suites read a database this campaign builds — query-cold the cold store the cell's cold ingest leaves behind, query-hot the hot DB the hot ingest leaves behind — so `query = true` is refused unless `ingest` is `cold` or `both`; with `cold` the runner notes that it is running the cold suite only. With `runs > 1` the query legs read the store the **last** rep built. Each suite emits **one leg per endpoint type** — see [Query load](#query-load-open-loop-paced-rps) and [Which database the query legs read](#which-database-the-query-legs-read). |
-| `close_interval` | string | `"0"` | `bench-ingest hot --close-interval`: a Go duration (`"2s"`, `"1s"`, `"600ms"`) for phase pacing, or `"0"` for unpaced catch-up. |
+| `close_interval` | string | `"0"` | `bench ingest hot --close-interval`: a Go duration (`"2s"`, `"1s"`, `"600ms"`) for phase pacing, or `"0"` for unpaced catch-up. |
 | `runs` | int ≥ 1 | `5` | Repetitions per (dataset, chunk) cell. |
-| `query_duration` | string | `"60s"` | `bench-query --duration`: how long each query leg holds its paced load. A Go duration greater than zero. |
+| `query_duration` | string | `"60s"` | `bench query --duration`: how long each query leg holds its paced load. A Go duration greater than zero. |
 | `phase` | int | `0` (unset) | Which goal phase's RPS floors the query legs target: `1` \| `2` \| `3`. Consulted only when `query = true`. Left unset, the phase is derived by matching `close_interval` against a phase block time in [`docs/targets.json`](../docs/targets.json); set both and they must agree. |
-| `workers` | int ≥ 1 | `1` | `bench-ingest cold --workers`. |
+| `workers` | int ≥ 1 | `1` | `bench ingest cold --workers`. |
 | `hot_num_ledgers` | int ≥ 0 | `0` | Cap the hot ingest at this many ledgers; `0` = the whole range. A capped ingest also caps the hot query sampler (`--sample-ledgers`), so it stays inside what was ingested. |
 | `publish_uri` | string | `""` | Object-storage root to publish the finished bundle to; must be `gs://` or `s3://`. Empty = no publish. The bundle lands at `<publish_uri>/<run_id>/`. |
 | `[[dataset]]` | table array | — (at least one) | See below. |
@@ -254,7 +255,7 @@ Each leg then sweeps `query_load.ladder` (`0.5×`, `1×`, `2×`) around its floo
 the result as one `--target-rps` list, so a `getEvents` leg reads:
 
 ```
-$ …/stellar-rpc-<sha> bench-query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
+$ …/stellar-rpc-<sha> bench query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
     --types=events --target-rps=50,100,200 --duration=60s --out=…
 ```
 
@@ -262,13 +263,13 @@ For the SLA family the ladder IS the SLA's load tiers: `0.5×` is Light (250 rps
 `1×` is Standard (500 rps, the sustained watermark), and `2×` is Heavy (1000 rps). The
 verdict is read at `1×`; the other two rungs are the context around it.
 
-**`txhash` carries both families in one leg.** `bench-query --target-rps` already takes a
+**`txhash` carries both families in one leg.** `bench query --target-rps` already takes a
 list and emits one cell per rate, so no second leg is needed: the ladder is the union of
 the two, deduplicated and sorted ascending. For sac at phase 3 the SLA ladder is
 `150,300,600` and the demand ladder is `500,1000,2000`, so the leg reads:
 
 ```
-$ …/stellar-rpc-<sha> bench-query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
+$ …/stellar-rpc-<sha> bench query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
     --types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s --out=…
 ```
 
@@ -301,15 +302,24 @@ golden tree, by both ingest tiers, because pack files are format-stable XDR.
 
 The runner requires a stellar-rpc ref whose bench subcommands:
 
-- **write `invocation.json` into every `--out` directory** — stellar-rpc#907 (`6f35679f`)
-  or any descendant of it. Older refs produce bundles without per-invocation manifests,
-  which the converter accepts but with weaker provenance (see `SCHEMA.md` § Inputs).
-- **accept `bench-query --target-rps` and `--duration`** — the open-loop query model. The
+- **write `run.json` or `invocation.json` into every `--out` directory** — stellar-rpc#907
+  (`6f35679f`) or any descendant of it; #1066 renamed the file to `run.json`. Older refs
+  produce bundles without per-invocation manifests, which the converter accepts but with
+  weaker provenance (see `SCHEMA.md` § Inputs).
+- **accept `--target-rps` and `--duration` on the query bench** — the open-loop query model. The
   runner emits neither `--query-concurrency` nor `--iters` any more, so a ref that only
   knows the closed-loop flags fails every query leg immediately.
 
 Both are on `feature/full-history`, so the default `ref = "feature/full-history"`
 satisfies the floor.
+
+The command shape follows the built commit. Before planning, the runner greps the build
+clone's `cmd/` tree at that commit for the `bench-ingest` command declaration
+(`run.DetectBenchCLI`): a commit that has it gets `bench-ingest` / `bench-query` argv
+(`"bench_cli": "legacy"` in `plan.json`), any other gets `bench ingest` / `bench query`
+(`"bench_cli": "bench"`). The `fixture` dataset kind is the exception: it always runs
+`bench-ingest fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a
+`fixture` subcommand, so only the stub binary of the e2e test answers it.
 
 ## `$BENCH_ROOT` layout
 
@@ -372,8 +382,9 @@ id — and records a zero exit code with no error. Anything else — a recorded 
 corrupt sentinel, a sentinel naming another leg, a leg killed before the sentinel was
 written — is wiped and re-run, because a half-written leg silently kept would corrupt the
 aggregates the converter computes. Bundles produced by the bash runner have no `leg.json`, so those
-fall back to the old heuristic: both `invocation.json` and `driver.csv` present, with no
-`error` field in the manifest.
+fall back to the old heuristic: a manifest (`run.json`, else `invocation.json`) and
+`driver.csv` present, with no `error` field in the manifest and, in a `run.json`, a
+status other than `running`.
 
 Add `--dry-run` to print the plan against the real directory, annotated with the legs a
 resume would skip, before committing hours to it. That combination is the one dry run
@@ -424,7 +435,7 @@ contract:
 │                                            #   the converter skips these and warns
 ├── ingest-{cold,hot}-<dataset>-c<chunk>-run<R>/
 │   ├── driver.csv, hot.csv, *.csv           # ← written by stellar-rpc bench subcommands
-│   ├── invocation.json                      # ← written by stellar-rpc bench subcommands
+│   ├── run.json                             # ← written by stellar-rpc bench subcommands (invocation.json before #1066)
 │   └── leg.json                             # ← written by the campaign CLI (THIS repo)
 └── query-{cold,hot}-<dataset>-c<chunk>-<type>-run<R>/
     └── …same shape…                         #   one dir per endpoint type: ledgers,
@@ -454,10 +465,16 @@ Who owns what:
   `schema_version`, `id`, `argv`, `exit_code`, `started_at`, `finished_at`,
   `duration_ns`, and `error` on a failure. It is the runner's completion sentinel and the
   reason resume no longer has to infer completion from the presence of
-  `invocation.json` — that file is written *by the process being measured*, so a process
+  `run.json` / `invocation.json` — that file is written *by the process being measured*, so a process
   killed before it got there leaves no trace at all. The converter ignores it today.
+- **`run.json`** (each `--out` dir, `schemaVersion` 2, camelCase keys) — written by
+  stellar-rpc's `bench ingest` / `bench query` (`run_record.go`, stellar-rpc#1066) when
+  the run starts and again when it stops. It has the fields `invocation.json` has, plus
+  `status` (`running` until the run ends, then `ok` or `failed`), `peakRssBytes` (which
+  replaces the `driver.csv` `peak_rss_bytes` row), `gomaxprocs`, `numCpu`, and the query
+  bench's `extra` facts.
 - **`invocation.json`** (each `--out` dir, `schemaVersion` 1, camelCase keys) — written by
-  stellar-rpc's `bench-ingest` / `bench-query` (`invocation.go`, merged as
+  stellar-rpc's `bench-ingest` / `bench-query` before #1066 (`invocation.go`, merged as
   stellar-rpc#907). Binary identity (`binary.{commitHash, branch, version,
   buildTimestamp}`), the resolved subcommand flags, `hostname`,
   `startedAt`/`finishedAt`, and — on a failed run only — an `error` field. It is written

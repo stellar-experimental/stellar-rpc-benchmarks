@@ -36,6 +36,7 @@ func TestRunCmdDryRunTouchesNothing(t *testing.T) {
 	for _, want := range []string{
 		"dry run: printing commands only",
 		"using placeholder sha 'deadbeef' in paths",
+		"and assuming the bench CLI (bench ingest/bench query)",
 		"== build\n",
 		filepath.Join(benchRoot, "bin", "stellar-rpc-deadbeef"),
 		// close_interval is phase 1's block time, so the query legs pace

@@ -162,12 +162,13 @@ func planCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	src := filepath.Join(benchRoot, "src")
 	if sha, err := run.ResolveRef(src, cfg.Ref); err == nil {
 		in.BuiltCommit, in.Sha8 = sha, sha[:8]
+		in.BenchCLI = probeBenchCLI(cfg, src, sha, stdout)
 	} else {
 		// Planning fetches nothing, so the ref may not resolve locally yet:
 		// plan with the ref itself and a placeholder sha in derived paths.
 		in.BuiltCommit, in.Sha8 = cfg.Ref, placeholderSha
-		fmt.Fprintf(stdout, "== note: ref '%s' is not resolvable in %s — using placeholder sha '%s' in paths\n",
-			cfg.Ref, src, placeholderSha)
+		fmt.Fprintf(stdout, "== note: ref '%s' is not resolvable in %s — using placeholder sha '%s' in paths "+
+			"and assuming the %s CLI (%s)\n", cfg.Ref, src, placeholderSha, plan.BenchCLIRoot, benchCLIDescription(plan.BenchCLIRoot))
 	}
 	plan.Build(cfg, in).Print(stdout)
 	return 0

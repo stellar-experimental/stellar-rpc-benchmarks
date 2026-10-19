@@ -248,6 +248,41 @@ func TestClassifyLegDir(t *testing.T) {
 			want: legPartial,
 		},
 		{
+			name: "run.json ok and driver.csv",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"ok"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want: legComplete,
+		},
+		{
+			name: "run.json records an error",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"failed","error":"boom"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want:       legFailedEarlier,
+			wantReason: "boom",
+		},
+		{
+			name: "run.json still running",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"running"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want:       legPartial,
+			wantReason: "run.json records a run that never finished",
+		},
+		{
+			name: "run.json wins over invocation.json",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"ok"}`)
+				mustWrite(t, filepath.Join(dir, "invocation.json"), `{"schemaVersion":1,"error":"stale"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want: legComplete,
+		},
+		{
 			name: "unreadable invocation.json",
 			setup: func(t *testing.T, dir string) {
 				mustWrite(t, filepath.Join(dir, "invocation.json"), `{"schemaVersion":`)
