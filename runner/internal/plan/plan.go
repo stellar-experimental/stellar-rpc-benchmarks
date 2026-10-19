@@ -235,6 +235,12 @@ func (p *Plan) benchArgv(group, tier string) []string {
 	return []string{p.Bin, "bench", group, tier}
 }
 
+// goldenOutDir is the --out of the untimed cold backfill that prepares one
+// chunk of a bsb-s3 dataset.
+func goldenOutDir(p *Plan, d *config.Dataset, chunk int) string {
+	return filepath.Join(p.ResultsDir, fmt.Sprintf("golden-%s-c%d", d.Name, chunk))
+}
+
 // forEachCell visits every (dataset, chunk, rep) cell in config order — the
 // loop nesting every bash suite function shares.
 func forEachCell(cfg *config.Config, visit func(d *config.Dataset, chunk, rep int)) {
@@ -306,8 +312,14 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		step.Dataset.Location = d.Location
 		step.Needs = []string{"build"}
 		// Unlike a fetch, a cold backfill cannot resume: restarting on top of a
-		// half-written pack tree would double-write it.
+		// half-written pack tree would double-write it. Each chunk's --out goes
+		// too: a resumed campaign re-runs the backfill into the bundle that
+		// holds the earlier attempt's out dirs, and the bench CLI refuses a
+		// non-empty --out (stellar-rpc#1066).
 		step.PreClean = []string{root, root + ".partial"}
+		for _, chunk := range d.Chunks {
+			step.PreClean = append(step.PreClean, goldenOutDir(p, d, chunk))
+		}
 		// AWS_EC2_METADATA_DISABLED is set on these commands only: without it
 		// the SDK signs requests with the machine's IAM role and the public
 		// bucket 403s, but setting it for the whole campaign would also hide
@@ -320,7 +332,7 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 				"--bucket-path="+d.Location,
 				"--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1",
 				"--cold-out-dir="+root+".partial",
-				"--out="+filepath.Join(p.ResultsDir, fmt.Sprintf("golden-%s-c%d", d.Name, chunk)),
+				"--out="+goldenOutDir(p, d, chunk),
 			))
 		}
 	case config.KindFixture:

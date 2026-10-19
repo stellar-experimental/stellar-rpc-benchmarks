@@ -554,6 +554,12 @@ chunks = [4]
 	if !slices.Contains(ds.Argv[0], "--cold-out-dir=/bench/golden/mainnet.partial") {
 		t.Errorf("argv = %v, want it to materialize into the .partial root", ds.Argv[0])
 	}
+	// A resumed campaign re-runs the backfill into the same bundle, and the
+	// bench CLI refuses a non-empty --out, so the chunk's out dir is wiped too.
+	out := "/bench/results/n-deadbeef-20260101T000000Z/golden-mainnet-c4"
+	if !slices.Contains(ds.Argv[0], "--out="+out) || !slices.Contains(ds.PreClean, out) {
+		t.Errorf("argv = %v, pre_clean = %v; want --out=%s in both", ds.Argv[0], ds.PreClean, out)
+	}
 }
 
 // TestBenchCLIShapes checks that every bench leg spells its command in the
@@ -650,7 +656,8 @@ kind = "bsb-s3"
 location = "s3://bucket/prefix"
 chunks = [4]
 `), goldenInputs())
-	want = []string{"/bench/golden/mainnet", "/bench/golden/mainnet.partial"}
+	want = []string{"/bench/golden/mainnet", "/bench/golden/mainnet.partial",
+		"/bench/results/n-deadbeef-20260101T000000Z/golden-mainnet-c4"}
 	if got := stepByID(t, bsb, "dataset-mainnet").PreClean; !slices.Equal(got, want) {
 		t.Errorf("bsb-s3 pre_clean = %v, want %v — a cold backfill cannot resume", got, want)
 	}
@@ -741,7 +748,7 @@ chunks = [4]
 		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench ingest cold",
 		"== ingest-cold-mainnet-c4-run1\n  $ rm -rf /bench/scratch/mainnet/4\n",
 		// The whole pre_clean list on one line, as the executor wipes it.
-		"== dataset-mainnet\n  $ rm -rf /bench/golden/mainnet /bench/golden/mainnet.partial\n",
+		"== dataset-mainnet\n  $ rm -rf /bench/golden/mainnet /bench/golden/mainnet.partial /bench/results/n-deadbeef-20260101T000000Z/golden-mainnet-c4\n",
 		"  $ mv /bench/golden/mainnet.partial /bench/golden/mainnet\n",
 		"  $ campaign publish /bench/results/n-deadbeef-20260101T000000Z gs://bucket/results\n",
 	} {
