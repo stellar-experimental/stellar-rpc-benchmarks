@@ -41,14 +41,14 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
   "build": { "commit": "<sha>", "branch": "<name>", "go": "…", "rust": "…",
              "version": "v20.3.1-412-g…", "build_timestamp": "…" },
              // commit/branch/go/rust from the machine-metadata `repo:` line; when a
-             // campaign bundle carries invocation.json, its binary.{commitHash,
+             // campaign bundle carries run.json (or the older invocation.json), its binary.{commitHash,
              // branch,version,buildTimestamp} override commit/branch and add
              // version/build_timestamp (the structured binary identity wins).
   "hardware": {                            // optional; verbatim from metadata.json (campaign bundles)
     "instance_type": "m6id.2xlarge", "instance_id": "i-…",  // instance_* omitted off EC2
     "uname": "Linux 6.8.0-1015-aws x86_64", "cpus": 8, "mem_total_kb": 32000000  // mem_total_kb omitted on non-Linux
   },
-  "hostname": "user-dev-063a",             // optional; metadata.json (fallback: invocation.json)
+  "hostname": "user-dev-063a",             // optional; metadata.json (fallback: run.json, else invocation.json)
   "dataset": {
     "kind": "pubnet" | "synthetic",
     "description": "<human sentence>",
@@ -72,7 +72,7 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
     "close_interval_ns": 2000000000,       // optional; ledger close schedule in ns, 0 = unpaced.
                                            //   From metadata.json campaign.close_interval (a Go
                                            //   duration, e.g. "2s"/"600ms"/"0"), else the hot
-                                           //   invocation.json --close-interval flag. Absent when
+                                           //   run.json/invocation.json --close-interval flag. Absent when
                                            //   no manifest records it (legacy bundles).
     "phase": 1,                            // optional; campaign layout only. The campaign's GOAL
                                            //   phase: the phase whose block time equals
@@ -231,13 +231,14 @@ renderers apply; anything unrecognized renders generically.
 ### Peak RSS
 
 `peak_rss_bytes` is the process **peak resident-set size in BYTES** — a memory
-high-water-mark gauge, not a latency distribution. The `driver.csv` carries it as
-a `peak_rss_bytes` row whose gauge value is replicated across the `*_ns` columns;
-the converter reads that value and stores it as a plain `V` (median/min/max/`r`
+high-water-mark gauge, not a latency distribution. A leg dir's `run.json`
+(stellar-rpc#1066) carries it as `peakRssBytes`; older bundles carry it in
+`driver.csv` as a `peak_rss_bytes` row whose gauge value is replicated across the
+`*_ns` columns. The converter reads `run.json` first, else that row, and stores it as a plain `V` (median/min/max/`r`
 across the reps) that is a **sibling of `driver`**, not one of its `StageAgg`
 rows — the ns column names do not apply to a byte gauge, so it is deliberately not
-shoehorned into `StageAgg`. Present iff the `peak_rss_bytes` row appears in every
-rep's `driver.csv`; omitted entirely otherwise (never zero-filled). Compare it
+shoehorned into `StageAgg`. Present iff every rep has a value from one of the
+two sources; omitted entirely otherwise (never zero-filled). Compare it
 against the box RAM (`hardware.mem_total_kb`, or the parsed `machine.mem`) to read
 memory headroom. The viewer surfaces it in the synthetic report's dataset section
 (peak RSS per profile, cold and hot, against the box's RAM ceiling); a run without

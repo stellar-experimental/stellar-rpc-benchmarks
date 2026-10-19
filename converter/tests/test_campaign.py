@@ -277,6 +277,75 @@ class InvocationSchemaTests(unittest.TestCase):
                             for w in warnings))
 
 
+class RunRecordTests(unittest.TestCase):
+    """run.json (stellar-rpc#1066) replaces invocation.json and carries the peak
+    RSS that driver.csv used to; the converter reads either."""
+
+    def _bundle(self, keep_invocation=False):
+        root = os.path.join(tempfile.mkdtemp(), "runrec")
+        fixtures.build_campaign_bundle(root, paced=True)
+        fixtures.to_run_records(root, keep_invocation=keep_invocation)
+        return root
+
+    def test_run_json_bundle_converts_like_invocation_bundle(self):
+        data, warnings, _ = run_convert(self._bundle())
+        self.assertEqual(convert.validate_run(data, reps=2), [])
+        self.assertEqual(data["build"]["commit"], fixtures.COMMIT)
+        self.assertEqual(data["build"]["version"], fixtures.VERSION)
+        self.assertEqual(data["campaign"]["close_interval_ns"], 2_000_000_000)
+        cold = data["ingest_cold"]["sac-6000-c1"]
+        self.assertEqual(cold["peak_rss_bytes"]["r"], [20_000_000_000, 40_000_000_000])
+        self.assertNotIn("peak_rss_bytes", cold["driver"])
+        self.assertEqual(data["ingest_hot"]["sac-6000-c1"]["peak_rss_bytes"]["m"], 14_000_000_000)
+        self.assertFalse(any("FAILED" in w or "never finished" in w for w in warnings))
+
+    def test_run_json_wins_over_invocation_json(self):
+        root = self._bundle(keep_invocation=True)
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")
+        with open(p) as f:
+            inv = json.load(f)
+        inv["error"] = "stale record that run.json supersedes"
+        with open(p, "w") as f:
+            json.dump(inv, f)
+        _, warnings, _ = run_convert(root)
+        self.assertFalse(any("FAILED run" in w for w in warnings))
+
+    def test_run_json_peak_wins_over_driver_row(self):
+        root = os.path.join(tempfile.mkdtemp(), "both")
+        fixtures.build_campaign_bundle(root, paced=True)
+        for r, peak in ((1, 7), (2, 9)):
+            d = os.path.join(root, f"ingest-cold-sac-6000-c1-run{r}")
+            with open(os.path.join(d, "run.json"), "w") as f:
+                json.dump({"schemaVersion": 2, "status": "ok", "peakRssBytes": peak}, f)
+        data, _, _ = run_convert(root)
+        self.assertEqual(data["ingest_cold"]["sac-6000-c1"]["peak_rss_bytes"]["r"], [7, 9])
+
+    def test_partial_peak_rss_is_dropped_with_a_warning(self):
+        root = self._bundle()
+        p = os.path.join(root, "ingest-cold-sac-6000-c1-run2", "run.json")
+        with open(p) as f:
+            rec = json.load(f)
+        del rec["peakRssBytes"]
+        with open(p, "w") as f:
+            json.dump(rec, f)
+        data, warnings, _ = run_convert(root)
+        self.assertNotIn("peak_rss_bytes", data["ingest_cold"]["sac-6000-c1"])
+        self.assertTrue(any("peak RSS present in 1/2 runs" in w
+                            and "ingest-cold-sac-6000-c1-run2" in w for w in warnings))
+
+    def test_running_status_warns(self):
+        root = self._bundle()
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "run.json")
+        with open(p) as f:
+            rec = json.load(f)
+        rec["status"] = "running"
+        with open(p, "w") as f:
+            json.dump(rec, f)
+        _, warnings, _ = run_convert(root)
+        self.assertTrue(any("never finished" in w and "ingest-hot-sac-6000-c1-run1" in w
+                            for w in warnings))
+
+
 class LegacyBundleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -295,23 +295,45 @@ def load_campaign_manifest(results_dir):
         return None
 
 
+RUN_RECORD = "run.json"
+INVOCATION = "invocation.json"
+
+
+def run_manifest_path(d):
+    """The bench subcommand's manifest in leg dir d: run.json (stellar-rpc#1066)
+    when present, else the older invocation.json, else None."""
+    for name in (RUN_RECORD, INVOCATION):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def load_invocations(results_dir):
-    """[(dirname, invocation.json dict)] for every per-invocation dir that has one.
-    A failed run also writes invocation.json, with an `error` field (stellar-rpc#907):
-    its CSVs are partial, so a bundle carrying one is loudly suspect."""
+    """[(dirname, manifest dict)] for every per-invocation dir that has a
+    run.json or an invocation.json. A failed run records an `error` field
+    (stellar-rpc#907), and a run.json still at status `running` is a process
+    that died mid-run: either way its CSVs are partial, so a bundle carrying
+    one is loudly suspect."""
     out = []
-    for p in sorted(glob.glob(os.path.join(results_dir, "*", "invocation.json"))):
+    for d in sorted(glob.glob(os.path.join(results_dir, "*"))):
+        p = run_manifest_path(d) if os.path.isdir(d) else None
+        if p is None:
+            continue
         try:
             with open(p) as f:
                 inv = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             warn(f"could not read {os.path.relpath(p, results_dir)} ({e}); ignoring")
             continue
-        d = os.path.basename(os.path.dirname(p))
+        name = os.path.basename(d)
         if inv.get("error"):
-            warn(f"{d} is a FAILED run ({inv['error']!r}); its CSVs are partial "
+            warn(f"{name} is a FAILED run ({inv['error']!r}); its CSVs are partial "
                  "— re-run or drop that leg before publishing this conversion")
-        out.append((d, inv))
+        elif inv.get("status") == "running":
+            warn(f"{name} never finished (run.json status running); its CSVs are partial "
+                 "— re-run or drop that leg before publishing this conversion")
+        out.append((name, inv))
     return out
 
 
@@ -333,7 +355,7 @@ def hardware_into_machine(machine, hw):
 
 
 def _normalize_binary(b):
-    """invocation.json binary identity keyed snake_case regardless of producer:
+    """run.json / invocation.json binary identity keyed snake_case regardless of producer:
     stellar-rpc#907 writes camelCase (commitHash, buildTimestamp); earlier
     drafts of the schema used snake_case. Accept both spellings."""
     renames = {"commitHash": "commit_hash", "buildTimestamp": "build_timestamp"}
@@ -341,7 +363,7 @@ def _normalize_binary(b):
 
 
 def resolve_binary(build, metadata, invocations):
-    """Merge invocation.json binary identity into build (authoritative over the
+    """Merge the leg manifests' binary identity into build (authoritative over the
     machine-metadata `repo:` parse) and warn on any commit mismatch."""
     binaries = [_normalize_binary(inv["binary"]) for _, inv in invocations if inv.get("binary")]
     commits = {b["commit_hash"] for b in binaries if b.get("commit_hash")}
@@ -565,7 +587,7 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
         "tp_events": stat([counts["events"] / (d["events_total"]["total_ns"] / NS) for d in drivers]),
     }
     out = {"driver": driver_out, "files": files_out, "derived": derived}
-    peak = _peak_rss_bytes(drivers)
+    peak = _peak_rss_bytes(dirs, drivers)
     if peak is not None:
         out["peak_rss_bytes"] = peak
     return out
@@ -575,18 +597,47 @@ PACE_LAG = "pace_lag"
 PEAK_RSS = "peak_rss_bytes"
 
 
-def _peak_rss_bytes(drivers):
+def _peak_rss_bytes(dirs, drivers):
     """Peak resident-set-size gauge (bytes), aggregated across runs, or None.
 
-    The driver.csv `peak_rss_bytes` row is a single gauge the harness replicates
-    across the duration columns — read `total_ns` as the byte value. Stored as a
-    plain V (bytes), a sibling of `driver`, not a StageAgg: it is a memory
-    high-water mark, not a latency distribution, and the ns column names do not
-    apply to it. Present in every run or omitted entirely (never zero-filled).
+    drivers is read_all(dirs, "driver.csv"). Each run's value is run.json's
+    peakRssBytes (stellar-rpc#1066) when its dir has one, else the older
+    driver.csv `peak_rss_bytes` row, a single gauge replicated across the
+    duration columns whose `total_ns` is the byte value. Stored as a plain V
+    (bytes), a sibling of `driver`, not a StageAgg: it is a memory high-water
+    mark, not a latency distribution. Present in every run or omitted entirely
+    (never zero-filled).
     """
-    if not all(PEAK_RSS in d for d in drivers):
+    present = [d for d in dirs if os.path.isfile(os.path.join(d, "driver.csv"))]
+    values = []
+    for d, drv in zip(present, drivers):
+        v = _run_record_peak_rss(d)
+        if v is None and PEAK_RSS in drv:
+            v = drv[PEAK_RSS]["total_ns"]
+        values.append(v)
+    found = [v for v in values if v is not None]
+    if not found:
         return None
-    return stat([d[PEAK_RSS]["total_ns"] for d in drivers])
+    if len(found) < len(values):
+        missing = [os.path.basename(d) for d, v in zip(present, values) if v is None]
+        warn(f"peak RSS present in {len(found)}/{len(values)} runs; omitting it "
+             f"(missing in {', '.join(missing)})")
+        return None
+    return stat(values)
+
+
+def _run_record_peak_rss(d):
+    """peakRssBytes from d/run.json, or None when there is no run.json or it
+    records no peak (the field is omitted where /proc is unreadable)."""
+    p = os.path.join(d, RUN_RECORD)
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p) as f:
+            v = json.load(f).get("peakRssBytes")
+    except (json.JSONDecodeError, OSError):
+        return None
+    return v if isinstance(v, int) and v > 0 else None
 
 
 def _pace_lag_agg(drivers, unit):
@@ -635,7 +686,7 @@ def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
     wall = "chunk_wall" if vocab == "old" else "run_wall"
     derived = {"ledgers_per_s": stat([counts["ledgers"] / (d[wall]["total_ns"] / NS) for d in drivers])}
     out = {"driver": driver_out, "phases": phases_out, "derived": derived}
-    peak = _peak_rss_bytes(drivers)
+    peak = _peak_rss_bytes(dirs, drivers)
     if peak is not None:
         out["peak_rss_bytes"] = peak
     return out

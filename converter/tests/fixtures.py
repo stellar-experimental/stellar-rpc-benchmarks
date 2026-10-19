@@ -175,6 +175,38 @@ def _write_invocation(d, subcommand, close_interval):
         json.dump(inv, f, indent=2)
 
 
+def to_run_records(root, keep_invocation=False):
+    """Rewrite every leg dir under root the way stellar-rpc#1066 writes it: the
+    invocation.json becomes a run.json (schemaVersion 2, status, peakRssBytes)
+    and the driver.csv peak_rss_bytes row moves into it. keep_invocation leaves
+    the invocation.json beside the run.json."""
+    for name in os.listdir(root):
+        d = os.path.join(root, name)
+        inv_path = os.path.join(d, "invocation.json")
+        if not os.path.isfile(inv_path):
+            continue
+        with open(inv_path) as f:
+            rec = json.load(f)
+        rec["schemaVersion"] = 2
+        rec["command"] = rec["command"].replace("bench-ingest", "bench ingest").replace(
+            "bench-query", "bench query")
+        rec["status"] = "failed" if rec.get("error") else "ok"
+        driver = os.path.join(d, "driver.csv")
+        if os.path.isfile(driver):
+            with open(driver) as f:
+                lines = f.readlines()
+            kept = [ln for ln in lines if not ln.startswith("peak_rss_bytes,")]
+            for ln in lines:
+                if ln.startswith("peak_rss_bytes,"):
+                    rec["peakRssBytes"] = int(ln.split(",")[3])
+            with open(driver, "w") as f:
+                f.writelines(kept)
+        with open(os.path.join(d, "run.json"), "w") as f:
+            json.dump(rec, f, indent=2)
+        if not keep_invocation:
+            os.remove(inv_path)
+
+
 def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
                           drop_pace=None, close_interval=None, queries=False):
     """Create a campaign-layout bundle under `root`. `drop_pace` = {unit: {runs}}
