@@ -9,7 +9,8 @@ step, no server: the numbers live in git and the site is just HTML/JS reading th
 
 ## What this is
 
-The bench suite (`stellar-rpc bench-ingest cold|hot`, `bench-query cold|hot`) runs in
+The bench suite (`stellar-rpc bench ingest cold|hot`, `bench query cold|hot`; `bench-ingest` /
+`bench-query` on refs before stellar-rpc#1105) runs in
 campaigns on an AWS NVMe devbox (`m6id.2xlarge`), driven by the config-driven runner in
 [`runner/`](runner/) (see "Run a campaign" below). Each campaign is several configurations
 × 5 fresh-process runs; every run writes CSVs
