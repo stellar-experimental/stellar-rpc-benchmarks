@@ -334,6 +334,38 @@ class RpsExplicitPhaseTests(unittest.TestCase):
             data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]["rate"], "r1000")
 
 
+class RpsPhase3bTests(unittest.TestCase):
+    """Phase 3b is a label in the phases table: a 900 ms pace or a manifest
+    query_phase of "3b" selects it, and its E2E-probe floor is the table's
+    fourth entry, not a number computed from the label."""
+
+    def test_900ms_pace_is_phase_3b(self):
+        data, _, _ = build_and_convert(close_interval="900ms")
+        self.assertEqual(data["campaign"]["phase"], "3b")
+        # The provisional flag rides along with the baked targets.
+        p3b = [p for p in data["campaign"]["phase_targets"] if p["phase"] == "3b"][0]
+        self.assertIs(p3b["provisional"], True)
+        self.assertNotIn("provisional", [p for p in data["campaign"]["phase_targets"] if p["phase"] == 3][0])
+        self.assertEqual(data["campaign"]["close_interval_ns"], 900_000_000)
+        # 3b copies phase 3's sac probe floor, 1000 rps.
+        self.assertEqual(
+            data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]["rate"], "r1000")
+        self.assertEqual(convert.validate_run(data, reps=2), [])
+
+    def test_manifest_query_phase_3b(self):
+        data, _, _ = build_and_convert(close_interval="0", query_phase="3b")
+        self.assertEqual(data["campaign"]["phase"], "3b")
+        self.assertIn("verdict_e2e", data["queries"]["cold"][UNIT]["txhash"])
+
+    def test_old_numeric_query_phase_still_converts(self):
+        # Bundles written before 3b carry query_phase as a JSON number.
+        data, warnings, _ = build_and_convert(close_interval="0", query_phase=3)
+        self.assertEqual(data["campaign"]["phase"], 3)
+        self.assertEqual(
+            data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]["rate"], "r1000")
+        self.assertFalse(any("verdicts omitted" in w for w in warnings))
+
+
 class RpsCellScanTests(unittest.TestCase):
     """rps_cells must survive a second pass over already-converted data: both
     verdicts are siblings of the rate cells and carry target_rps too."""

@@ -123,7 +123,7 @@ ignored: a misspelled key fails in the first second of the campaign, naming itse
 | `close_interval` | string | `"0"` | `bench ingest hot --close-interval`: a Go duration (`"2s"`, `"1s"`, `"600ms"`) for phase pacing, or `"0"` for unpaced catch-up. |
 | `runs` | int ≥ 1 | `5` | Repetitions per (dataset, chunk) cell. |
 | `query_duration` | string | `"60s"` | `bench query --duration`: how long each query leg holds its paced load. A Go duration greater than zero. |
-| `phase` | int | `0` (unset) | Which goal phase's RPS floors the query legs target: `1` \| `2` \| `3`. Consulted only when `query = true`. Left unset, the phase is derived by matching `close_interval` against a phase block time in [`docs/targets.json`](../docs/targets.json); set both and they must agree. |
+| `phase` | int or string | `0` (unset) | Which goal phase's RPS floors the query legs target: a label of the `docs/targets.json` phases table, `1` \| `2` \| `3` \| `"3b"`. Consulted only when `query = true`. Left unset, the phase is derived by matching `close_interval` against a phase block time in [`docs/targets.json`](../docs/targets.json); set both and they must agree. |
 | `workers` | int ≥ 1 | `1` | `bench ingest cold --workers`. |
 | `hot_num_ledgers` | int ≥ 0 | `0` | Cap the hot ingest at this many ledgers; `0` = the whole range. A capped ingest also caps the hot query sampler (`--sample-ledgers`), so it stays inside what was ingested. |
 | `publish_uri` | string | `""` | Object-storage root to publish the finished bundle to; must be `gs://` or `s3://`. Empty = no publish. The bundle lands at `<publish_uri>/<run_id>/`. |
@@ -246,8 +246,10 @@ Three things decide a leg's rate ladder:
 - **Dataset profile.** The dataset name minus a trailing `-<per-ledger tx count>` is the
   `query_load.e2e_probe.floors_rps` key: `sac-6000` → `sac`, `soroswap-1500` → `soroswap`. A
   dataset whose name has no profile is refused before the campaign starts, naming both.
-- **Phase.** `phase = 1|2|3`, or derived from a `close_interval` that is a phase's block
-  time (`"2s"` → phase 1, `"1s"` → 2, `"600ms"` → 3). When both are set they must agree —
+- **Phase.** `phase = 1|2|3|"3b"`, or derived from a `close_interval` that is a phase's block
+  time (`"2s"` → phase 1, `"1s"` → 2, `"600ms"` → 3, `"900ms"` → 3b). A phase is a label of
+  the phases table, not a number: the floors arrays follow the table's order, and
+  `query_phase` in `metadata.json` is a JSON number for phases 1-3 and a string after. When both are set they must agree —
   pacing ledgers at one phase while measuring another phase's read targets is not a phase
   run. A query campaign with neither is refused.
 

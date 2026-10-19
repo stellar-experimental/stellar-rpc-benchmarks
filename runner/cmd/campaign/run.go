@@ -66,7 +66,7 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	run.Notef(stdout, "dry run: printing commands only — nothing is built, downloaded, or executed")
 	run.Notef(stdout, "source: %s @ %s → %s (the build clone is not touched)", cfg.Repo, cfg.Ref, src)
 	if cfg.Query {
-		run.Notef(stdout, "query load: phase %d floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
+		run.Notef(stdout, "query load: phase %s floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
 	}
 
 	in := plan.Inputs{
@@ -293,7 +293,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	if cfg.Query {
 		// Which floors the query legs were paced at is the first thing anyone
 		// reading this bundle six months later will want to know.
-		run.Notef(out, "query load: phase %d floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
+		run.Notef(out, "query load: phase %s floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
 	}
 
 	hostname, _ := os.Hostname()

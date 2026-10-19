@@ -877,6 +877,25 @@ const FIXTURE_CHECKS = {
     check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
   },
 
+  /* Phase 3b: a label rather than a number. The run must select the 3b entry
+     of the phases table and render it by name, never as phase 3. */
+  "fixture-rps-phase3b": (doc, group, D) => {
+    check(group, "the run names its goal phase", D.campaign.phase === "3b", String(D.campaign.phase));
+    const es = qEntries(D);
+    check(group, "every endpoint × profile × tier carries an SLA verdict",
+      es.length > 0 && es.every((e) => e.qout.verdict_sla),
+      es.filter((e) => !e.qout.verdict_sla).length + " without a verdict");
+    const body = txt(doc.getElementById("report"));
+    check(group, "the report labels the phase 3b", /Phase 3b/.test(body), body.slice(0, 200));
+    check(group, "the 3b ingest target is stated as provisional", /105 ms \(provisional\)/.test(body),
+      (body.match(/.{0,60}105 ms.{0,60}/) || [""])[0]);
+    // 3b states no E2E budget, so nothing may be derived from one.
+    const sel = (D.campaign.phase_targets || []).find((p) => p.phase === "3b");
+    check(group, "the 3b goal carries no E2E budget", !!sel && sel.e2e_budget_ns == null, JSON.stringify(sel));
+    check(group, "no NaN or negative budget anywhere in the report", !/NaN|-\d+(\.\d+)? ?(ms|s)\b/.test(body),
+      (body.match(/.{0,40}(NaN|-\d+(\.\d+)? ?(ms|s)\b).{0,40}/) || [""])[0]);
+  },
+
   /* No phase floor: the run is paced off-phase and names no query_phase, so the
      converter emits r-cells with no verdict at all. The section must still
      render and must judge every row on that endpoint and tier's own latency
@@ -992,6 +1011,16 @@ for (const file of fixtureFiles) {
   check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
   checkSummarySections(sdoc, group + " summary", D);
+  if (D.run_id === "fixture-rps-phase3b") {
+    const stext = txt(sreport);
+    check(group, "summary: no E2E budget section for a phase without a budget", !sdoc.getElementById("budget"), "budget section rendered");
+    check(group, "summary: no NaN", !/NaN/.test(stext), (stext.match(/.{0,40}NaN.{0,40}/) || [""])[0]);
+    check(group, "summary: the 3b goal is stated as provisional", /105 ms \(provisional\)/.test(stext),
+      (stext.match(/.{0,60}105 ms.{0,60}/) || [""])[0]);
+  }
+  if (D.run_id === "fixture-rps-phase3") {
+    check(group, "summary: a confirmed phase goal is not marked provisional", !/\(provisional\)/.test(txt(sreport)), "provisional shown");
+  }
   sm.window.close();
 }
 

@@ -30,7 +30,7 @@ func goldenInput(t *testing.T) MetadataInput {
 		ConfigFile:  "campaign.toml",
 		RunID:       "golden-deadbeef-20260101T000000Z",
 		BuiltCommit: "deadbeefcafebabefeedface1234567890abcdef",
-		QueryPhase:  1,
+		QueryPhase:  "1",
 		Hardware: Hardware{
 			InstanceType: "i4i.4xlarge",
 			InstanceID:   "i-0123456789abcdef0",
@@ -101,7 +101,7 @@ func TestMetadataQuirks(t *testing.T) {
 func TestMetadataQueryNo(t *testing.T) {
 	in := goldenInput(t)
 	in.Cfg.Query = false
-	in.QueryPhase = 0
+	in.QueryPhase = ""
 	got := marshal(t, in)
 	if !strings.Contains(got, `"query": "no"`) {
 		t.Errorf("query = false should render \"no\":\n%s", got)
@@ -110,6 +110,20 @@ func TestMetadataQueryNo(t *testing.T) {
 	// one.
 	if strings.Contains(got, "query_phase") {
 		t.Errorf("a campaign with no query legs must omit query_phase:\n%s", got)
+	}
+}
+
+// TestMetadataQueryPhaseLabel checks that query_phase keeps its pre-3b JSON
+// number for phases 1-3 and is a string for a label such as 3b.
+func TestMetadataQueryPhaseLabel(t *testing.T) {
+	in := goldenInput(t)
+	in.QueryPhase = "3"
+	if got := marshal(t, in); !strings.Contains(got, `"query_phase": 3`) {
+		t.Errorf("phase 3 should render as a number:\n%s", got)
+	}
+	in.QueryPhase = "3b"
+	if got := marshal(t, in); !strings.Contains(got, `"query_phase": "3b"`) {
+		t.Errorf("phase 3b should render as a string:\n%s", got)
 	}
 }
 

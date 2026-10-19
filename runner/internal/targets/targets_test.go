@@ -50,13 +50,16 @@ func TestLoadRepoTargets(t *testing.T) {
 	if got := tg.QueryLoad.E2EProbe.InRPCP99Ns; got != 10000000 {
 		t.Errorf("e2e_probe in_rpc_p99_ns = %d, want 10000000", got)
 	}
-	if len(tg.Phases) != 3 {
-		t.Fatalf("phases = %d, want 3", len(tg.Phases))
+	if len(tg.Phases) != 4 {
+		t.Fatalf("phases = %d, want 4", len(tg.Phases))
 	}
-	for i, want := range []int64{2000000000, 1000000000, 600000000} {
+	for i, want := range []int64{2000000000, 1000000000, 600000000, 900000000} {
 		if got := tg.Phases[i].BlockTimeNs; got != want {
-			t.Errorf("phase %d block_time_ns = %d, want %d", tg.Phases[i].Phase, got, want)
+			t.Errorf("phase %s block_time_ns = %d, want %d", tg.Phases[i].Phase, got, want)
 		}
+	}
+	if got := tg.PhaseLabels(); got != "1, 2, 3, 3b" {
+		t.Errorf("phase labels = %q, want the table order 1, 2, 3, 3b", got)
 	}
 }
 
@@ -64,38 +67,41 @@ func TestRates(t *testing.T) {
 	tg := loadRepo(t)
 	cases := []struct {
 		profile string
-		phase   int
+		phase   PhaseLabel
 		qtype   string
 		want    []float64
 	}{
 		// getTransaction sweeps ONE leg carrying both ladders: the SLA one
 		// (150, 300, 600 in every phase and profile) unioned with the
 		// demand-derived E2E-probe one, deduplicated and sorted.
-		{"sac", 1, "txhash", []float64{150, 300, 600}},        // e2e floor 300 == the SLA floor
-		{"sac", 2, "txhash", []float64{150, 250, 300, 500, 600, 1000}},
-		{"sac", 3, "txhash", []float64{150, 300, 500, 600, 1000, 2000}},
-		{"custom_token", 1, "txhash", []float64{100, 150, 200, 300, 400, 600}},
-		{"custom_token", 2, "txhash", []float64{150, 200, 300, 400, 600, 800}},
-		{"custom_token", 3, "txhash", []float64{150, 300, 600, 1200}},
-		{"soroswap", 1, "txhash", []float64{37.5, 75, 150, 300, 600}},
-		{"soroswap", 3, "txhash", []float64{150, 300, 600}},   // e2e floor 300 again
+		{"sac", "1", "txhash", []float64{150, 300, 600}},        // e2e floor 300 == the SLA floor
+		{"sac", "2", "txhash", []float64{150, 250, 300, 500, 600, 1000}},
+		{"sac", "3", "txhash", []float64{150, 300, 500, 600, 1000, 2000}},
+		{"custom_token", "1", "txhash", []float64{100, 150, 200, 300, 400, 600}},
+		{"custom_token", "2", "txhash", []float64{150, 200, 300, 400, 600, 800}},
+		{"custom_token", "3", "txhash", []float64{150, 300, 600, 1200}},
+		{"soroswap", "1", "txhash", []float64{37.5, 75, 150, 300, 600}},
+		{"soroswap", "3", "txhash", []float64{150, 300, 600}},   // e2e floor 300 again
+		// 3b copies phase 3's floors; it is the table's fourth entry, not 3+1.
+		{"sac", "3b", "txhash", []float64{150, 300, 500, 600, 1000, 2000}},
+		{"soroswap", "3b", "txhash", []float64{150, 300, 600}},
 		// The other three answer to the SLA family alone: the mix share of
 		// 500 rps, the same ladder in every phase and every profile.
-		{"sac", 3, "ledgers", []float64{12.5, 25, 50}},
-		{"sac", 2, "txpage", []float64{37.5, 75, 150}},
-		{"sac", 1, "events", []float64{50, 100, 200}},
-		{"soroswap", 1, "txpage", []float64{37.5, 75, 150}},
-		{"soroswap", 3, "events", []float64{50, 100, 200}},
-		{"custom_token", 2, "ledgers", []float64{12.5, 25, 50}},
+		{"sac", "3", "ledgers", []float64{12.5, 25, 50}},
+		{"sac", "2", "txpage", []float64{37.5, 75, 150}},
+		{"sac", "1", "events", []float64{50, 100, 200}},
+		{"soroswap", "1", "txpage", []float64{37.5, 75, 150}},
+		{"soroswap", "3", "events", []float64{50, 100, 200}},
+		{"custom_token", "2", "ledgers", []float64{12.5, 25, 50}},
 	}
 	for _, tc := range cases {
-		t.Run(fmt.Sprintf("%s-phase%d-%s", tc.profile, tc.phase, tc.qtype), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s-phase%s-%s", tc.profile, tc.phase, tc.qtype), func(t *testing.T) {
 			got, err := tg.Rates(tc.profile, tc.phase, tc.qtype)
 			if err != nil {
 				t.Fatalf("Rates = error %v, want nil", err)
 			}
 			if !slices.Equal(got, tc.want) {
-				t.Errorf("Rates(%s, %d, %s) = %v, want %v", tc.profile, tc.phase, tc.qtype, got, tc.want)
+				t.Errorf("Rates(%s, %s, %s) = %v, want %v", tc.profile, tc.phase, tc.qtype, got, tc.want)
 			}
 		})
 	}
@@ -106,14 +112,14 @@ func TestRatesRejects(t *testing.T) {
 	cases := []struct {
 		name    string
 		profile string
-		phase   int
+		phase   PhaseLabel
 		qtype   string
 		want    []string
 	}{
-		{"unknown profile", "pubnet", 1, "txhash", []string{"no query_load.e2e_probe profile 'pubnet'", "sac"}},
-		{"unknown query type", "sac", 1, "blocks", []string{"unknown query type 'blocks'", "ledgers"}},
-		{"phase below the range", "sac", 0, "txhash", []string{"phase 0 has no floors", "phases 1-3"}},
-		{"phase above the range", "sac", 4, "txhash", []string{"phase 4 has no floors", "phases 1-3"}},
+		{"unknown profile", "pubnet", "1", "txhash", []string{"no query_load.e2e_probe profile 'pubnet'", "sac"}},
+		{"unknown query type", "sac", "1", "blocks", []string{"unknown query type 'blocks'", "ledgers"}},
+		{"unset phase", "sac", "", "txhash", []string{"phase '' has no floors", "1, 2, 3, 3b"}},
+		{"phase not in the table", "sac", "4", "txhash", []string{"phase '4' has no floors", "1, 2, 3, 3b"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,17 +159,18 @@ func TestMatchPhase(t *testing.T) {
 	tg := loadRepo(t)
 	cases := []struct {
 		ns   int64
-		want int
+		want PhaseLabel
 	}{
-		{2000000000, 1},
-		{1000000000, 2},
-		{600000000, 3},
-		{0, 0},
-		{500000000, 0}, // near phase 3, but not it
+		{2000000000, "1"},
+		{1000000000, "2"},
+		{600000000, "3"},
+		{900000000, "3b"},
+		{0, ""},
+		{500000000, ""}, // near phase 3, but not it
 	}
 	for _, tc := range cases {
 		if got := tg.MatchPhase(tc.ns); got != tc.want {
-			t.Errorf("MatchPhase(%d) = %d, want %d", tc.ns, got, tc.want)
+			t.Errorf("MatchPhase(%d) = %q, want %q", tc.ns, got, tc.want)
 		}
 	}
 }

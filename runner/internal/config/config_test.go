@@ -104,8 +104,8 @@ chunks = [0]
 	if cfg.QueryDuration != "90s" {
 		t.Errorf("query_duration = %q, want 90s", cfg.QueryDuration)
 	}
-	if cfg.Phase != 2 {
-		t.Errorf("phase = %d, want 2", cfg.Phase)
+	if cfg.Phase != "2" {
+		t.Errorf("phase = %q, want 2", cfg.Phase)
 	}
 	if cfg.Workers != 4 {
 		t.Errorf("workers = %d, want 4", cfg.Workers)
@@ -159,8 +159,8 @@ func TestLoadMinimalConfigAppliesDefaults(t *testing.T) {
 	if cfg.QueryDuration != DefaultQueryDuration {
 		t.Errorf("query_duration = %q, want %q", cfg.QueryDuration, DefaultQueryDuration)
 	}
-	if cfg.Phase != 0 {
-		t.Errorf("phase = %d, want 0 (unset)", cfg.Phase)
+	if cfg.Phase != "" {
+		t.Errorf("phase = %q, want empty (unset)", cfg.Phase)
 	}
 	if cfg.Workers != 1 {
 		t.Errorf("workers = %d, want 1", cfg.Workers)
@@ -190,6 +190,7 @@ func TestLoadAcceptedConfigs(t *testing.T) {
 		{"sub-minute query_duration", withTop(`query_duration = "30s"`)},
 		{"compound query_duration", withTop(`query_duration = "2m30s"`)},
 		{"explicit phase", withTop("phase = 3")},
+		{"explicit phase label", withTop(`phase = "3b"`)},
 		{"chunk id zero", strings.Replace(minimal, "chunks = [7]", "chunks = [0, 1]", 1)},
 		{"fixture whole chunk", `
 name = "f"
@@ -355,14 +356,14 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{"query_duration must be a positive Go duration", "-30s"},
 		},
 		{
-			name: "phase above the goal range",
-			src:  withTop("phase = 4"),
-			want: []string{"phase must be 1|2|3", "4"},
-		},
-		{
 			name: "negative phase",
 			src:  withTop("phase = -1"),
-			want: []string{"phase must be 1|2|3", "-1"},
+			want: []string{"phase label", "-1"},
+		},
+		{
+			name: "malformed phase label",
+			src:  withTop(`phase = "phase3"`),
+			want: []string{"phase label", "phase3"},
 		},
 		{
 			name: "zero workers",

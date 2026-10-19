@@ -375,7 +375,7 @@ def build_rps_bundle(root, reps=2, close_interval="600ms", dataset=RPS_DATASET,
     mean_page = dict({q: RPS_MEAN_PAGE_NS for q in rates}, **(mean_page or {}))
     paced = close_interval not in ("0", "")
     if query_phase == "auto":
-        query_phase = {"2s": 1, "1s": 2, "600ms": 3}.get(close_interval, 0)
+        query_phase = {"2s": 1, "1s": 2, "600ms": 3, "900ms": "3b"}.get(close_interval, 0)
     unit = f"{dataset}-c1"
     os.makedirs(root, exist_ok=True)
     for r in range(1, reps + 1):

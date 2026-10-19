@@ -117,7 +117,9 @@ def ladder(profile, qt, phase):
     steps = C.QUERY_LOAD["ladder"]
     rates = [C.SLA_FLOORS_RPS[qt] * x for x in steps]
     if qt == "txhash":
-        rates += [C.E2E_FLOORS_RPS[profile][phase - 1] * x for x in steps]
+        # The floors follow the phases table order; a phase is a label.
+        idx = [str(p["phase"]) for p in C.PHASE_TARGETS].index(str(phase))
+        rates += [C.E2E_FLOORS_RPS[profile][idx] * x for x in steps]
     return [rate_token(r) for r in sorted(set(rates))]
 
 
@@ -391,6 +393,18 @@ SPECS = [
         "close_interval": "600ms",   # phase 3's block time
         "phase": 3,
         "ladder_phase": 3,
+        "check": check_phase3,
+    },
+    {
+        # Phase 3b is a label, not a number: a 900 ms pace selects it, and it
+        # carries phase 3's floors, so the phase-3 verdicts hold unchanged.
+        "id": "fixture-rps-phase3b",
+        "name": "Fixture — open-loop query load (phase 3b)",
+        "units": ["sac-6000-c1", "soroswap-1500-c1"],
+        "reps": 2,
+        "close_interval": "900ms",   # phase 3b's block time
+        "phase": "3b",
+        "ladder_phase": "3b",
         "check": check_phase3,
     },
     {

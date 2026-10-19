@@ -826,6 +826,8 @@
     const PH = phaseState(D);
     const sel = PH && PH.sel;
     const goalNs = sel ? sel.ingest_p99_target_ns : null;
+    // A provisional goal (phase 3b) says so wherever its value is stated.
+    const goalTxt = goalNs != null ? fmtNsAxis(goalNs) + (sel.provisional ? " (provisional)" : "") : "";
     const blockNs = sel ? sel.block_time_ns : null;
     const closeNs = camp.close_interval_ns || 0;
 
@@ -885,13 +887,13 @@
       const w = goalWorst ? ING[goalWorst].driver.ingest_total : null;
       const note = goalMet
         ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. The chart below compares the profiles; <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a> shows where the time goes.`
-        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
+        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${goalTxt} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
       return `<div class="banner${goalMet ? "" : " warn-tail"}">
         <div class="banner-figure">${goalPass}<span class="of"> / ${units.length}</span></div>
         <div class="banner-copy">
           <div class="lead">${goalMet
-            ? `All profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip">✓ MEETS GOAL</span>`
-            : `${goalPass} of ${units.length} profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip warn">▲ ${units.length - goalPass} MISS</span>`}</div>
+            ? `All profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(goalTxt)}. <span class="chip">✓ MEETS GOAL</span>`
+            : `${goalPass} of ${units.length} profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(goalTxt)}. <span class="chip warn">▲ ${units.length - goalPass} MISS</span>`}</div>
           <p>${note}</p>
         </div>
       </div>`;
@@ -1090,7 +1092,7 @@
       <div class="sec-head"><span class="sec-num">${secNo("goal")}</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
       ${banner}
       ${figHTML("fig31", `Fig ${+secNo("goal")}.1`, "Ingestion latency p99 by workload profile", "fig31-legend",
-        `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${fmtNsAxis(goalNs)}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
+        `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${goalTxt}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
       <p class="sec-intro" id="goal-readout"></p>
     </section>
 
@@ -1155,7 +1157,7 @@
         { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end (derived)" },
       ];
       budgetChart("fig11-body", [
-        { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
+        { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${goalTxt}`,
           segs: segs(goalNs, false, sendNs, getNs),
           tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)", getNs, "getTransaction (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
@@ -1176,7 +1178,7 @@
         ["network — submission request", fmtNsAxis(netSendNs), fmtNsAxis(netSendNs), "assumed constant (half the round trip)"],
         ["sendTransaction", fmtNsAxis(sendNs), MEASURED_TX ? fmtNs(txRunNs) : fmtNsAxis(sendNs), MEASURED_TX ? "allocated → measured" : "estimate"],
         [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
-        ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
+        ["ingestion (p99)", goalTxt + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
         ["network — getTransaction round trip", fmtNsAxis(netReadNs), fmtNsAxis(netReadNs), "assumed constant"],
         ["getTransaction", fmtNsAxis(getNs), MEASURED_GET ? `${fmtNs(getRunNs)} (${disp(MEASURED_GET.unit)})` : fmtNsAxis(getNs), MEASURED_GET ? "allocated → measured" : "estimate"],
         ["end-to-end (derived)", fmtNs(e2eGoal), fmtNs(e2eRun), "derived"],
@@ -1198,7 +1200,7 @@
         };
       });
       goalChart("fig31-body", rows, {
-        targetNs: goalNs, targetLabel: goalNs ? `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` : "",
+        targetNs: goalNs, targetLabel: goalNs ? `${goalTxt} — Phase ${sel.phase} ingestion target (p99)` : "",
         blockNs: blockNs, blockLabel: blockNs ? `${fmtNsAxis(blockNs)} — block time` : "",
       });
       legend("fig31-legend", [
@@ -1210,7 +1212,7 @@
         units.map(u => {
           const it = ING[u].driver.ingest_total;
           const base = [disp(u), fmtNs(it.p50.m), fmtNs(it.p90.m), fmtNs(it.p99.m), fmtNs(it.max.m)];
-          if (goalNs) base.push(fmtNsAxis(goalNs), it.p99.m <= goalNs ? "✓ PASS" : "▲ MISS");
+          if (goalNs) base.push(goalTxt, it.p99.m <= goalNs ? "✓ PASS" : "▲ MISS");
           return base;
         }));
       const readout = document.getElementById("goal-readout");
@@ -1256,7 +1258,7 @@
         }).filter(Boolean);
         const reflines = [];
         if (PHASE_PICK === "end to end") {
-          if (goalNs) reflines.push({ ns: goalNs, label: `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` });
+          if (goalNs) reflines.push({ ns: goalNs, label: `${goalTxt} — Phase ${sel.phase} ingestion target (p99)` });
           if (blockNs) reflines.push({ ns: blockNs, label: `${fmtNsAxis(blockNs)} — block time`, block: true });
         }
         dotRangeChart("fig42-body", rows, { linear: true, reflines });

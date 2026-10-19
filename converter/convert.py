@@ -459,7 +459,7 @@ SLA_FLOORS_RPS = QUERY_LOAD["sla"]["floors_rps"]
 SLA_P99_NS = QUERY_LOAD["sla"]["p99_ns"]
 
 # Family 2 — the E2E-budget probe: getTransaction alone, at the demand-derived
-# floors of work item 856 (per profile, indexed by phase), answering only for
+# floors of work item 856 (per profile, in phases-table order), answering only for
 # its in-RPC p99, which is its slice of the end-to-end lifecycle budget. The
 # scheduled p99 of that cell is reported and never judged.
 E2E_IN_RPC_P99_NS = QUERY_LOAD["e2e_probe"]["in_rpc_p99_ns"]
@@ -468,13 +468,12 @@ E2E_FLOORS_RPS = QUERY_LOAD["e2e_probe"]["floors_rps"]
 PHASE_TARGETS = _TARGETS["phases"]
 
 # Fill the ingest-slice target for any phase that does not state one (phase 2).
-# The value comes from the end-to-end budget via the formula above.
+# The value comes from the end-to-end budget via the formula above, so a phase
+# with no budget (3b) gets no derived target.
 for _p in PHASE_TARGETS:
-    _p.setdefault(
-        "ingest_p99_target_ns",
-        ingest_p99_target(_p["block_time_ns"], _p["e2e_budget_ns"],
-                          _p.get("block_count", 2)),
-    )
+    if "ingest_p99_target_ns" not in _p and _p.get("e2e_budget_ns"):
+        _p["ingest_p99_target_ns"] = ingest_p99_target(
+            _p["block_time_ns"], _p["e2e_budget_ns"], _p.get("block_count", 2))
 
 
 def match_phase(close_interval_ns):
@@ -492,10 +491,14 @@ def match_phase(close_interval_ns):
 
 
 def phase_by_number(n):
-    """The phase table entry numbered n, or None for anything else (including
-    None and a number no phase carries)."""
+    """The phase table entry labelled n, or None for anything else (including
+    None and a label no phase carries). Labels compare as strings: phases 1-3
+    are numbers in targets.json and in older manifests, later ones strings
+    ("3b")."""
+    if n is None:
+        return None
     for p in PHASE_TARGETS:
-        if p["phase"] == n:
+        if str(p["phase"]) == str(n):
             return p
     return None
 
@@ -965,7 +968,8 @@ def attach_query_verdicts(queries, phase):
     at the demand-derived floor for this profile and phase. Where the two floors
     coincide the one cell carries both.
     """
-    idx = phase["phase"] - 1
+    # The e2e floors follow the phases table order; the label is not an index.
+    idx = PHASE_TARGETS.index(phase)
     for tier, units in queries.items():
         for unit, entry in units.items():
             profile = query_profile(unit)

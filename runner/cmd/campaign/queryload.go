@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
@@ -15,7 +16,7 @@ import (
 // those ladders came from. The zero value is a campaign with no query legs.
 type queryLoad struct {
 	rates map[string]map[string][]float64
-	phase int
+	phase targets.PhaseLabel
 }
 
 // resolveQueryLoad turns `query = true` into numbers, by reading the phase
@@ -27,7 +28,9 @@ type queryLoad struct {
 //
 // targetsPath is the --targets flag; empty means find the checkout's own copy.
 func resolveQueryLoad(cfg *config.Config, targetsPath string) (queryLoad, error) {
-	if !cfg.Query {
+	// A phase is checked against the table whenever it is set, so a typo fails
+	// here even on a campaign with no query legs to pace.
+	if !cfg.Query && cfg.Phase == "" {
 		return queryLoad{}, nil
 	}
 	path := targetsPath
@@ -43,6 +46,12 @@ func resolveQueryLoad(cfg *config.Config, targetsPath string) (queryLoad, error)
 	tg, err := targets.Load(path)
 	if err != nil {
 		return queryLoad{}, err
+	}
+	if !cfg.Query {
+		if _, ok := tg.PhaseIndex(cfg.Phase); !ok {
+			return queryLoad{}, fmt.Errorf("config: phase = %s is not in the phases table of %s (%s)", cfg.Phase, path, tg.PhaseLabels())
+		}
+		return queryLoad{}, nil
 	}
 	phase, err := resolvePhase(cfg, tg, path)
 	if err != nil {
@@ -70,22 +79,28 @@ func resolveQueryLoad(cfg *config.Config, targetsPath string) (queryLoad, error)
 // `phase` states it outright for an unpaced campaign. When both are present
 // they have to agree — a campaign pacing ledgers at one phase's block time
 // while measuring another phase's read targets is not a phase run at all.
-func resolvePhase(cfg *config.Config, tg *targets.Targets, path string) (int, error) {
-	matched := 0
+func resolvePhase(cfg *config.Config, tg *targets.Targets, path string) (targets.PhaseLabel, error) {
+	var matched targets.PhaseLabel
 	if d, err := time.ParseDuration(cfg.CloseInterval); err == nil && d > 0 {
 		matched = tg.MatchPhase(int64(d))
 	}
+	if cfg.Phase != "" {
+		if _, ok := tg.PhaseIndex(cfg.Phase); !ok {
+			return "", fmt.Errorf("config: phase = %s is not in the phases table of %s (%s)", cfg.Phase, path, tg.PhaseLabels())
+		}
+	}
 	switch {
-	case cfg.Phase != 0 && matched != 0 && cfg.Phase != matched:
-		return 0, fmt.Errorf("config: phase = %d, but close_interval '%s' is phase %d's block time — set one or the other",
+	case cfg.Phase != "" && matched != "" && cfg.Phase != matched:
+		return "", fmt.Errorf("config: phase = %s, but close_interval '%s' is phase %s's block time — set one or the other",
 			cfg.Phase, cfg.CloseInterval, matched)
-	case cfg.Phase != 0:
+	case cfg.Phase != "":
 		return cfg.Phase, nil
-	case matched != 0:
+	case matched != "":
 		return matched, nil
 	}
-	return 0, fmt.Errorf("config: query = true needs a phase for its RPS floors: set phase = 1|2|3, "+
-		"or a close_interval matching a phase block time in %s (close_interval is '%s')", path, cfg.CloseInterval)
+	return "", fmt.Errorf("config: query = true needs a phase for its RPS floors: set phase = %s, "+
+		"or a close_interval matching a phase block time in %s (close_interval is '%s')",
+		strings.ReplaceAll(tg.PhaseLabels(), ", ", "|"), path, cfg.CloseInterval)
 }
 
 // queryDuration is the per-leg --duration value, empty for a campaign whose

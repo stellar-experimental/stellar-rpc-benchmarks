@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/targets"
 )
 
 // SchemaVersion is the version of the metadata.json contract. Additive changes
@@ -43,7 +44,7 @@ type MetadataInput struct {
 	// QueryPhase is the goal phase the query legs were paced against, resolved
 	// by the CLI from the config and docs/targets.json. 0 on a campaign with no
 	// query legs, and omitted from the manifest then.
-	QueryPhase int
+	QueryPhase targets.PhaseLabel
 	Hardware   Hardware
 	Hostname   string
 	StartedAt  string // RFC3339-like UTC, 2026-07-31T22:00:00Z
@@ -80,9 +81,9 @@ type campaignMetadata struct {
 	QueryDuration string `json:"query_duration"`
 	// QueryPhase is absent on a campaign with no query legs, where no phase was
 	// resolved and recording 0 would read as a phase.
-	QueryPhase    int `json:"query_phase,omitempty"`
-	Workers       int `json:"workers"`
-	HotNumLedgers int `json:"hot_num_ledgers"`
+	QueryPhase    targets.PhaseLabel `json:"query_phase,omitempty"`
+	Workers       int                `json:"workers"`
+	HotNumLedgers int                `json:"hot_num_ledgers"`
 	// Resumed is present only on resumed bundles, matching bash's del().
 	Resumed bool `json:"resumed,omitempty"`
 }

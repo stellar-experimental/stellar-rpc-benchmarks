@@ -75,9 +75,10 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   run.json/invocation.json --close-interval flag. Absent when
                                            //   no manifest records it (legacy bundles).
     "phase": 1,                            // optional; campaign layout only. The campaign's GOAL
-                                           //   phase: the phase whose block time equals
-                                           //   close_interval_ns exactly (2 s → 1, 1 s → 2,
-                                           //   600 ms → 3), else the manifest's
+                                           //   phase, a label: a number for phases 1-3, a
+                                           //   string after ("3b"). The phase whose block time
+                                           //   equals close_interval_ns exactly (2 s → 1,
+                                           //   1 s → 2, 600 ms → 3, 900 ms → "3b"), else the manifest's
                                            //   campaign.query_phase when it names a phase (an
                                            //   unpaced query campaign has no pace to read it
                                            //   from). Absent when neither says. The pace wins if
@@ -177,7 +178,8 @@ converted and lets the viewer degrade gracefully offline; the live viewer/model 
 `targets.json` and use the baked copy only as a fallback. Each entry has:
 
 ```jsonc
-{ "phase": 1,
+{ "phase": 1,                        // the phase label: a number for 1-3, a string after ("3b");
+                                      //   compare labels as strings, never compute with them
   "block_time_ns": 2000000000,        // the phase block time; also the keep-up budget
   "e2e_budget_ns": 5000000000,        // end-to-end budget (externalized → client);
                                       //   context only — this benchmark does not measure it
@@ -187,6 +189,12 @@ converted and lets the viewer degrade gracefully offline; the live viewer/model 
                                       //   omits it (phase 2), the converter derives it from the
                                       //   e2e budget: e2e = 25ms + 10ms + block_time*block_count
                                       //   + ingest + 50ms + 10ms.
+  "provisional": true,                // optional; the phase's targets are not confirmed (phase
+                                      //   3b). The viewers append "(provisional)" to its stated
+                                      //   target values; slack-payload.sh to its target line
+  "ingest_p99_target_note": "…",      // optional free text about the target (phase 3b: copied
+                                      //   from phase 3, awaits management confirmation);
+                                      //   the converter copies it, the viewer ignores it
   "workloads": [                      // the three model workloads at this phase
     { "name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000 }, … ],
   "orgs": 10,

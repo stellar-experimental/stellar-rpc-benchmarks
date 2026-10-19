@@ -32,6 +32,7 @@ class MatchPhaseTests(unittest.TestCase):
         self.assertEqual(convert.match_phase(2_000_000_000)["phase"], 1)
         self.assertEqual(convert.match_phase(1_000_000_000)["phase"], 2)
         self.assertEqual(convert.match_phase(600_000_000)["phase"], 3)
+        self.assertEqual(convert.match_phase(900_000_000)["phase"], "3b")
 
     def test_custom_pace_no_phase(self):
         self.assertIsNone(convert.match_phase(1_500_000_000))
@@ -42,10 +43,33 @@ class MatchPhaseTests(unittest.TestCase):
         self.assertIsNone(convert.match_phase(None))
 
 
+class Phase3bTableTests(unittest.TestCase):
+    def test_3b_copies_phase3_and_flags_its_ingest_target(self):
+        by = {str(p["phase"]): p for p in convert.PHASE_TARGETS}
+        p3, p3b = by["3"], by["3b"]
+        self.assertEqual(p3b["block_time_ns"], 900_000_000)
+        for k in ("block_count", "ingest_p99_target_ns", "orgs", "retention"):
+            self.assertEqual(p3b[k], p3[k], k)
+        # Phase 3's 2 s budget cannot hold three 900 ms blocks, so 3b states
+        # none until management sets one, and no budget verdict is drawn.
+        self.assertNotIn("e2e_budget_ns", p3b)
+        self.assertIn("E2E budget and block count await management confirmation",
+                      p3b["ingest_p99_target_note"])
+        self.assertEqual([w["tx_per_ledger"] for w in p3b["workloads"]], [9000, 5400, 2700])
+
+    def test_phase_by_number_matches_labels_as_strings(self):
+        self.assertEqual(convert.phase_by_number(3)["phase"], 3)
+        self.assertEqual(convert.phase_by_number("3")["phase"], 3)
+        self.assertEqual(convert.phase_by_number("3b")["phase"], "3b")
+        self.assertIsNone(convert.phase_by_number(4))
+        self.assertIsNone(convert.phase_by_number(None))
+
+
 class PhaseTableTests(unittest.TestCase):
     def test_three_phases_exact_numbers(self):
         by = {p["phase"]: p for p in convert.PHASE_TARGETS}
-        self.assertEqual(sorted(by), [1, 2, 3])
+        # Table order, not a sort: phase labels mix numbers and strings.
+        self.assertEqual(list(by), [1, 2, 3, "3b"])
         self.assertEqual(by[1]["block_time_ns"], 2_000_000_000)
         self.assertEqual(by[2]["block_time_ns"], 1_000_000_000)
         self.assertEqual(by[3]["block_time_ns"], 600_000_000)
@@ -177,7 +201,8 @@ class PhaseEmissionTests(unittest.TestCase):
             "ledgers": {"hot": 150_000_000, "cold": 200_000_000},
         })
         self.assertEqual(convert.E2E_IN_RPC_P99_NS, 10_000_000)
-        self.assertEqual(convert.E2E_FLOORS_RPS["sac"], [300, 500, 1000])
+        # One floor per phases-table entry; 3b copies phase 3.
+        self.assertEqual(convert.E2E_FLOORS_RPS["sac"], [300, 500, 1000, 1000])
         # The floors are derived numbers, so pin them to the inputs they come from.
         deriv = convert.QUERY_LOAD["derivation"]
         self.assertAlmostEqual(sum(deriv["mix"].values()), 1.0)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/targets"
 )
 
 // BinaryInfoName and MachineMetadataName are the bundle root's two free-text
@@ -39,9 +40,9 @@ func WriteBinaryInfo(dir, binPath, repo, ref, builtCommit string) error {
 type MachineInput struct {
 	Cfg                             *config.Config
 	Repo, Ref, BuiltCommit, BinPath string
-	BenchRoot                       string   // for the fsync probe file
-	Hardware                        Hardware // the shared IMDS facts (no second query)
-	QueryPhase                      int      // the phase the query legs were paced at; 0 when there were none
+	BenchRoot                       string             // for the fsync probe file
+	Hardware                        Hardware           // the shared IMDS facts (no second query)
+	QueryPhase                      targets.PhaseLabel // the phase the query legs were paced at; empty when there were none
 }
 
 // WriteMachineMetadata writes <dir>/machine-metadata.txt: what the campaign ran
@@ -79,7 +80,7 @@ func WriteMachineMetadata(dir string, in MachineInput) error {
 	campaignLine := fmt.Sprintf("campaign: %s · ingest: %s · query: %s · runs: %d",
 		cfg.Name, cfg.Ingest, cfg.QueryString(), cfg.Runs)
 	if cfg.Query {
-		campaignLine += fmt.Sprintf(" · query-duration: %s · query-phase: %d", cfg.QueryDuration, in.QueryPhase)
+		campaignLine += fmt.Sprintf(" · query-duration: %s · query-phase: %s", cfg.QueryDuration, in.QueryPhase)
 	}
 	add(campaignLine)
 	add(fmt.Sprintf("close-interval: %s · workers: %d · hot-num-ledgers: %d",
