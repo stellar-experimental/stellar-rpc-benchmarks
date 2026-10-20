@@ -66,6 +66,7 @@ pack_dir=
 cold_dir=
 data_dir=
 evict=
+ledgers_limit=
 cold_out_dir=
 hot_dir=
 close_interval=
@@ -79,6 +80,7 @@ for arg in "$@"; do
 	--cold-dir=*) cold_dir=${arg#--cold-dir=} ;;
 	--data-dir=*) data_dir=${arg#--data-dir=} ;;
 	--evict-page-cache=*) evict=${arg#--evict-page-cache=} ;;
+	--ledgers-limit=*) ledgers_limit=${arg#--ledgers-limit=} ;;
 	--cold-out-dir=*) cold_out_dir=${arg#--cold-out-dir=} ;;
 	--hot-dir=*) hot_dir=${arg#--hot-dir=} ;;
 	--close-interval=*) close_interval=${arg#--close-interval=} ;;
@@ -131,6 +133,9 @@ write_invocation() {
 		fi
 		if [ -n "$duration" ]; then
 			printf '    "duration": "%s",\n' "$duration"
+		fi
+		if [ -n "$ledgers_limit" ]; then
+			printf '    "ledgers-limit": "%s",\n' "$ledgers_limit"
 		fi
 		printf '    "out": "%s"\n' "$out"
 		echo '  },'

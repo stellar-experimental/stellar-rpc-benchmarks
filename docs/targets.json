@@ -36,7 +36,9 @@
       "txpage_page_limit": 200,
       "events_page_limit": 10,
       "ledgers_span": 10
-    }
+    },
+    "ledgers_page_campaign": 1,
+    "ledgers_page_campaign_note": "10-ledger pages of 9000-TPL synthetic ledgers are ~579 MB JSON responses; the handler holds 4-7x that per request, so campaigns query 1 ledger per page. ledgers_span stays the SLA's request shape."
   },
   "phases": [
     {

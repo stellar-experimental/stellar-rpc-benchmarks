@@ -116,6 +116,11 @@ type Inputs struct {
 	// QueryDuration is how long each query leg holds its rate, as a Go duration.
 	// Empty when the campaign has no query legs.
 	QueryDuration string
+	// QueryLedgersLimit is the getLedgers page size a data-dir ledgers leg
+	// passes as --ledgers-limit, from targets.json's
+	// query_load.ledgers_page_campaign; 0 leaves the bench's default. The
+	// tiered shapes ignore it, so their runs keep the span they always had.
+	QueryLedgersLimit int
 	// BenchCLI is the command shape of the built commit; empty means
 	// BenchCLIRoot. The CLI probes it from the build clone (run.DetectBenchCLI).
 	BenchCLI BenchCLI
@@ -194,10 +199,13 @@ type Plan struct {
 	QueryCLI      QueryCLI    `json:"query_cli"`    // tiered | data-dir: the argv shape of every query leg
 	BuildTarget   BuildTarget `json:"build_target"` // the Makefile target the build step runs
 	StaticLibs    bool        `json:"static_libs"`  // static RocksDB and zstd, and --enable-rpcv2 on every bench leg
-	ResultsDir    string      `json:"results_dir"`  // <bench_root>/results/<run_id>
-	Tarball       string      `json:"tarball"`      // /tmp/bench-results-<run_id>.tgz
-	Notes         []string    `json:"notes,omitempty"`
-	Steps         []Step      `json:"steps"`
+	// QueryLedgersLimit is the --ledgers-limit every ledgers query leg passes;
+	// absent when the legs pass none.
+	QueryLedgersLimit int      `json:"query_ledgers_limit,omitempty"`
+	ResultsDir        string   `json:"results_dir"` // <bench_root>/results/<run_id>
+	Tarball           string   `json:"tarball"`     // /tmp/bench-results-<run_id>.tgz
+	Notes             []string `json:"notes,omitempty"`
+	Steps             []Step   `json:"steps"`
 }
 
 // Build turns a validated config into the ordered steps a campaign executes.
@@ -226,6 +234,9 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 		p.BuildTarget = BuildRPCV2
 	}
 	p.StaticLibs = in.StaticLibs
+	if cfg.Query && p.QueryCLI == QueryCLIDataDir {
+		p.QueryLedgersLimit = in.QueryLedgersLimit
+	}
 
 	// Both query suites read a database this campaign builds. Query-cold needs
 	// the cold store a cold ingest leaves behind, which config validation makes
@@ -605,6 +616,7 @@ func queryColdArgv(p *Plan, in Inputs, d *config.Dataset, chunk int, qtype, cold
 		"--target-rps="+targetRPS(in, d, qtype),
 		"--duration="+in.QueryDuration,
 	)
+	argv = append(argv, p.ledgersLimitArgs(qtype)...)
 	// The tiered shape always evicts a cold leg. The data-dir shape evicts by
 	// default too; the flag pins that, so a changed default cannot turn a cold
 	// leg into a warm one.
@@ -630,6 +642,7 @@ func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chun
 		"--duration="+in.QueryDuration,
 		"--warmup=20",
 	)
+	argv = append(argv, p.ledgersLimitArgs(qtype)...)
 	// A capped hot ingest leaves a truncated DB; keep the tiered query sampler
 	// inside what was ingested. A data-dir query reads only the committed
 	// ledgers, which already end at the cap.
@@ -652,6 +665,15 @@ func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chun
 			fmt.Sprintf("ingest-hot-%s-c%d-run%d", d.Name, chunk, cfg.Runs),
 		},
 	}
+}
+
+// ledgersLimitArgs is the --ledgers-limit flag of a ledgers query leg, or
+// nothing when the plan sets no limit or the leg is another type.
+func (p *Plan) ledgersLimitArgs(qtype string) []string {
+	if qtype != "ledgers" || p.QueryLedgersLimit == 0 {
+		return nil
+	}
+	return []string{"--ledgers-limit=" + strconv.Itoa(p.QueryLedgersLimit)}
 }
 
 // targetRPS renders one cell's ladder as bench-query's --target-rps value: the

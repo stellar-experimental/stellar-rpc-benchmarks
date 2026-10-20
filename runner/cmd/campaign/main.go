@@ -154,10 +154,11 @@ func planCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	}
 	benchRoot := benchRootFromEnv()
 	in := plan.Inputs{
-		BenchRoot:     benchRoot,
-		Stamp:         time.Now().UTC().Format(stampLayout),
-		QueryRates:    ql.rates,
-		QueryDuration: queryDuration(cfg),
+		BenchRoot:         benchRoot,
+		Stamp:             time.Now().UTC().Format(stampLayout),
+		QueryRates:        ql.rates,
+		QueryDuration:     queryDuration(cfg),
+		QueryLedgersLimit: ql.ledgersLimit,
 	}
 	src := filepath.Join(benchRoot, "src")
 	if sha, err := run.ResolveRef(src, cfg.Ref); err == nil {

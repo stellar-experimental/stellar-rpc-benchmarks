@@ -48,6 +48,11 @@ type QueryLoad struct {
 	Ladder   []float64 `json:"ladder"`
 	SLA      SLA       `json:"sla"`
 	E2EProbe E2EProbe  `json:"e2e_probe"`
+	// LedgersPageCampaign is the getLedgers page size a campaign queries, which
+	// is smaller than the SLA's request shape (derivation.ledgers_span) because
+	// a full-size page of synthetic ledgers runs the handler out of memory. 0
+	// leaves the bench's default.
+	LedgersPageCampaign int `json:"ledgers_page_campaign"`
 }
 
 // SLA is the read-path requirement: one arrival rate and one p99 per endpoint,
@@ -90,6 +95,9 @@ func Load(path string) (*Targets, error) {
 	}
 	if len(t.QueryLoad.E2EProbe.FloorsRPS) == 0 {
 		return nil, fmt.Errorf("targets: %s: query_load.e2e_probe.floors_rps is empty — this file predates the two-family query model", path)
+	}
+	if t.QueryLoad.LedgersPageCampaign < 0 {
+		return nil, fmt.Errorf("targets: %s: query_load.ledgers_page_campaign is %d, want >= 0", path, t.QueryLoad.LedgersPageCampaign)
 	}
 	if len(t.QueryLoad.Ladder) == 0 {
 		return nil, fmt.Errorf("targets: %s: query_load.ladder must list at least one multiplier", path)

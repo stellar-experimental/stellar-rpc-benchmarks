@@ -17,6 +17,8 @@ import (
 type queryLoad struct {
 	rates map[string]map[string][]float64
 	phase targets.PhaseLabel
+	// ledgersLimit is targets.json's query_load.ledgers_page_campaign.
+	ledgersLimit int
 }
 
 // resolveQueryLoad turns `query = true` into numbers, by reading the phase
@@ -68,7 +70,7 @@ func resolveQueryLoad(cfg *config.Config, targetsPath string) (queryLoad, error)
 		}
 		rates[d.Name] = perType
 	}
-	return queryLoad{rates: rates, phase: phase}, nil
+	return queryLoad{rates: rates, phase: phase, ledgersLimit: tg.QueryLoad.LedgersPageCampaign}, nil
 }
 
 // loadTargets loads the targets file at path, or, when path is empty, the

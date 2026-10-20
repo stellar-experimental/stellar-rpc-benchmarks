@@ -45,11 +45,14 @@ type MetadataInput struct {
 	// by the CLI from the config and docs/targets.json. 0 on a campaign with no
 	// query legs, and omitted from the manifest then.
 	QueryPhase targets.PhaseLabel
-	Hardware   Hardware
-	Hostname   string
-	StartedAt  string // RFC3339-like UTC, 2026-07-31T22:00:00Z
-	FinishedAt string // "" on the up-front write
-	Status     string // StatusRunning / StatusFinished / StatusFailed
+	// QueryLedgersLimit is the --ledgers-limit the ledgers query legs passed;
+	// 0 when they passed none, and omitted from the manifest then.
+	QueryLedgersLimit int
+	Hardware          Hardware
+	Hostname          string
+	StartedAt         string // RFC3339-like UTC, 2026-07-31T22:00:00Z
+	FinishedAt        string // "" on the up-front write
+	Status            string // StatusRunning / StatusFinished / StatusFailed
 }
 
 // metadataFile is the write-side of the manifest. It is a separate type from
@@ -81,9 +84,12 @@ type campaignMetadata struct {
 	QueryDuration string `json:"query_duration"`
 	// QueryPhase is absent on a campaign with no query legs, where no phase was
 	// resolved and recording 0 would read as a phase.
-	QueryPhase    targets.PhaseLabel `json:"query_phase,omitempty"`
-	Workers       int                `json:"workers"`
-	HotNumLedgers int                `json:"hot_num_ledgers"`
+	QueryPhase targets.PhaseLabel `json:"query_phase,omitempty"`
+	// QueryLedgersLimit is the getLedgers page size of the ledgers query legs,
+	// absent when they used the bench's default.
+	QueryLedgersLimit int `json:"query_ledgers_limit,omitempty"`
+	Workers           int `json:"workers"`
+	HotNumLedgers     int `json:"hot_num_ledgers"`
 	// Resumed is present only on resumed bundles, matching bash's del().
 	Resumed bool `json:"resumed,omitempty"`
 }
@@ -118,19 +124,20 @@ func marshalMetadata(in MetadataInput) ([]byte, error) {
 		SchemaVersion: SchemaVersion,
 		RunID:         in.RunID,
 		Campaign: campaignMetadata{
-			Name:          cfg.Name,
-			ConfigFile:    in.ConfigFile,
-			Ref:           cfg.Ref,
-			BuiltCommit:   in.BuiltCommit,
-			Ingest:        cfg.Ingest,
-			Query:         cfg.QueryString(),
-			CloseInterval: cfg.CloseInterval,
-			Runs:          cfg.Runs,
-			QueryDuration: cfg.QueryDuration,
-			QueryPhase:    in.QueryPhase,
-			Workers:       cfg.Workers,
-			HotNumLedgers: cfg.HotNumLedgers,
-			Resumed:       in.Resumed,
+			Name:              cfg.Name,
+			ConfigFile:        in.ConfigFile,
+			Ref:               cfg.Ref,
+			BuiltCommit:       in.BuiltCommit,
+			Ingest:            cfg.Ingest,
+			Query:             cfg.QueryString(),
+			CloseInterval:     cfg.CloseInterval,
+			Runs:              cfg.Runs,
+			QueryDuration:     cfg.QueryDuration,
+			QueryPhase:        in.QueryPhase,
+			QueryLedgersLimit: in.QueryLedgersLimit,
+			Workers:           cfg.Workers,
+			HotNumLedgers:     cfg.HotNumLedgers,
+			Resumed:           in.Resumed,
 		},
 		Datasets:   make([]datasetMetadata, 0, len(cfg.Datasets)),
 		Hardware:   in.Hardware,

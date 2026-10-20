@@ -70,10 +70,11 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	}
 
 	in := plan.Inputs{
-		BenchRoot:     benchRoot,
-		Stamp:         time.Now().UTC().Format(stampLayout),
-		QueryRates:    ql.rates,
-		QueryDuration: queryDuration(cfg),
+		BenchRoot:         benchRoot,
+		Stamp:             time.Now().UTC().Format(stampLayout),
+		QueryRates:        ql.rates,
+		QueryDuration:     queryDuration(cfg),
+		QueryLedgersLimit: ql.ledgersLimit,
 	}
 	builtCommit, resolveErr := run.ResolveRef(src, cfg.Ref)
 	if resolveErr == nil {
@@ -287,17 +288,18 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	}
 
 	in := plan.Inputs{
-		BenchRoot:       benchRoot,
-		BuiltCommit:     builtCommit,
-		Sha8:            sha8,
-		Stamp:           stamp,
-		QueryRates:      ql.rates,
-		QueryDuration:   queryDuration(cfg),
-		BenchCLI:        benchCLI,
-		QueryCLI:        queryCLI,
-		BuildTarget:     buildTarget,
-		StaticLibs:      staticLibs,
-		EmptyColdOutDir: emptyColdOutDir,
+		BenchRoot:         benchRoot,
+		BuiltCommit:       builtCommit,
+		Sha8:              sha8,
+		Stamp:             stamp,
+		QueryRates:        ql.rates,
+		QueryDuration:     queryDuration(cfg),
+		QueryLedgersLimit: ql.ledgersLimit,
+		BenchCLI:          benchCLI,
+		QueryCLI:          queryCLI,
+		BuildTarget:       buildTarget,
+		StaticLibs:        staticLibs,
+		EmptyColdOutDir:   emptyColdOutDir,
 	}
 	if err := plan.Check(cfg, in); err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
@@ -352,16 +354,17 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 
 	hostname, _ := os.Hostname()
 	meta := bundle.MetadataInput{
-		Cfg:         cfg,
-		ConfigFile:  configFile,
-		RunID:       p.RunID,
-		BuiltCommit: builtCommit,
-		QueryPhase:  ql.phase,
-		Resumed:     resume != nil,
-		Hardware:    bundle.CollectHardware(bundle.DefaultIMDSBase),
-		Hostname:    hostname,
-		StartedAt:   startedAt,
-		Status:      bundle.StatusRunning,
+		Cfg:               cfg,
+		ConfigFile:        configFile,
+		RunID:             p.RunID,
+		BuiltCommit:       builtCommit,
+		QueryPhase:        ql.phase,
+		QueryLedgersLimit: p.QueryLedgersLimit,
+		Resumed:           resume != nil,
+		Hardware:          bundle.CollectHardware(bundle.DefaultIMDSBase),
+		Hostname:          hostname,
+		StartedAt:         startedAt,
+		Status:            bundle.StatusRunning,
 	}
 	if resume != nil && resume.StartedAt == "" {
 		run.Notef(out, "resume: no started_at in %s/%s — recording this session's start", resume.RunID, bundle.MetadataName)

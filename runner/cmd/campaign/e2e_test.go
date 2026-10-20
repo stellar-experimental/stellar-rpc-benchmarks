@@ -370,17 +370,27 @@ func TestE2E(t *testing.T) {
 			}
 		}
 
+		ledgers := readLeg(t, filepath.Join(bundle, "query-hot-sac-6000-c1-ledgers-run1")).Argv
+		if !slices.Contains(ledgers, "--ledgers-limit=1") {
+			t.Errorf("query-hot-sac-6000-c1-ledgers-run1 argv = %v, want --ledgers-limit=1", ledgers)
+		}
+		if meta := readFile(t, filepath.Join(bundle, "metadata.json")); !strings.Contains(meta, `"query_ledgers_limit": 1`) {
+			t.Errorf("metadata.json does not record query_ledgers_limit 1:\n%s", meta)
+		}
+
 		var run struct {
 			Campaign struct {
-				QueryCLI string `json:"query_cli"`
+				QueryCLI          string `json:"query_cli"`
+				QueryLedgersLimit int    `json:"query_ledgers_limit"`
 			} `json:"campaign"`
 			Queries map[string]map[string]map[string]map[string]any `json:"queries"`
 		}
 		if err := json.Unmarshal([]byte(readFile(t, convertBundle(t, bundle))), &run); err != nil {
 			t.Fatalf("converted run: %v", err)
 		}
-		if run.Campaign.QueryCLI != "data-dir" {
-			t.Errorf("converted campaign.query_cli = %q, want data-dir", run.Campaign.QueryCLI)
+		if run.Campaign.QueryCLI != "data-dir" || run.Campaign.QueryLedgersLimit != 1 {
+			t.Errorf("converted campaign.query_cli = %q, query_ledgers_limit = %d; want data-dir, 1",
+				run.Campaign.QueryCLI, run.Campaign.QueryLedgersLimit)
 		}
 		for _, tier := range []string{"cold", "hot"} {
 			txhash := run.Queries[tier]["sac-6000-c1"]["txhash"]

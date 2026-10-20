@@ -262,6 +262,11 @@ $ …/stellar-rpc-<sha> --enable-rpcv2 bench query --data-dir=… \
     --types=events --target-rps=50,100,200 --duration=60s --evict-page-cache=true --out=…
 ```
 
+A data-dir `getLedgers` leg also passes `--ledgers-limit` from `query_load.ledgers_page_campaign`
+in `docs/targets.json` (1): a 10-ledger page of 9000-TPL synthetic ledgers is a ~579 MB JSON
+response, and the handler holds 4–7× that per request. `plan.json` and `metadata.json` record
+it as `query_ledgers_limit`. The tiered shapes keep their old request shape.
+
 On a `query_cli = "tiered"` commit the same leg is `bench query cold --cold-dir=…
 --start-chunk=1 --num-chunks=1 …`, with no `--enable-rpcv2` before a `build-rpc-v2` binary.
 

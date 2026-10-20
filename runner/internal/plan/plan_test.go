@@ -964,3 +964,33 @@ chunks = %s
 		t.Errorf("Check(two bsb-s3 chunks, reusable --cold-out-dir) = %v, want nil", err)
 	}
 }
+
+// TestLedgersLimit checks that only a data-dir ledgers leg passes the
+// campaign's getLedgers page size, and that plan.json records it.
+func TestLedgersLimit(t *testing.T) {
+	cfg := load(t, fmt.Sprintf(hotConfig, 0))
+	for _, tc := range []struct {
+		name string
+		in   Inputs
+		want int
+	}{
+		{"data-dir", singleBinaryInputs(), 1},
+		{"tiered", goldenInputs(), 0},
+	} {
+		tc.in.QueryLedgersLimit = 1
+		p := Build(cfg, tc.in)
+		if p.QueryLedgersLimit != tc.want {
+			t.Errorf("%s: plan records query_ledgers_limit %d, want %d", tc.name, p.QueryLedgersLimit, tc.want)
+		}
+		for _, id := range []string{"query-cold-ds-c7-ledgers-run1", "query-hot-ds-c7-ledgers-run1", "query-cold-ds-c7-txhash-run1"} {
+			argv := stepByID(t, p, id).Argv[0]
+			want := tc.want == 1 && strings.Contains(id, "-ledgers-")
+			if got := slices.Contains(argv, "--ledgers-limit=1"); got != want {
+				t.Errorf("%s: %s argv has --ledgers-limit=1 = %t, want %t: %v", tc.name, id, got, want, argv)
+			}
+			if last := argv[len(argv)-1]; !strings.HasPrefix(last, "--out=") {
+				t.Errorf("%s: %s last arg = %q, want an --out flag", tc.name, id, last)
+			}
+		}
+	}
+}
