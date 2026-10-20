@@ -61,7 +61,8 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
       // synthetic extras: "model": "SAC transfer", "tps": 10000, "tx_per_ledger": 6000,
       //                   "pack": "19.5 GiB", "source_chunks": "1"   (from --unit-facts sidecar)
     } },
-    "sets": { "<dataset>": "<set>" | null }  // every new conversion; {} without a metadata.json.
+    "sets": { "<dataset>": "<set>" | null }  // optional; bundles with a metadata.json only. A bundle
+                                           //   without one predates campaigns and reads legacy_set.
                                            //   The <set> segment of each manifest dataset's location
                                            //   (…/synthetic-ledgers/<set>/<profile>/…), null when the
                                            //   location names none. summary.html reads a profile's

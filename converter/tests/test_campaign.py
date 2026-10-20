@@ -408,14 +408,14 @@ class DatasetSetTests(unittest.TestCase):
         # The fixture locations (gs://bucket/<name>/...) name no set.
         self.assertEqual(data["dataset"]["sets"], {"sac-6000": None, "soroswap-1500": None})
 
-    def test_bundle_without_a_manifest_carries_empty_sets(self):
-        # An empty map, not a missing key: a missing key sends the viewer to
-        # legacy_set, which is for runs converted before the key existed.
+    def test_bundle_without_a_manifest_carries_no_sets_key(self):
+        # A bundle without metadata.json predates campaigns: no key sends the
+        # viewer to legacy_set, so a re-ingest keeps its sizes and link.
         root = os.path.join(tempfile.mkdtemp(), "leg")
         fixtures.build_legacy_bundle(root)
         data, _, _ = run_convert(root, dataset_kind="pubnet", run_id="l", run_name="L",
                                  run_date="2026-07-13")
-        self.assertEqual(data["dataset"]["sets"], {})
+        self.assertNotIn("sets", data["dataset"])
 
 
 class LegacyBundleTests(unittest.TestCase):

@@ -878,10 +878,12 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         legs = []
         for d in rps_run_dirs(results_dir, tier, unit, qt, reps):
             leg = read_query_leg(d, qt)
-            if leg is not None:
-                if os.path.isfile(os.path.join(d, QUERY_LATENCY)):
-                    _check_data_dir_leg(d, tier)
-                legs.append((d, *leg))
+            if leg is None:
+                warn(f"missing query outputs in {os.path.basename(d)}")
+                continue
+            if os.path.isfile(os.path.join(d, QUERY_LATENCY)):
+                _check_data_dir_leg(d, tier)
+            legs.append((d, *leg))
         if not legs:
             warn(f"query-{tier}-{unit} {qt}: no CSVs; skipping")
             continue
