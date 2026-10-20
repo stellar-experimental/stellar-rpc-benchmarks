@@ -1387,6 +1387,14 @@ for (const run of manifest.runs) {
   if (summaryShowsSource(RD)) {
     check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
   }
+  // Independent of the lookup the checks above mirror, so a legacy_set typo in
+  // dataset-sizes.json cannot pass them both: every published run converted
+  // before dataset.sets ran on the 2026-07 set, whose sizes are measured.
+  if (RD.dataset.sets === undefined) {
+    check(group, "a 2026-07 run shows the size column", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
+    check(group, "a 2026-07 run links the 2026-07 test data",
+      /synthetic-ledgers\/2026-07-18-apply-load-20k/.test(txt(doc.getElementById("source-data"))), txt(doc.getElementById("source-data")));
+  }
   check(group, "raw-results link in §05", /(gs|s3):\/\/\S*results\//.test(txt(doc.getElementById("raw-results"))), "missing");
   check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
   // Headline figure: bars plus two visually separate reference lines.
