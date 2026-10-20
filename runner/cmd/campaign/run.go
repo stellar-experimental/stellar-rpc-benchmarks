@@ -85,8 +85,8 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 		// placeholder is 8 hex digits, or a --resume would reject the run ids
 		// derived from it as malformed.
 		in.BuiltCommit, in.Sha8 = cfg.Ref, placeholderSha
-		run.Notef(stdout, "dry run: ref '%s' not resolvable without the clone — using placeholder sha '%s' in paths "+
-			"and assuming the %s CLI (%s)", cfg.Ref, placeholderSha, plan.BenchCLIRoot, benchCLIDescription(plan.BenchCLIRoot))
+		run.Notef(stdout, "dry run: ref '%s' not resolvable without the clone — using placeholder sha '%s' in paths, "+
+			"%s", cfg.Ref, placeholderSha, assumeCurrentShape(cfg, &in))
 	}
 
 	var resume *bundle.Resume
@@ -163,6 +163,20 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 	if err := plan.Check(cfg, *in); err != nil {
 		run.Notef(stdout, "%s", err)
 	}
+}
+
+// assumeCurrentShape fills in with the shape of current stellar-rpc commits,
+// for a plan whose ref the build clone cannot resolve, and returns the words
+// that name it for the note. A config that shape cannot run is named too.
+func assumeCurrentShape(cfg *config.Config, in *plan.Inputs) string {
+	in.BenchCLI, in.QueryCLI = plan.BenchCLIRoot, plan.QueryCLIDataDir
+	in.BuildTarget, in.StaticLibs, in.EmptyColdOutDir = plan.BuildStellarRPC, true, true
+	assumed := fmt.Sprintf("assuming the current shapes: the %s CLI (%s), the %s query CLI, and make %s "+
+		"with static libs (--enable-rpcv2)", in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget)
+	if err := plan.Check(cfg, *in); err != nil {
+		assumed += "; " + err.Error()
+	}
+	return assumed
 }
 
 // noQueryCLI is the message for a query campaign whose commit has no query bench.

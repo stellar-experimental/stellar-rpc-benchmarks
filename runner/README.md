@@ -72,7 +72,8 @@ with a summary naming every failed and skipped step.
 Print the ordered steps the campaign would execute, one `$ command` line each. It
 resolves no ref against the network and writes nothing; when the ref is not resolvable in
 the local build clone it plans with the placeholder sha `deadbeef` in the derived paths
-and says so. This is the same data the runner writes to `plan.json` in the bundle. A
+and the shapes of current stellar-rpc commits (the `bench` CLI, the `data-dir` query CLI,
+and a static `build-stellar-rpc` build with `--enable-rpcv2`), and says so. This is the same data the runner writes to `plan.json` in the bundle. A
 query campaign's RPS ladders are resolved for real, so the printed `--target-rps` lists
 are the ones a run would drive.
 
