@@ -175,8 +175,6 @@ chunks = [1]
 `
 }
 
-// TestPlanCmdQueryLoad covers the one thing the CLI layer adds to a plan: the
-// RPS ladders, resolved out of this checkout's docs/targets.json.
 // mustLoadConfig loads a config body through a temp file.
 func mustLoadConfig(t *testing.T, src string) *config.Config {
 	t.Helper()
@@ -191,6 +189,8 @@ func mustLoadConfig(t *testing.T, src string) *config.Config {
 	return cfg
 }
 
+// TestPlanCmdQueryLoad covers the one thing the CLI layer adds to a plan: the
+// RPS ladders, resolved out of this checkout's docs/targets.json.
 func TestPlanCmdQueryLoad(t *testing.T) {
 	planFor := func(t *testing.T, src string, args ...string) (int, string, string) {
 		t.Helper()
@@ -326,6 +326,14 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		}
 		if !strings.Contains(stderr, missing) {
 			t.Errorf("stderr = %q, want it to name %s", stderr, missing)
+		}
+	})
+
+	t.Run("an ingest-only phase needs no targets file", func(t *testing.T) {
+		src := strings.Replace(queryConfig("phase = 4"), "query = true", "query = false", 1)
+		code, _, stderr := planFor(t, src, "--targets", filepath.Join(t.TempDir(), "absent.json"))
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr: %s)", code, stderr)
 		}
 	})
 

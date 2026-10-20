@@ -28,29 +28,26 @@ type queryLoad struct {
 //
 // targetsPath is the --targets flag; empty means find the checkout's own copy.
 func resolveQueryLoad(cfg *config.Config, targetsPath string) (queryLoad, error) {
-	// A phase is checked against the table whenever it is set, so a typo fails
-	// here even on a campaign with no query legs to pace.
 	if !cfg.Query && cfg.Phase == "" {
 		return queryLoad{}, nil
 	}
-	path := targetsPath
-	if path == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return queryLoad{}, err
-		}
-		if path, err = targets.Find(cwd); err != nil {
-			return queryLoad{}, err
-		}
-	}
-	tg, err := targets.Load(path)
+	tg, path, err := loadTargets(targetsPath)
 	if err != nil {
+		// A campaign with no query legs needs no floors, so a targets file it
+		// cannot find or read leaves its phase unchecked instead of failing it.
+		if !cfg.Query {
+			return queryLoad{}, nil
+		}
 		return queryLoad{}, err
 	}
-	if !cfg.Query {
+	// A phase is checked against the table whenever the table loads, so a typo
+	// fails here even on a campaign with no query legs to pace.
+	if cfg.Phase != "" {
 		if _, ok := tg.PhaseIndex(cfg.Phase); !ok {
 			return queryLoad{}, fmt.Errorf("config: phase = %s is not in the phases table of %s (%s)", cfg.Phase, path, tg.PhaseLabels())
 		}
+	}
+	if !cfg.Query {
 		return queryLoad{}, nil
 	}
 	phase, err := resolvePhase(cfg, tg, path)
@@ -74,20 +71,32 @@ func resolveQueryLoad(cfg *config.Config, targetsPath string) (queryLoad, error)
 	return queryLoad{rates: rates, phase: phase}, nil
 }
 
+// loadTargets loads the targets file at path, or, when path is empty, the
+// checkout's own docs/targets.json. It returns the path it read.
+func loadTargets(path string) (*targets.Targets, string, error) {
+	if path == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, "", err
+		}
+		if path, err = targets.Find(cwd); err != nil {
+			return nil, "", err
+		}
+	}
+	tg, err := targets.Load(path)
+	return tg, path, err
+}
+
 // resolvePhase decides which phase's floors this campaign targets. A paced
 // campaign already says so in close_interval, so the phase is usually implied;
 // `phase` states it outright for an unpaced campaign. When both are present
 // they have to agree — a campaign pacing ledgers at one phase's block time
 // while measuring another phase's read targets is not a phase run at all.
+// cfg.Phase, when set, must already be in the table.
 func resolvePhase(cfg *config.Config, tg *targets.Targets, path string) (targets.PhaseLabel, error) {
 	var matched targets.PhaseLabel
 	if d, err := time.ParseDuration(cfg.CloseInterval); err == nil && d > 0 {
 		matched = tg.MatchPhase(int64(d))
-	}
-	if cfg.Phase != "" {
-		if _, ok := tg.PhaseIndex(cfg.Phase); !ok {
-			return "", fmt.Errorf("config: phase = %s is not in the phases table of %s (%s)", cfg.Phase, path, tg.PhaseLabels())
-		}
 	}
 	switch {
 	case cfg.Phase != "" && matched != "" && cfg.Phase != matched:
