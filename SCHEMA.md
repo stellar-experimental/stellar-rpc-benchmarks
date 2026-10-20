@@ -106,6 +106,13 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   demand floors per profile × phase and its in-RPC
                                            //   budget), and the derivation inputs (aggregate
                                            //   rate and mix) — see "queries" below.
+    "query_cli": "tiered" | "data-dir",    // optional; present when the run has open-loop query
+                                           //   cells: the bench that wrote them. tiered = `bench
+                                           //   query cold|hot` (reads through the read view);
+                                           //   data-dir = `bench query --data-dir`
+                                           //   (stellar-rpc#1070; through the daemon's JSON-RPC
+                                           //   handlers). "mixed" when the legs disagree. Absent
+                                           //   on runs converted before it existed (all tiered).
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs,
@@ -444,6 +451,15 @@ The converter auto-detects the input bundle layout from its subdirectory names:
   each holding `<qtype>.csv` + its own `driver.csv` — where the closed-loop generation put
   every type's CSV in a single `query-{cold,hot}-<unit>-run<R>` dir. The converter picks
   the path per (tier, unit) from the dir names, so a bundle of either generation converts.
+  A leg of `bench query --data-dir` (stellar-rpc#1070) holds `latency.csv`,
+  `scenarios.csv` and `bench.txt` in place of `<qtype>.csv` and `driver.csv`; the
+  converter maps them, per leg dir, onto the same rows: `latency_from_due`/`all` →
+  `total_r<rate>`, `latency`/`all` → `service_r<rate>`, `start_delay`/`all` → the
+  `_lag` row, and from `scenarios.csv` `elapsed_ns` → the wall row, `achieved_rps` →
+  `_millirps`, `dropped` → `_shed`, and the summed `page_cache_evict_ns` → setup
+  `evict`. Setup `open` is run.json's `setupNs.storeOpen`. It warns when run.json's
+  `settings.tier` disagrees with the dir name, or a cold leg's
+  `settings.pageCacheEviction` is not `requested`.
 
 Every bundle also carries a free-text `*machine-metadata*.txt` at the root (parsed into
 `machine`). A campaign bundle additionally carries **JSON manifests** — all optional and

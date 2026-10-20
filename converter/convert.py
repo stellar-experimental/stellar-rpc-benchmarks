@@ -775,6 +775,94 @@ def _opt_driver_v(drivers, row, label, col="total_ns", f=None):
     return stat([f(v) for v in vals] if f else vals)
 
 
+# A data-dir query leg (stellar-rpc#1070, `bench query --data-dir`) writes
+# latency.csv and scenarios.csv, with the store open time in run.json, instead
+# of the tiered bench's per-type CSV and driver.csv. read_query_leg maps one
+# into the other, so every later step reads one row shape.
+QUERY_LATENCY = "latency.csv"
+QUERY_SCENARIOS = "scenarios.csv"
+QUERY_CLI_TIERED = "tiered"
+QUERY_CLI_DATA_DIR = "data-dir"
+# latency.csv (metric, outcome) -> the tiered per-type CSV row prefix. The
+# tiered bench's scheduled latency (due -> done) is latency_from_due, and its
+# service time is latency: the bridge's parse, the wait for a handler, the
+# handler and the response write, which is the time inside the RPC.
+_LATENCY_ROWS = {("latency_from_due", "all"): "total_r", ("latency", "all"): "service_r"}
+# Query shapes the legs of this conversion used; convert() records them.
+_query_clis = set()
+
+
+def _scenario_row(n, n_items, rec=None, total=0):
+    """A row in read_csv's shape: n, n_items, then every duration column, from
+    a latency.csv record or, without one, total in each duration column."""
+    row = {"n": n, "n_items": n_items}
+    for col, _ in PCT_MAP:
+        row[col] = int(rec[col]) if rec else total
+    return row
+
+
+def read_query_leg(d, qt):
+    """(rows, driver) of one query leg dir, each in read_csv's shape, or None
+    when the leg left no report. A tiered leg's are its <qt>.csv and its
+    driver.csv. A data-dir leg's are derived from latency.csv, scenarios.csv
+    and run.json under the tiered bench's row names."""
+    if not os.path.isfile(os.path.join(d, QUERY_LATENCY)):
+        qpath, dpath = os.path.join(d, f"{qt}.csv"), os.path.join(d, "driver.csv")
+        if not (os.path.isfile(qpath) and os.path.isfile(dpath)):
+            return None
+        _query_clis.add(QUERY_CLI_TIERED)
+        return read_csv(qpath), read_csv(dpath)
+    _query_clis.add(QUERY_CLI_DATA_DIR)
+    rows, driver = {}, {}
+    with open(os.path.join(d, QUERY_LATENCY)) as f:
+        for rec in csv.DictReader(f):
+            if rec["query_type"] != qt:
+                continue
+            tok = rec["target_rps"]
+            key = (rec["metric"], rec["outcome"])
+            if key in _LATENCY_ROWS:
+                rows[_LATENCY_ROWS[key] + tok] = _scenario_row(int(rec["count"]), int(rec["items"]), rec)
+            elif key == ("start_delay", "all"):
+                driver[f"{qt}_r{tok}_lag"] = _scenario_row(int(rec["count"]), int(rec["count"]), rec)
+    open_ns = manifest_of(d).get("setupNs", {}).get("storeOpen")
+    if open_ns is not None:
+        driver["open"] = _scenario_row(1, 0, total=int(open_ns))
+    evictions = []
+    spath = os.path.join(d, QUERY_SCENARIOS)
+    if os.path.isfile(spath):
+        with open(spath) as f:
+            for rec in csv.DictReader(f):
+                if rec["query_type"] != qt:
+                    continue
+                tok = rec["target_rps"]
+                driver[f"{qt}_r{tok}"] = _scenario_row(1, int(rec["succeeded"]), total=int(rec["elapsed_ns"]))
+                # The achieved rate rides x1000 in the duration columns, as the
+                # tiered driver.csv carries it.
+                millirps = round(float(rec["achieved_rps"]) * 1000)
+                driver[f"{qt}_r{tok}_millirps"] = _scenario_row(1, 0, total=millirps)
+                dropped = int(rec["dropped"])
+                driver[f"{qt}_r{tok}_shed"] = _scenario_row(dropped, dropped)
+                if rec.get("page_cache_evict_ns"):
+                    evictions.append(int(rec["page_cache_evict_ns"]))
+    if evictions:
+        driver["evict"] = _scenario_row(len(evictions), len(evictions), total=sum(evictions))
+    return rows, driver
+
+
+def _check_data_dir_leg(d, tier):
+    """Warn when a data-dir leg's run.json says it measured something other than
+    its dir name's tier, or a cold leg ran without page-cache eviction."""
+    settings = manifest_of(d).get("settings")
+    if not settings:
+        return
+    name = os.path.basename(d)
+    if settings.get("tier") not in (None, tier):
+        warn(f"{name}: run.json tier {settings['tier']!r} but the leg dir names {tier!r}")
+    if tier == "cold" and settings.get("pageCacheEviction") not in (None, "requested"):
+        warn(f"{name}: page-cache eviction was {settings['pageCacheEviction']!r}; "
+             f"its cold latencies are warm-cache")
+
+
 def build_queries_rps(results_dir, tier, unit, reps, qtypes):
     """Open-loop (paced-RPS) query legs: one dir per query type, one cell per
     target rate.
@@ -787,16 +875,23 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
     """
     entry, setup_drivers, setup_dirs = {}, None, None
     for qt in qtypes:
-        dirs = rps_run_dirs(results_dir, tier, unit, qt, reps)
-        rows = read_all(dirs, f"{qt}.csv")
-        drivers = read_all(dirs, "driver.csv")
-        if not rows or not drivers:
+        legs = []
+        for d in rps_run_dirs(results_dir, tier, unit, qt, reps):
+            leg = read_query_leg(d, qt)
+            if leg is not None:
+                if os.path.isfile(os.path.join(d, QUERY_LATENCY)):
+                    _check_data_dir_leg(d, tier)
+                legs.append((d, *leg))
+        if not legs:
             warn(f"query-{tier}-{unit} {qt}: no CSVs; skipping")
             continue
+        dirs = [d for d, _, _ in legs]
+        rows = [r for _, r, _ in legs]
+        drivers = [drv for _, _, drv in legs]
         # Every leg's driver repeats the same setup rows (they measure the same
         # open/evict prep), so the first type's leg stands for the whole cell.
         if setup_drivers is None:
-            setup_drivers, setup_dirs = drivers, _with_file(dirs, "driver.csv")
+            setup_drivers, setup_dirs = drivers, dirs
         tokens = sorted({m.group(1) for st in rows[0]
                          for m in [_TOTAL_R.match(st)] if m}, key=float)
         qout = {}
@@ -1224,6 +1319,7 @@ def convert(args):
     machine, build = load_metadata(results_dir)
     metadata = load_campaign_manifest(results_dir)
     invocations = load_invocations(results_dir)
+    _query_clis.clear()
     hardware = (metadata or {}).get("hardware") or {}
     hostname = ((metadata or {}).get("hostname")
                 or (invocations[0][1].get("hostname") if invocations else None))
@@ -1305,6 +1401,14 @@ def convert(args):
                        f"{len(unit_order)} profile(s): {', '.join(labels)}.")
 
     campaign = {"reps": len(reps), "vocabulary": vocab}
+    # Which query bench produced the paced query cells: tiered `query cold|hot`
+    # or `query --data-dir`. The two measure at different points (the read
+    # view; the daemon's JSON-RPC handlers), so cells of the two never compare.
+    if len(_query_clis) > 1:
+        warn(f"query legs mix bench shapes {sorted(_query_clis)}; recording query_cli as mixed")
+        campaign["query_cli"] = "mixed"
+    elif _query_clis:
+        campaign["query_cli"] = next(iter(_query_clis))
     if args.source_gcs:
         campaign["source_gcs"] = args.source_gcs
     if args.source_uri:

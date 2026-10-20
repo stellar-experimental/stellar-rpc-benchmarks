@@ -10,13 +10,18 @@ end-to-end / viewer checks convert a real bundle rather than a mock:
   build_rps_bundle       — a one-unit campaign whose query legs are the RPS-era
                            per-qtype dirs (query-<tier>-<unit>-<qtype>-run<R>).
   build_legacy_bundle    — a manifest-less pubnet bundle (today's path).
+  to_data_dir_legs       — rewrites an RPS bundle's query legs into the
+                           latency.csv/scenarios.csv shape of `bench query
+                           --data-dir` (stellar-rpc#1070).
 
 All timing values scale linearly with the run number, so for the 2-rep default
 `median_low` of each column is exactly the run-1 value and min/max are trivially
 run-1/run-2 — hand-computable in the tests.
 """
+import csv
 import json
 import os
+import re
 
 HEADER = "stage,n,n_items,total_ns,p50_ns,p90_ns,p99_ns,max_ns\n"
 COMMIT = "b32bc9be0123456789abcdef0123456789abcdef"
@@ -205,6 +210,71 @@ def to_run_records(root, keep_invocation=False):
             json.dump(rec, f, indent=2)
         if not keep_invocation:
             os.remove(inv_path)
+
+
+_QUERY_LEG = re.compile(r"^query-(cold|hot)-.+-([a-z]+)-run\d+$")
+_COLS = ("total_ns", "p50_ns", "p90_ns", "p99_ns", "max_ns")
+
+
+def _read_rows(path):
+    with open(path) as f:
+        return {r["stage"]: {k: int(v) for k, v in r.items() if k != "stage"}
+                for r in csv.DictReader(f)}
+
+
+def to_data_dir_legs(root, eviction="requested"):
+    """Rewrite every RPS query leg under root the way `bench query --data-dir`
+    (stellar-rpc#1070) writes it, carrying the same numbers: latency.csv and
+    scenarios.csv replace the per-type CSV and driver.csv, and run.json gains
+    the settings and the store open time. Run to_run_records first. eviction is
+    the cold legs' settings.pageCacheEviction; a cold leg evicts only when it is
+    "requested"."""
+    for name in sorted(os.listdir(root)):
+        m = _QUERY_LEG.match(name)
+        if not m:
+            continue
+        tier, qt = m.groups()
+        d = os.path.join(root, name)
+        rows = _read_rows(os.path.join(d, f"{qt}.csv"))
+        driver = _read_rows(os.path.join(d, "driver.csv"))
+        rates = [st[len("total_r"):] for st in rows if st.startswith("total_r")]
+        evicts = tier == "cold" and eviction == "requested"
+        latency, scenarios = [], []
+        for i, tok in enumerate(rates):
+            for metric, row in (("latency_from_due", rows[f"total_r{tok}"]),
+                                ("latency", rows[f"service_r{tok}"]),
+                                ("start_delay", driver[f"{qt}_r{tok}_lag"])):
+                items = 0 if metric == "start_delay" else row["n_items"]
+                latency.append([qt, tok, metric, "all", row["n"], items] + [row[c] for c in _COLS])
+            wall, shed = driver[f"{qt}_r{tok}"], driver[f"{qt}_r{tok}_shed"]
+            achieved = driver[f"{qt}_r{tok}_millirps"]["total_ns"] / 1000
+            evict = driver["evict"]["total_ns"] if evicts and i == 0 else ""
+            scenarios.append([qt, tok, wall["n_items"] + shed["n"], wall["n_items"], shed["n"],
+                              wall["n_items"], 0, 0, 0, 0, achieved, achieved,
+                              wall["total_ns"], wall["total_ns"], 0, 1000, evict])
+        with open(os.path.join(d, "latency.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["query_type", "target_rps", "metric", "outcome", "count", "items",
+                        "total_ns", "p50_ns", "p90_ns", "p99_ns", "max_ns"])
+            w.writerows(latency)
+        with open(os.path.join(d, "scenarios.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["query_type", "target_rps", "planned", "started", "dropped", "succeeded",
+                        "failed", "warmup_planned", "warmup_dropped", "warmup_failed",
+                        "achieved_rps", "completion_rps", "schedule_ns", "elapsed_ns",
+                        "overrun_ns", "process_cpu_ns", "page_cache_evict_ns"])
+            w.writerows(scenarios)
+        run_path = os.path.join(d, "run.json")
+        with open(run_path) as f:
+            rec = json.load(f)
+        rec["command"] = "stellar-rpc bench query"
+        rec["settings"] = {"tier": tier,
+                           "pageCacheEviction": eviction if tier == "cold" else "off"}
+        rec["setupNs"] = {"storeOpen": driver["open"]["total_ns"]}
+        with open(run_path, "w") as f:
+            json.dump(rec, f, indent=2)
+        os.remove(os.path.join(d, f"{qt}.csv"))
+        os.remove(os.path.join(d, "driver.csv"))
 
 
 def build_campaign_bundle(root, paced=True, reps=2, machine_commit="0" * 40,
