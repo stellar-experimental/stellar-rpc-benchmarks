@@ -10,6 +10,10 @@ query type, one cell per target rate — in a variation no committed run carries
                          converter emits r-cells with NO verdict and no
                          campaign.phase — the viewer must judge the rows on the
                          latency target alone and say so.
+  fixture-rps-data-dir   fixture-rps-phase3's numbers, with every query leg in
+                         the latency.csv/scenarios.csv shape of `bench query
+                         --data-dir`: the same cells and verdicts, and
+                         campaign.query_cli = "data-dir".
   fixture-rps-partial    two profiles, phase 3, first profile's COLD query legs
                          removed before conversion. The grid must still be
                          discovered from the units that do have cold legs
@@ -260,6 +264,9 @@ def build_bundle(root, spec):
         json.dump(metadata, f, indent=2)
     with open(os.path.join(root, "machine-metadata.txt"), "w") as f:
         f.write(F.MACHINE_META.format(commit="0" * 40))
+    if spec.get("data_dir"):
+        F.to_run_records(root)
+        F.to_data_dir_legs(root)
     return root
 
 
@@ -383,6 +390,12 @@ def check_soroswap_only(D, spec):
         assert qout.get("verdict_sla"), (tier, unit, qt)
 
 
+def check_data_dir(D, spec):
+    """The phase-3 verdicts, from legs of the data-dir shape."""
+    assert D["campaign"]["query_cli"] == "data-dir", D["campaign"].get("query_cli")
+    check_phase3(D, spec)
+
+
 def check_partial(D, spec):
     """The first unit has hot query legs only; the second has both tiers. The
     grid the viewer discovers has to come from the union, not from unit one."""
@@ -440,6 +453,21 @@ SPECS = [
         "ladder_phase": 1,
         "set": "2026-07-18-apply-load-20k",
         "check": check_soroswap_only,
+    },
+    {
+        # The phase-3 fixture again, its query legs written by `bench query
+        # --data-dir` (stellar-rpc#1070): the viewer must not tell the two apart
+        # except by the generation note.
+        "id": "fixture-rps-data-dir",
+        "name": "Fixture — open-loop query load (phase 3, data-dir bench)",
+        "units": ["sac-6000-c1", "soroswap-1500-c1"],
+        "reps": 2,
+        "close_interval": "600ms",
+        "phase": 3,
+        "ladder_phase": 3,
+        "set": "2026-07-18-apply-load-20k",
+        "data_dir": True,
+        "check": check_data_dir,
     },
     {
         "id": "fixture-rps-unfloored",

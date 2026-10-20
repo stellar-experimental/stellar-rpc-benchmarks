@@ -1805,6 +1805,10 @@
     // two share nothing but the cell grid, so the section branches whole.
     const qMode = qGrid ? qGrid.mode : null;
     const qLadder = (D.campaign && D.campaign.query_load && D.campaign.query_load.ladder) || null;
+    // `bench query --data-dir` (stellar-rpc#1070) sends each request through
+    // the daemon's JSON-RPC handlers; the tiered bench before it read the
+    // stores directly. Runs without the field are all tiered.
+    const qDataDir = !!(D.campaign && D.campaign.query_cli === "data-dir");
     // qThr is the one number the prose and the reference lines can name; null
     // when the run states a target per endpoint and tier instead.
     const { check: qCheck, thrFor: qThrFor, perEndpoint: qPerEndpoint, single: qThr } = queryTargets(D);
@@ -1960,7 +1964,7 @@
     ${hasQueries && qMode === "open" ? `
     <section id="queries">
       <div class="sec-head"><span class="sec-num">${secQueries}</span><h2>Queries — the read path at a fixed request rate</h2></div>
-      <p class="sec-intro">The read side of the same stores the sections above filled, driven <strong>open-loop</strong>: every endpoint gets a fixed number of requests per second on a fixed schedule, rather than a fixed pool of clients that only asks again once the last answer came back. A server that slows down therefore builds a queue instead of quietly being asked for less. Each endpoint runs three legs — at <strong>half, exactly, and twice</strong> the request rate the load model asks of it — for a fixed span each. The latency reported everywhere below is the <strong>scheduled</strong> one: the clock starts when a request was <em>due</em>, not when the client got round to sending it, so queueing counts against the server rather than disappearing. The verdict is read at the 1× leg; the half and double legs are the context on either side of it. Cold legs drop the profile's files from the OS page cache before measuring; hot legs warm them first, because a warm cache is the hot tier's steady state.</p>
+      <p class="sec-intro">The read side of the same stores the sections above filled, driven <strong>open-loop</strong>: every endpoint gets a fixed number of requests per second on a fixed schedule, rather than a fixed pool of clients that only asks again once the last answer came back. A server that slows down therefore builds a queue instead of quietly being asked for less. Each endpoint runs three legs — at <strong>half, exactly, and twice</strong> the request rate the load model asks of it — for a fixed span each. The latency reported everywhere below is the <strong>scheduled</strong> one: the clock starts when a request was <em>due</em>, not when the client got round to sending it, so queueing counts against the server rather than disappearing. The verdict is read at the 1× leg; the half and double legs are the context on either side of it. Cold legs drop the profile's files from the OS page cache before measuring; hot legs warm them first, because a warm cache is the hot tier's steady state.${qDataDir ? " Each request goes through the daemon's own JSON-RPC handlers in process, so the time inside the RPC covers the request parse, the wait for a free handler, the handler and the response write. Runs of the earlier tiered bench read the stores directly, so their numbers do not compare with these." : ""}</p>
       ${hasE2E ? `<p class="sec-intro">This section answers <strong>two separate requirements</strong>, and keeps them apart. The <strong>SLA</strong> asks every endpoint to hold its latency target while serving its share of the sustained request rate. The <strong>end-to-end budget</strong> asks one endpoint, getTransaction, to answer inside a fixed slice of the transaction-lifecycle target, at the rate the phase's own demand model predicts. The two are measured at different rates and judged on different numbers, so they get a table each and never share a row.</p>` : ""}
       <figure class="fig" id="figq1">
         <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">${hasE2E ? "SLA verdict at the 1× request rate" : "Verdict at the 1× request rate"}</span></div></div>
@@ -1984,7 +1988,7 @@
       <figure class="fig" id="figq5">
         <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">Per-leg setup and event-scan detail</span></div></div>
         <div class="fig-body"><div class="tv-scroll"><table class="data" id="query-setup-table" style="width:100%"></table></div></div>
-        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> builds the read fixture, and <code>evict</code> drops the cold artifacts from the page cache once per leg — a hot leg has nothing to evict, so the row is absent. The event columns are what getEvents actually returned at the 1× rate.</figcaption>
+        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> ${qDataDir ? "opens the dataset the way daemon startup does" : "builds the read fixture"}, and <code>evict</code> drops the cold artifacts from the page cache ${qDataDir ? "before each rate, summed over the leg" : "once per leg"} — a hot leg has nothing to evict, so the row is absent. The event columns are what getEvents actually returned at the 1× rate.</figcaption>
       </figure>
     </section>` : hasQueries ? `
     <section id="queries">

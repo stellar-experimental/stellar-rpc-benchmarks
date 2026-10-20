@@ -927,6 +927,18 @@ const FIXTURE_CHECKS = {
     check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
   },
 
+  /* The phase-3 fixture with its query legs written by `bench query
+     --data-dir`: the same verdicts, plus the generation note and the
+     data-dir setup wording. */
+  "fixture-rps-data-dir": (doc, group, D) => {
+    FIXTURE_CHECKS["fixture-rps-phase3"](doc, group, D);
+    check(group, "the run records the data-dir query bench", D.campaign.query_cli === "data-dir",
+      String(D.campaign.query_cli));
+    const setupCap = txt(doc.querySelector("#figq5 figcaption"));
+    check(group, "setup caption says the data-dir bench evicts before each rate",
+      setupCap.includes("before each rate") && setupCap.includes("daemon startup"), setupCap);
+  },
+
   /* Phase 3b: a label rather than a number. The run must select the 3b entry
      of the phases table and render it by name, never as phase 3. */
   "fixture-rps-phase3b": (doc, group, D) => {
@@ -1053,6 +1065,10 @@ for (const file of fixtureFiles) {
     !!(D.campaign.query_load && qEntries(D).some((e) => rateKeys(e.qout).length)), "not the RPS shape");
   check(group, "fixture detected as the open-loop shape", queryShape(D) === "open", queryShape(D));
   checkSyntheticQueries(doc, group, D);
+  // The generation note belongs to data-dir runs alone.
+  const qIntro = txt(doc.querySelector("#queries > .sec-intro"));
+  check(group, "the JSON-RPC handler note shows only on a data-dir run",
+    qIntro.includes("JSON-RPC handlers") === (D.campaign.query_cli === "data-dir"), qIntro.slice(-160));
   const extra = FIXTURE_CHECKS[D.run_id];
   check(group, "fixture has its own assertions", !!extra, "no FIXTURE_CHECKS entry for " + D.run_id);
   if (extra) extra(doc, group, D);
