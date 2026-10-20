@@ -925,6 +925,8 @@ const FIXTURE_CHECKS = {
       probe.length > 0 && probe.every((e) => e.qt === "txhash"),
       probe.map((e) => e.qt).join(","));
     check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
+    check(group, "no phase-3 E2E-probe verdict is provisional", probe.every((e) => !e.qout.verdict_e2e.provisional),
+      probe.filter((e) => e.qout.verdict_e2e.provisional).length + " provisional");
   },
 
   /* The phase-3 fixture with its query legs written by `bench query
@@ -956,6 +958,12 @@ const FIXTURE_CHECKS = {
     check(group, "the 3b goal carries no E2E budget", !!sel && sel.e2e_budget_ns == null, JSON.stringify(sel));
     check(group, "no NaN or negative budget anywhere in the report", !/NaN|-\d+(\.\d+)? ?(ms|s)\b/.test(body),
       (body.match(/.{0,40}(NaN|-\d+(\.\d+)? ?(ms|s)\b).{0,40}/) || [""])[0]);
+    // 3b's E2E-probe floors are phase 3's, copied until confirmed.
+    const probes = es.filter((e) => e.qout.verdict_e2e);
+    check(group, "every 3b E2E-probe verdict is provisional", probes.length > 0 && probes.every((e) => e.qout.verdict_e2e.provisional === true),
+      probes.length + " probes");
+    const e2eTxt = txt(doc.getElementById("query-e2e-table"));
+    check(group, "the E2E-budget table marks the 3b demand floor provisional", /demand floor, provisional/.test(e2eTxt), e2eTxt.slice(0, 160));
   },
 
   /* One profile, and not sac: the summary must name the run's own workload,
@@ -1226,6 +1234,34 @@ for (const file of fixtureFiles) {
   check(group, "the phase column sorts 3 before 3b", phases.length > 0 && phases.join(",") === want.join(",")
     && phases.indexOf("3b") > phases.lastIndexOf("3"), phases.join(","));
   window.close();
+}
+
+{
+  /* The latency model page runs its own inline script, so it loads without
+     loadViewer's script injection; fetch must exist before that script runs. */
+  const group = "latency model";
+  console.log(`\n=== latency-model.html?phase=3b ===`);
+  const errors = [];
+  const vc = new VirtualConsole();
+  vc.on("jsdomError", (e) => errors.push("jsdomError: " + (e.detail?.message || e.message || e)));
+  vc.on("error", (...a) => errors.push("console.error: " + a.join(" ")));
+  const dom = new JSDOM(fs.readFileSync(path.join(DOCS, "latency-model.html"), "utf8"), {
+    url: `${ORIGIN}/latency-model.html?phase=3b`, runScripts: "dangerously", pretendToBeVisual: true,
+    virtualConsole: vc,
+    beforeParse(window) {
+      window.fetch = fetchShim;
+      window.matchMedia = (q) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} });
+    },
+  });
+  let body = "";
+  for (let i = 0; i < 80 && !/ingestion target/.test(body); i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    body = txt(dom.window.document.body);
+  }
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "the 3b ingestion target is tagged provisional", /ingestion target [\d.]+ ms \(provisional\)/.test(body),
+    (body.match(/.{0,40}ingestion target.{0,60}/) || [""])[0]);
+  dom.window.close();
 }
 
 /* ---------------- unit-label display in the default report ---------------- */

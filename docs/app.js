@@ -990,7 +990,7 @@
     for (const { qt, u, tier, v, cell } of probes) {
       const r = document.createElement("tr");
       cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
-      cellTd(r, rpsTxt(v.target_rps), noteEl("(demand floor)"));
+      cellTd(r, rpsTxt(v.target_rps), noteEl(v.provisional ? "(demand floor, provisional)" : "(demand floor)"));
       const ach = cell.achieved_rps;
       const sTd = cellTd(r, ach ? rpsTxt(ach.m) : "—");
       const under = underTarget(ach, v.target_rps);

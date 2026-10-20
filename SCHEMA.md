@@ -326,7 +326,9 @@ converter warns.
       "achieved_rps_m": 999.998,          // that cell's achieved_rps median (absent if unmeasured)
       "p99_ns": 15000000,                 // that cell's SCHEDULED p99 median — CONTEXT, never judged
       "in_rpc": { "p99_ns": 5000000, "threshold_ns": 10000000, "pass": true },  // the only judged number
-      "pass": true                        // == in_rpc.pass; there is no threshold_ns on this object
+      "pass": true,                       // == in_rpc.pass; there is no threshold_ns on this object
+      "provisional": true                 // only when the goal phase is provisional (3b): its
+                                          //   demand floor awaits confirmation
     }
   },
   "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows belonging to no cell

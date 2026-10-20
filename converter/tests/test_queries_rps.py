@@ -347,9 +347,11 @@ class RpsPhase3bTests(unittest.TestCase):
         self.assertIs(p3b["provisional"], True)
         self.assertNotIn("provisional", [p for p in data["campaign"]["phase_targets"] if p["phase"] == 3][0])
         self.assertEqual(data["campaign"]["close_interval_ns"], 900_000_000)
-        # 3b copies phase 3's sac probe floor, 1000 rps.
-        self.assertEqual(
-            data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]["rate"], "r1000")
+        # 3b copies phase 3's sac probe floor, 1000 rps, and that floor awaits
+        # confirmation, so the verdict on it is provisional.
+        probe = data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]
+        self.assertEqual(probe["rate"], "r1000")
+        self.assertIs(probe["provisional"], True)
         self.assertEqual(convert.validate_run(data, reps=2), [])
 
     def test_manifest_query_phase_3b(self):
@@ -361,8 +363,9 @@ class RpsPhase3bTests(unittest.TestCase):
         # Bundles written before 3b carry query_phase as a JSON number.
         data, warnings, _ = build_and_convert(close_interval="0", query_phase=3)
         self.assertEqual(data["campaign"]["phase"], 3)
-        self.assertEqual(
-            data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]["rate"], "r1000")
+        probe = data["queries"]["cold"][UNIT]["txhash"]["verdict_e2e"]
+        self.assertEqual(probe["rate"], "r1000")
+        self.assertNotIn("provisional", probe)
         self.assertFalse(any("verdicts omitted" in w for w in warnings))
 
 

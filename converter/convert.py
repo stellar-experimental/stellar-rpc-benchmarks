@@ -1067,16 +1067,19 @@ def _verdict_sla(cell, rate_key, floor, qt, tier):
     return v
 
 
-def _verdict_e2e(cell, rate_key, floor):
+def _verdict_e2e(cell, rate_key, floor, phase):
     """The E2E-budget verdict: getTransaction's time INSIDE the RPC at the
     demand-derived rate, against its slice of the end-to-end budget. The
     scheduled p99 rides along as context and is never judged — the arrival rate
-    this cell is paced at is a demand estimate, not an SLA the tail answers to."""
+    this cell is paced at is a demand estimate, not an SLA the tail answers to.
+    A provisional phase's floor is provisional, and so is the verdict on it."""
     v = _verdict_head(cell, rate_key, floor)
     in_rpc = cell["service"]["p99"]["m"]
     v["in_rpc"] = {"p99_ns": in_rpc, "threshold_ns": E2E_IN_RPC_P99_NS,
                    "pass": in_rpc <= E2E_IN_RPC_P99_NS}
     v["pass"] = v["in_rpc"]["pass"]
+    if phase.get("provisional"):
+        v["provisional"] = True
     return v
 
 
@@ -1131,7 +1134,7 @@ def attach_query_verdicts(queries, phase):
                     warn(f"query-{tier}-{unit} {qt}: no service row at the "
                          f"E2E-probe floor of {e2e_floor} rps; no E2E-budget verdict")
                 else:
-                    qout["verdict_e2e"] = _verdict_e2e(cells[hit], hit, e2e_floor)
+                    qout["verdict_e2e"] = _verdict_e2e(cells[hit], hit, e2e_floor, phase)
 
 
 def build_golden(results_dir, unit):
