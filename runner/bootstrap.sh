@@ -174,17 +174,25 @@ else
 fi
 
 # --- environment: persist for future shells, set for this run ----------------
+# The include paths go in CGO_CPPFLAGS, not CGO_CFLAGS: setting CGO_CFLAGS
+# replaces Go's default "-O2 -g", and go-sqlite3's bundled SQLite sets no -O of
+# its own. A .bashrc an older bootstrap wrote gets its line rewritten.
+# shellcheck disable=SC2016 # the $HOME in .bashrc is literal text
+if grep -q '^export CGO_CFLAGS="-I\$HOME/.zstd/include' "$HOME/.bashrc" 2>/dev/null; then
+  # shellcheck disable=SC2016 # the $HOME in .bashrc is literal text
+  sed -i 's|^export CGO_CFLAGS="-I\$HOME/.zstd/include|export CGO_CPPFLAGS="-I$HOME/.zstd/include|' "$HOME/.bashrc"
+fi
 if ! grep -q '# bench-campaigns env' "$HOME/.bashrc"; then
   cat >> "$HOME/.bashrc" <<'EOF'
 # bench-campaigns env
 export PATH=/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$PATH
-export CGO_CFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
+export CGO_CPPFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
 export CGO_LDFLAGS="-L$HOME/.zstd/lib -L$HOME/.rocksdb/lib"
 export LD_LIBRARY_PATH="$HOME/.zstd/lib:$HOME/.rocksdb/lib"
 EOF
 fi
 export PATH=/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$PATH
-export CGO_CFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
+export CGO_CPPFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
 export CGO_LDFLAGS="-L$HOME/.zstd/lib -L$HOME/.rocksdb/lib"
 export LD_LIBRARY_PATH="$HOME/.zstd/lib:$HOME/.rocksdb/lib"
 
