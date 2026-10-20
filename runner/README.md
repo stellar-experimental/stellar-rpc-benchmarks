@@ -321,7 +321,7 @@ Both are on `feature/full-history`, so the default `ref = "feature/full-history"
 satisfies the floor.
 
 The command shape follows the built commit. Before planning, the runner greps the build
-clone at that commit, leaving out `_test.go` files, and records three answers in
+clone at that commit, leaving out `_test.go` files, and records what it finds in
 `plan.json`:
 
 - **`bench_cli`** (`run.DetectBenchCLI`): a commit whose `cmd/` tree declares the
@@ -331,19 +331,34 @@ clone at that commit, leaving out `_test.go` files, and records three answers in
   command is built by `newBenchCommand("query", …)` (stellar-rpc#1070), which reads
   `--data-dir` and takes the tier from the dataset's catalog; `"tiered"` for `query cold|hot`
   (or `bench-query cold|hot`). A commit with neither fails a query campaign before the build.
-- **`build_target`** (`run.DetectBuildTarget`): `"build-rpc-v2"` while the Makefile has
-  that target, which writes `stellar-rpc-v2` against the shared libraries in `~/.zstd` and
-  `~/.rocksdb`; else `"build-stellar-rpc"` (stellar-rpc#1123), which writes one
-  `stellar-rpc` binary with RocksDB and zstd linked statically from `~/.zstd-static` and
-  `~/.rocksdb-static` (the Makefile builds them there when missing, which takes minutes).
-  That binary runs rpcv1 by default, so every bench command gets `--enable-rpcv2` before
-  `bench`.
+- **`build_target`** and **`static_libs`** (`run.DetectBuildTarget`). A Makefile with a
+  `build-native-libs` target (stellar-rpc#1123 on) gets `"build-stellar-rpc"` with
+  `static_libs: true`: one `stellar-rpc` binary with RocksDB and zstd linked statically from
+  `~/.zstd-static` and `~/.rocksdb-static` (the Makefile builds them there when missing,
+  which takes minutes). That binary runs rpcv1 by default, so every bench command gets
+  `--enable-rpcv2` before `bench`. Before #1123 the build links the shared libraries in
+  `~/.zstd` and `~/.rocksdb`: `"build-rpc-v2"` (`stellar-rpc-v2`) where the Makefile has
+  it, else `"build-stellar-rpc"` (`stellar-rpc`, as on c48a55c6), both without the flag.
 
-From stellar-rpc#1070 on, `bench ingest cold` also refuses a non-empty `--cold-out-dir`, so
-a `bsb-s3` dataset, which backfills every chunk into one pack root, is refused before the
-build when it lists more than one chunk; give each chunk its own dataset. The `fixture` dataset kind is the exception: it always runs
-`bench-ingest fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a
-`fixture` subcommand, so only the stub binary of the e2e test answers it.
+The `fixture` dataset kind is the exception to the CLI shape: it always runs `bench-ingest
+fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a `fixture` subcommand,
+so only the stub binary of the e2e test answers it.
+
+A shared-library build first checks that `~/.zstd` and `~/.rocksdb` hold the shared
+libraries, and fails before `make` when they do not. `bootstrap.sh` installs only the
+libraries its `SRC_REF` builds, so a box bootstrapped for a static ref needs a second pass
+before it can build an older one:
+
+```
+SRC_REF=<older ref> ./runner/bootstrap.sh
+```
+
+Both sets then live side by side, and each build picks its own.
+
+From stellar-rpc#1070 on, `bench ingest cold` refuses a non-empty `--cold-out-dir`
+(`run.DetectEmptyColdOutDir`), so a `bsb-s3` dataset, which backfills every chunk into one
+pack root, is refused before the build when it lists more than one chunk, with or without
+query legs; give each chunk its own dataset.
 
 ## `$BENCH_ROOT` layout
 

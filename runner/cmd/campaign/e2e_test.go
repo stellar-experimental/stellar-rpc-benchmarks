@@ -393,6 +393,50 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("IngestOnlyMultiChunkBSBAtADataDirRef", func(t *testing.T) {
+		// The empty --cold-out-dir rule is bench ingest's, so it holds without
+		// query legs too.
+		cfg := filepath.Join(work, "bsb-multi.toml")
+		writeFile(t, cfg, `name = "e2e"
+ingest = "cold"
+query = false
+runs = 1
+
+[[dataset]]
+name = "mainnet"
+kind = "bsb-s3"
+location = "s3://bucket/prefix"
+chunks = [4, 5]
+`)
+		sc := newScenario(t, bin, filepath.Join(work, "bsbmulti"), cfg)
+		sc.cli = "data-dir"
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want a refusal; output:\n%s", out)
+		}
+		if want := "dataset 'mainnet' is bsb-s3 with 2 chunks"; !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+		mustNotExist(t, filepath.Join(sc.root, "bin", "stellar-rpc-"+stubSha8))
+	})
+
+	t.Run("SharedLibsMissing", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "nolibs"), cfgPath)
+		if err := os.RemoveAll(filepath.Join(sc.home, ".rocksdb")); err != nil {
+			t.Fatal(err)
+		}
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want a failed build; output:\n%s", out)
+		}
+		for _, want := range []string{"librocksdb.so is missing", "run bootstrap.sh with SRC_REF=" + stubCommit} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q:\n%s", want, out)
+			}
+		}
+		mustNotExist(t, filepath.Join(sc.root, "bin", "stellar-rpc-"+stubSha8))
+	})
+
 	t.Run("QueryCampaignOnACommitWithoutTheQueryBench", func(t *testing.T) {
 		sc := newScenario(t, bin, filepath.Join(work, "noquery"), cfgPath)
 		sc.noQuery = true
@@ -467,6 +511,7 @@ type scenario struct {
 	control string   // STUB_RPC_CONTROL
 	cli     string   // STUB_RPC_CLI: legacy makes the clone a pre-#1105 commit, data-dir a post-#1123 one
 	noQuery bool     // STUB_RPC_NO_QUERY: the clone's commit has no query bench
+	home    string   // HOME, which holds the shared native libs unless a test removes them
 	path    []string // dirs prepended to PATH, in order
 }
 
@@ -498,7 +543,13 @@ func convertBundle(t *testing.T, bundle string) string {
 
 func newScenario(t *testing.T, bin, root, cfg string) *scenario {
 	t.Helper()
-	sc := &scenario{bin: bin, cfg: cfg, root: root, control: filepath.Join(root, "control")}
+	sc := &scenario{bin: bin, cfg: cfg, root: root, control: filepath.Join(root, "control"), home: filepath.Join(root, "home")}
+	// A build-rpc-v2 build checks for the shared libraries bootstrap.sh
+	// installs before it runs make.
+	for _, lib := range []string{".zstd/lib/libzstd.so", ".rocksdb/lib/librocksdb.so"} {
+		mkdirAll(t, filepath.Dir(filepath.Join(sc.home, lib)))
+		writeFile(t, filepath.Join(sc.home, lib), "")
+	}
 	// The build clone is a black box to the runner: a .git is all EnsureSrc and
 	// ResolveRef look for before handing the work to git, which is fake here.
 	src := filepath.Join(root, "src")
@@ -526,8 +577,10 @@ done
 [ -n "$grep" ] || exit 0
 for arg in "$@"; do
 	case $arg in
+	*'^build-native-libs:'*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
 	*'^build-rpc-v2:'*) [ "${STUB_RPC_CLI:-}" != data-dir ]; exit ;;
 	*'^build-stellar-rpc:'*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
+	*requireEmptyDir*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
 	*newBenchCommand*) [ "${STUB_RPC_CLI:-}" = data-dir ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
 	*'"bench-ingest"'*) [ "${STUB_RPC_CLI:-}" = legacy ]; exit ;;
 	*'"bench-query"'*) [ "${STUB_RPC_CLI:-}" = legacy ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
@@ -599,6 +652,7 @@ func (sc *scenario) env() []string {
 			// PUBLISH_URI would give `campaign publish` a destination the
 			// scenario never asked for.
 			strings.HasPrefix(kv, "PUBLISH_URI="),
+			strings.HasPrefix(kv, "HOME="),
 			strings.HasPrefix(kv, "STUB_RPC_"):
 		default:
 			env = append(env, kv)
@@ -608,6 +662,7 @@ func (sc *scenario) env() []string {
 	return append(env,
 		"PATH="+strings.Join(path, string(os.PathListSeparator)),
 		"BENCH_ROOT="+sc.root,
+		"HOME="+sc.home,
 		"STUB_RPC_CONTROL="+sc.control,
 		"STUB_RPC_COMMIT="+stubCommit,
 		"STUB_RPC_CLI="+sc.cli,

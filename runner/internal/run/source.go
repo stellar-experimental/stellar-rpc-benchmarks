@@ -105,22 +105,48 @@ func DetectQueryCLI(src, commit string, cli plan.BenchCLI) (plan.QueryCLI, bool,
 	return plan.QueryCLITiered, ok, err
 }
 
-// DetectBuildTarget reports the Makefile target that builds commit's rpcv2
-// binary: build-rpc-v2 while the Makefile has it, and build-stellar-rpc once
-// stellar-rpc#1123 made one binary of rpcv1 and rpcv2. Older Makefiles also
-// have a build-stellar-rpc, which built rpcv1, so build-rpc-v2 decides.
-func DetectBuildTarget(src, commit string) (plan.BuildTarget, error) {
-	for _, target := range []plan.BuildTarget{plan.BuildRPCV2, plan.BuildStellarRPC} {
-		ok, err := grepTree(src, commit, "^"+string(target)+":", "Makefile")
+// DetectBuildTarget reports the Makefile target that builds commit's bench
+// binary, and whether that build links RocksDB and zstd statically. A
+// Makefile with build-native-libs (stellar-rpc#1123 on) builds one static
+// stellar-rpc binary with build-stellar-rpc. Before it, build-rpc-v2 builds the
+// bench binary where the Makefile has it, and build-stellar-rpc does on the
+// older refs that have only that, both against the shared libraries.
+// build-native-libs is the same signal runner/bootstrap.sh reads.
+func DetectBuildTarget(src, commit string) (plan.BuildTarget, bool, error) {
+	has := func(target string) (bool, error) {
+		ok, err := grepTree(src, commit, "^"+target+":", "Makefile")
 		if err != nil {
-			return "", fmt.Errorf("probe the build target of %s in %s: %w", commit, src, err)
+			return false, fmt.Errorf("probe the build target of %s in %s: %w", commit, src, err)
+		}
+		return ok, nil
+	}
+	switch static, err := has("build-native-libs"); {
+	case err != nil:
+		return "", false, err
+	case static:
+		return plan.BuildStellarRPC, true, nil
+	}
+	for _, target := range []plan.BuildTarget{plan.BuildRPCV2, plan.BuildStellarRPC} {
+		ok, err := has(string(target))
+		if err != nil {
+			return "", false, err
 		}
 		if ok {
-			return target, nil
+			return target, false, nil
 		}
 	}
-	return "", fmt.Errorf("commit %s has neither a %s nor a %s target in its Makefile",
+	return "", false, fmt.Errorf("commit %s has neither a %s nor a %s target in its Makefile",
 		commit, plan.BuildRPCV2, plan.BuildStellarRPC)
+}
+
+// DetectEmptyColdOutDir reports whether commit's bench ingest cold refuses a
+// non-empty --cold-out-dir, as it does from stellar-rpc#1070 on.
+func DetectEmptyColdOutDir(src, commit string) (bool, error) {
+	ok, err := grepSource(src, commit, `requireEmptyDir\([[:space:]]*"cold-out-dir"`)
+	if err != nil {
+		return false, fmt.Errorf("probe the bench ingest cold of %s in %s: %w", commit, src, err)
+	}
+	return ok, nil
 }
 
 // declaresCommand reports whether commit's non-test cmd/ sources declare a

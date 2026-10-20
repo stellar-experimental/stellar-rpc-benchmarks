@@ -284,32 +284,65 @@ func TestDetectQueryCLI(t *testing.T) {
 	}
 }
 
-// TestDetectBuildTarget checks that build-rpc-v2 wins over the rpcv1 alias
-// that older Makefiles also call build-stellar-rpc, and that a Makefile with
-// neither is an error.
+// TestDetectBuildTarget checks each Makefile generation: build-rpc-v2 wins
+// over the rpcv1 alias that its Makefiles also call build-stellar-rpc, a
+// Makefile with build-stellar-rpc alone (c48a55c6) builds shared, only
+// build-native-libs makes the build static, and a Makefile with no build
+// target is an error.
 func TestDetectBuildTarget(t *testing.T) {
 	repo, _ := originRepo(t)
 	shared := commit(t, repo, "Makefile", "build-stellar-rpc: build-rpc-v1\n\nbuild-rpc-v2: build-libs\n")
-	static := commit(t, repo, "Makefile", "build-stellar-rpc: build-libs build-native-libs\n")
+	onlyStellarRPC := commit(t, repo, "Makefile", "build-stellar-rpc: build-libs\n")
+	static := commit(t, repo, "Makefile",
+		"build-native-libs: $(ZSTD_HOME)/lib/libzstd.a\n\nbuild-stellar-rpc: build-libs build-native-libs\n")
 	neither := commit(t, repo, "Makefile", "build: build-libs\n")
 
 	for _, tc := range []struct {
 		name   string
 		commit string
 		want   plan.BuildTarget
+		static bool
 	}{
-		{"shared libraries", shared, plan.BuildRPCV2},
-		{"one static binary", static, plan.BuildStellarRPC},
+		{"build-rpc-v2 and its shared libraries", shared, plan.BuildRPCV2, false},
+		{"build-stellar-rpc alone, shared (c48a55c6)", onlyStellarRPC, plan.BuildStellarRPC, false},
+		{"build-native-libs, one static binary", static, plan.BuildStellarRPC, true},
 	} {
-		got, err := DetectBuildTarget(repo, tc.commit)
+		got, gotStatic, err := DetectBuildTarget(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want || gotStatic != tc.static {
+			t.Errorf("%s: DetectBuildTarget = %q, %t; want %q, %t", tc.name, got, gotStatic, tc.want, tc.static)
+		}
+	}
+	if got, _, err := DetectBuildTarget(repo, neither); err == nil {
+		t.Errorf("DetectBuildTarget of a Makefile with neither target = %q, want an error", got)
+	}
+}
+
+// TestDetectEmptyColdOutDir checks the probe for bench ingest cold's empty
+// --cold-out-dir rule, which a test file alone does not satisfy.
+func TestDetectEmptyColdOutDir(t *testing.T) {
+	repo, _ := originRepo(t)
+	mustMkdir(t, filepath.Join(repo, "cmd"))
+	before := commit(t, repo, "cmd/cold.go", "func validate() error { return nil }\n")
+	testOnly := commit(t, repo, "cmd/cold_test.go", "var _ = requireEmptyDir(\"cold-out-dir\", root)\n")
+	after := commit(t, repo, "cmd/cold.go", "func validate() error { return requireEmptyDir(\"cold-out-dir\", o.ColdRoot) }\n")
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   bool
+	}{
+		{"before #1070", before, false},
+		{"the rule in a test file only", testOnly, false},
+		{"from #1070 on", after, true},
+	} {
+		got, err := DetectEmptyColdOutDir(repo, tc.commit)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		if got != tc.want {
-			t.Errorf("%s: DetectBuildTarget = %q, want %q", tc.name, got, tc.want)
+			t.Errorf("%s: DetectEmptyColdOutDir = %t, want %t", tc.name, got, tc.want)
 		}
-	}
-	if got, err := DetectBuildTarget(repo, neither); err == nil {
-		t.Errorf("DetectBuildTarget of a Makefile with neither target = %q, want an error", got)
 	}
 }

@@ -7,6 +7,7 @@
   "bench_cli": "bench",
   "query_cli": "tiered",
   "build_target": "build-rpc-v2",
+  "static_libs": false,
   "results_dir": "/bench/results/golden-deadbeef-20260101T000000Z",
   "tarball": "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",
   "steps": [
@@ -15,6 +16,11 @@
       "kind": "build",
       "timed": false,
       "argv": [
+        [
+          "sh",
+          "-c",
+          "for lib in \"$HOME/.zstd/lib/libzstd\" \"$HOME/.rocksdb/lib/librocksdb\"; do [ -e \"$lib.so\" ] || [ -e \"$lib.dylib\" ] || { echo \"error: $lib.so is missing: this ref links the shared native libs; run bootstrap.sh with SRC_REF=deadbeefcafebabefeedface1234567890abcdef first\" \u003e\u00262; exit 1; }; done"
+        ],
         [
           "git",
           "-C",

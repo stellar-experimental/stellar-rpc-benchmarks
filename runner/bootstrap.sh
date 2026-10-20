@@ -152,15 +152,17 @@ git -C "$SRC" checkout --quiet FETCH_HEAD
 
 # --- native libs, mirroring CI's setup-go action ------------------------------
 # Two generations of stellar-rpc build differently. A ref before
-# stellar-rpc#1123 runs `make build-rpc-v2`, which links shared zstd and
-# RocksDB from ~/.zstd and ~/.rocksdb. From #1123 on, `make build-stellar-rpc`
+# stellar-rpc#1123 links shared zstd and RocksDB from ~/.zstd and ~/.rocksdb.
+# From #1123 on (a Makefile with build-native-libs), `make build-stellar-rpc`
 # links static archives, and the campaign's build step points it at
 # ~/.zstd-static and ~/.rocksdb-static (staticLibHomes in
 # runner/internal/plan), because the static install scripts refuse a prefix
-# that holds a shared library. Install what SRC_REF's scripts build; a static
-# build also builds missing archives itself, at the cost of a slower first
-# build. The scripts apt-get cmake and ninja through sudo (or directly as
-# root) only when they are missing, and the apt step above installs both.
+# that holds a shared library. Install what SRC_REF's scripts build; run this
+# again with an older SRC_REF to add the shared set, which a shared build
+# checks for before it runs make. A static build also builds missing archives
+# itself, at the cost of a slower first build. The scripts apt-get cmake and
+# ninja through sudo (or directly as root) only when they are missing, and the
+# apt step above installs both.
 if grep -q '^build-native-libs:' "$SRC/Makefile"; then
   [ -e "$HOME/.zstd-static/lib/libzstd.a" ] ||
     (cd "$SRC" && PREFIX="$HOME/.zstd-static" ./scripts/install-zstd.sh)

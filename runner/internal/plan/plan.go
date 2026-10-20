@@ -73,19 +73,29 @@ const (
 	// BuildRPCV2 is `make build-rpc-v2`: a stellar-rpc-v2 binary linked against
 	// shared RocksDB and zstd. It is the zero value's meaning too.
 	BuildRPCV2 BuildTarget = "build-rpc-v2"
-	// BuildStellarRPC is `make build-stellar-rpc`, from stellar-rpc#1123 on: one
-	// stellar-rpc binary with RocksDB and zstd linked statically, which runs
+	// BuildStellarRPC is `make build-stellar-rpc`, which writes a stellar-rpc
+	// binary. Before stellar-rpc#1123 it links the shared libraries, and on the
+	// refs that predate build-rpc-v2 that binary is the bench binary itself.
+	// From #1123 on (StaticLibs) it links RocksDB and zstd statically and runs
 	// rpcv2, and so the bench commands, only under --enable-rpcv2.
 	BuildStellarRPC BuildTarget = "build-stellar-rpc"
 )
 
-// staticLibHomes point a build-stellar-rpc build at its static zstd and RocksDB
-// archives, which the Makefile builds there when they are missing. They are
-// apart from ~/.zstd and ~/.rocksdb because those hold the shared libraries a
-// build-rpc-v2 build links, and the static install scripts refuse a prefix
-// that holds a shared library. runner/bootstrap.sh uses the same paths. Make
-// expands $(HOME) itself.
+// staticLibHomes point a static build at its zstd and RocksDB archives, which
+// the Makefile builds there when they are missing. They are apart from ~/.zstd
+// and ~/.rocksdb because those hold the shared libraries the older builds
+// link, and the static install scripts refuse a prefix that holds a shared
+// library. runner/bootstrap.sh uses the same paths. Make expands $(HOME)
+// itself.
 var staticLibHomes = []string{"ZSTD_HOME=$(HOME)/.zstd-static", "ROCKSDB_HOME=$(HOME)/.rocksdb-static"}
+
+// sharedLibsCheck is the build step's first command for a ref that links the
+// shared libraries: it fails before make, naming the fix, when ~/.zstd or
+// ~/.rocksdb lacks them, which is the state a box bootstrapped for a static ref
+// is in. %s is the commit.
+const sharedLibsCheck = `for lib in "$HOME/.zstd/lib/libzstd" "$HOME/.rocksdb/lib/librocksdb"; do ` +
+	`[ -e "$lib.so" ] || [ -e "$lib.dylib" ] || { echo "error: $lib.so is missing: this ref links the ` +
+	`shared native libs; run bootstrap.sh with SRC_REF=%s first" >&2; exit 1; }; done`
 
 // Inputs carries everything about the environment that Build would otherwise
 // have to discover for itself. Keeping them in a struct is what makes Build
@@ -114,6 +124,12 @@ type Inputs struct {
 	// BuildTarget is the built commit's Makefile target; empty means
 	// BuildRPCV2 (run.DetectBuildTarget).
 	BuildTarget BuildTarget
+	// StaticLibs reports that the build links RocksDB and zstd statically and
+	// that the binary needs --enable-rpcv2 (run.DetectBuildTarget).
+	StaticLibs bool
+	// EmptyColdOutDir reports that the built commit's bench ingest cold refuses
+	// a non-empty --cold-out-dir (run.DetectEmptyColdOutDir).
+	EmptyColdOutDir bool
 }
 
 // Step is one unit of scheduling, skipping, and failure. Argv is a *list* of
@@ -175,6 +191,7 @@ type Plan struct {
 	BenchCLI      BenchCLI    `json:"bench_cli"`    // bench | legacy: the argv shape of every bench leg
 	QueryCLI      QueryCLI    `json:"query_cli"`    // tiered | data-dir: the argv shape of every query leg
 	BuildTarget   BuildTarget `json:"build_target"` // the Makefile target the build step runs
+	StaticLibs    bool        `json:"static_libs"`  // static RocksDB and zstd, and --enable-rpcv2 on every bench leg
 	ResultsDir    string      `json:"results_dir"`  // <bench_root>/results/<run_id>
 	Tarball       string      `json:"tarball"`      // /tmp/bench-results-<run_id>.tgz
 	Notes         []string    `json:"notes,omitempty"`
@@ -206,6 +223,7 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	if p.BuildTarget == "" {
 		p.BuildTarget = BuildRPCV2
 	}
+	p.StaticLibs = in.StaticLibs
 
 	// Both query suites read a database this campaign builds. Query-cold needs
 	// the cold store a cold ingest leaves behind, which config validation makes
@@ -278,13 +296,11 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	return p
 }
 
-// Check reports a config that the commit shape in cannot run. From
-// stellar-rpc#1070 on, which is also when the query bench takes --data-dir,
-// bench ingest cold writes one dataset per --cold-out-dir and refuses a
-// non-empty one, so a bsb-s3 dataset can no longer backfill several chunks
-// into its one pack root.
+// Check reports a config that the commit shape in cannot run. When bench
+// ingest cold refuses a non-empty --cold-out-dir (stellar-rpc#1070 on), a
+// bsb-s3 dataset can no longer backfill several chunks into its one pack root.
 func Check(cfg *config.Config, in Inputs) error {
-	if in.QueryCLI != QueryCLIDataDir {
+	if !in.EmptyColdOutDir {
 		return nil
 	}
 	for _, d := range cfg.Datasets {
@@ -301,7 +317,7 @@ func Check(cfg *config.Config, in Inputs) error {
 // path of group (ingest or query) and sub in the plan's CLI shape.
 func (p *Plan) benchArgv(group string, sub ...string) []string {
 	argv := []string{p.Bin}
-	if p.BuildTarget == BuildStellarRPC {
+	if p.StaticLibs {
 		argv = append(argv, "--enable-rpcv2")
 	}
 	if p.BenchCLI == BenchCLILegacy {
@@ -332,27 +348,28 @@ func forEachCell(cfg *config.Config, visit func(d *config.Dataset, chunk, rep in
 }
 
 func buildStep(p *Plan, in Inputs) Step {
-	return Step{
-		ID:   "build",
-		Kind: KindBuild,
-		Argv: [][]string{
-			{"git", "-C", p.Src, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", in.BuiltCommit},
-			{"make", "-C", p.Src, "build-libs"},
-			// The build goes through the Makefile so the binary carries the
-			// repo's GOLDFLAGS (version, commit, branch, build timestamp) that
-			// `version` and run.json report. The target writes its binary in
-			// the clone root; move it into the versioned path the campaign
-			// runs.
-			p.makeBuild(),
-			{"mv", filepath.Join(p.Src, p.builtBinary()), p.Bin},
-		},
+	var argv [][]string
+	if !p.StaticLibs {
+		argv = append(argv, []string{"sh", "-c", fmt.Sprintf(sharedLibsCheck, in.BuiltCommit)})
 	}
+	argv = append(argv,
+		[]string{"git", "-C", p.Src, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", in.BuiltCommit},
+		[]string{"make", "-C", p.Src, "build-libs"},
+		// The build goes through the Makefile so the binary carries the
+		// repo's GOLDFLAGS (version, commit, branch, build timestamp) that
+		// `version` and run.json report. The target writes its binary in
+		// the clone root; move it into the versioned path the campaign
+		// runs.
+		p.makeBuild(),
+		[]string{"mv", filepath.Join(p.Src, p.builtBinary()), p.Bin},
+	)
+	return Step{ID: "build", Kind: KindBuild, Argv: argv}
 }
 
 // makeBuild is the make command of the plan's build target.
 func (p *Plan) makeBuild() []string {
 	argv := []string{"make", "-C", p.Src, string(p.BuildTarget)}
-	if p.BuildTarget == BuildStellarRPC {
+	if p.StaticLibs {
 		argv = append(argv, staticLibHomes...)
 	}
 	return argv

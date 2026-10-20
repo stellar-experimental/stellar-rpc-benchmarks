@@ -129,9 +129,10 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 }
 
 // probeShape fills in's commit shape for the commands that only print a plan:
-// run.DetectBenchCLI, run.DetectBuildTarget, and run.DetectQueryCLI for a query
-// campaign. A failed probe, a missing query bench, or a config the shape cannot
-// run is a note, and the plan falls back to the default shape.
+// run.DetectBenchCLI, run.DetectBuildTarget, run.DetectEmptyColdOutDir, and
+// run.DetectQueryCLI for a query campaign. A failed probe, a missing query
+// bench, or a config the shape cannot run is a note, and the plan falls back
+// to the default shape.
 func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout io.Writer) {
 	cli, err := run.DetectBenchCLI(src, commit)
 	if err != nil {
@@ -139,10 +140,15 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 		return
 	}
 	in.BenchCLI = cli
-	if target, err := run.DetectBuildTarget(src, commit); err != nil {
+	if target, static, err := run.DetectBuildTarget(src, commit); err != nil {
 		run.Notef(stdout, "%s — planning %s", err, plan.BuildRPCV2)
 	} else {
-		in.BuildTarget = target
+		in.BuildTarget, in.StaticLibs = target, static
+	}
+	if empty, err := run.DetectEmptyColdOutDir(src, commit); err != nil {
+		run.Notef(stdout, "%s", err)
+	} else {
+		in.EmptyColdOutDir = empty
 	}
 	if cfg.Query {
 		switch shape, ok, err := run.DetectQueryCLI(src, commit, cli); {
@@ -208,12 +214,17 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		return 1
 	}
 	run.Notef(out, "bench CLI: %s (%s)", benchCLI, benchCLIDescription(benchCLI))
-	buildTarget, err := run.DetectBuildTarget(src, builtCommit)
+	buildTarget, staticLibs, err := run.DetectBuildTarget(src, builtCommit)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 1
 	}
-	run.Notef(out, "build target: make %s", buildTarget)
+	run.Notef(out, "build target: make %s (static libs: %t)", buildTarget, staticLibs)
+	emptyColdOutDir, err := run.DetectEmptyColdOutDir(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
 	var queryCLI plan.QueryCLI
 	if cfg.Query {
 		shape, ok, err := run.DetectQueryCLI(src, builtCommit, benchCLI)
@@ -262,15 +273,17 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	}
 
 	in := plan.Inputs{
-		BenchRoot:     benchRoot,
-		BuiltCommit:   builtCommit,
-		Sha8:          sha8,
-		Stamp:         stamp,
-		QueryRates:    ql.rates,
-		QueryDuration: queryDuration(cfg),
-		BenchCLI:      benchCLI,
-		QueryCLI:      queryCLI,
-		BuildTarget:   buildTarget,
+		BenchRoot:       benchRoot,
+		BuiltCommit:     builtCommit,
+		Sha8:            sha8,
+		Stamp:           stamp,
+		QueryRates:      ql.rates,
+		QueryDuration:   queryDuration(cfg),
+		BenchCLI:        benchCLI,
+		QueryCLI:        queryCLI,
+		BuildTarget:     buildTarget,
+		StaticLibs:      staticLibs,
+		EmptyColdOutDir: emptyColdOutDir,
 	}
 	if err := plan.Check(cfg, in); err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)

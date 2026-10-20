@@ -744,7 +744,8 @@ chunks = [4]
 	got := out.String()
 	for _, want := range []string{
 		"== note: query = true with ingest = cold leaves no hot DB",
-		"== build\n  $ git -C /bench/src -c advice.detachedHead=false checkout -q --detach deadbeefcafebabefeedface1234567890abcdef\n",
+		"== build\n  $ sh -c for lib in ",
+		"  $ git -C /bench/src -c advice.detachedHead=false checkout -q --detach deadbeefcafebabefeedface1234567890abcdef\n",
 		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench ingest cold",
 		"== ingest-cold-mainnet-c4-run1\n  $ rm -rf /bench/scratch/mainnet/4\n",
 		// The whole pre_clean list on one line, as the executor wipes it.
@@ -808,35 +809,56 @@ func singleBinaryInputs() Inputs {
 	in := goldenInputs()
 	in.QueryCLI = QueryCLIDataDir
 	in.BuildTarget = BuildStellarRPC
+	in.StaticLibs = true
+	in.EmptyColdOutDir = true
 	return in
 }
 
 // TestBuildTargets checks the build step of each Makefile shape: the target,
-// the static library homes, and the binary the target writes.
+// the static library homes, the binary the target writes, and the shared
+// library check that a shared build runs before make.
 func TestBuildTargets(t *testing.T) {
 	cfg := load(t, fmt.Sprintf(hotConfig, 0))
 	for _, tc := range []struct {
+		name   string
 		target BuildTarget
+		static bool
 		want   BuildTarget
 		make   []string
 		binary string
 	}{
-		{"", BuildRPCV2, []string{"make", "-C", "/bench/src", "build-rpc-v2"}, "/bench/src/stellar-rpc-v2"},
-		{BuildStellarRPC, BuildStellarRPC, []string{"make", "-C", "/bench/src", "build-stellar-rpc",
+		{"default", "", false, BuildRPCV2, []string{"make", "-C", "/bench/src", "build-rpc-v2"}, "/bench/src/stellar-rpc-v2"},
+		{"shared build-stellar-rpc (c48a55c6)", BuildStellarRPC, false, BuildStellarRPC,
+			[]string{"make", "-C", "/bench/src", "build-stellar-rpc"}, "/bench/src/stellar-rpc"},
+		{"static build-stellar-rpc", BuildStellarRPC, true, BuildStellarRPC, []string{"make", "-C", "/bench/src", "build-stellar-rpc",
 			"ZSTD_HOME=$(HOME)/.zstd-static", "ROCKSDB_HOME=$(HOME)/.rocksdb-static"}, "/bench/src/stellar-rpc"},
 	} {
 		in := goldenInputs()
-		in.BuildTarget = tc.target
+		in.BuildTarget, in.StaticLibs = tc.target, tc.static
 		p := Build(cfg, in)
-		if p.BuildTarget != tc.want {
-			t.Errorf("BuildTarget %q: plan records %q, want %q", tc.target, p.BuildTarget, tc.want)
+		if p.BuildTarget != tc.want || p.StaticLibs != tc.static {
+			t.Errorf("%s: plan records %q, static %t; want %q, %t", tc.name, p.BuildTarget, p.StaticLibs, tc.want, tc.static)
 		}
-		build := stepByID(t, p, "build")
-		if !slices.Equal(build.Argv[2], tc.make) {
-			t.Errorf("BuildTarget %q: make = %v, want %v", tc.target, build.Argv[2], tc.make)
+		argv := stepByID(t, p, "build").Argv
+		shared := argv[0][0] == "sh"
+		if shared == tc.static {
+			t.Errorf("%s: first build command = %v, want the shared library check only for a shared build", tc.name, argv[0])
 		}
-		if want := []string{"mv", tc.binary, p.Bin}; !slices.Equal(build.Argv[3], want) {
-			t.Errorf("BuildTarget %q: mv = %v, want %v", tc.target, build.Argv[3], want)
+		if shared {
+			if !strings.Contains(argv[0][2], "SRC_REF="+in.BuiltCommit) {
+				t.Errorf("%s: shared library check = %q, want it to name SRC_REF=%s", tc.name, argv[0][2], in.BuiltCommit)
+			}
+			argv = argv[1:]
+		}
+		if !slices.Equal(argv[2], tc.make) {
+			t.Errorf("%s: make = %v, want %v", tc.name, argv[2], tc.make)
+		}
+		if want := []string{"mv", tc.binary, p.Bin}; !slices.Equal(argv[3], want) {
+			t.Errorf("%s: mv = %v, want %v", tc.name, argv[3], want)
+		}
+		hasFlag := slices.Contains(stepByID(t, p, "ingest-cold-ds-c7-run1").Argv[0], "--enable-rpcv2")
+		if hasFlag != tc.static {
+			t.Errorf("%s: ingest argv has --enable-rpcv2 = %t, want %t", tc.name, hasFlag, tc.static)
 		}
 	}
 }
@@ -901,13 +923,13 @@ func TestDataDirQueryLegs(t *testing.T) {
 	}
 }
 
-// TestCheckRefusesMultiChunkBSBAtDataDirRefs checks that a bsb-s3 dataset with
-// several chunks is refused only where bench ingest cold needs an empty
-// --cold-out-dir per run.
-func TestCheckRefusesMultiChunkBSBAtDataDirRefs(t *testing.T) {
+// TestCheckRefusesMultiChunkBSB checks that a bsb-s3 dataset with several
+// chunks is refused exactly where bench ingest cold needs an empty
+// --cold-out-dir per run, with or without query legs.
+func TestCheckRefusesMultiChunkBSB(t *testing.T) {
 	src := `
 name = "n"
-ingest = "none"
+ingest = "cold"
 query = false
 runs = 1
 
@@ -918,13 +940,15 @@ location = "s3://bucket/prefix"
 chunks = %s
 `
 	multi, single := load(t, fmt.Sprintf(src, "[4, 5]")), load(t, fmt.Sprintf(src, "[4]"))
-	if err := Check(multi, singleBinaryInputs()); err == nil || !strings.Contains(err.Error(), "mainnet") {
-		t.Errorf("Check(two bsb-s3 chunks, data-dir) = %v, want an error naming the dataset", err)
+	ingestOnly := singleBinaryInputs()
+	ingestOnly.QueryCLI = ""
+	if err := Check(multi, ingestOnly); err == nil || !strings.Contains(err.Error(), "mainnet") {
+		t.Errorf("Check(ingest-only, two bsb-s3 chunks, empty --cold-out-dir) = %v, want an error naming the dataset", err)
 	}
-	if err := Check(single, singleBinaryInputs()); err != nil {
-		t.Errorf("Check(one bsb-s3 chunk, data-dir) = %v, want nil", err)
+	if err := Check(single, ingestOnly); err != nil {
+		t.Errorf("Check(one bsb-s3 chunk, empty --cold-out-dir) = %v, want nil", err)
 	}
 	if err := Check(multi, goldenInputs()); err != nil {
-		t.Errorf("Check(two bsb-s3 chunks, tiered) = %v, want nil", err)
+		t.Errorf("Check(two bsb-s3 chunks, reusable --cold-out-dir) = %v, want nil", err)
 	}
 }
