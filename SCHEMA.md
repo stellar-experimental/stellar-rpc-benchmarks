@@ -60,7 +60,15 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
       // pubnet extras:    "seq_start": int, "seq_end": int   (chunk*10000+2 … +9999)
       // synthetic extras: "model": "SAC transfer", "tps": 10000, "tx_per_ledger": 6000,
       //                   "pack": "19.5 GiB", "source_chunks": "1"   (from --unit-facts sidecar)
-    } }
+    } },
+    "sets": { "<dataset>": "<set>" | null }  // optional; campaign layout with a metadata.json only.
+                                           //   The <set> segment of each manifest dataset's location
+                                           //   (…/synthetic-ledgers/<set>/<profile>/…), null when the
+                                           //   location names none. summary.html reads a profile's
+                                           //   sizes from docs/dataset-sizes.json sets[<set>]; a run
+                                           //   without this key (converted before it existed) reads
+                                           //   that file's legacy_set; a null or unknown set shows
+                                           //   no sizes — never another set's same-name profile.
   },
   "campaign": {
     "reps": 5,

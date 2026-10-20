@@ -381,6 +381,41 @@ class RunRecordTests(unittest.TestCase):
                             for w in warnings))
 
 
+class DatasetSetTests(unittest.TestCase):
+    """dataset.sets records the synthetic set each dataset was fetched from, so
+    the viewer matches sizes by set and profile, never by profile alone."""
+
+    def test_set_from_the_location(self):
+        meta = {"datasets": [
+            {"name": "sac-6000", "location":
+             "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1/sac-6000/packs-v4/cold"},
+            {"name": "soroswap-1500", "location":
+             "gs://rpc-full-history/synthetic-ledgers/2026-07-18-apply-load-20k/soroswap-1500/packs/cold"},
+            {"name": "local", "location": "/data/local/packs/cold"},
+            {"name": "fixture"},
+        ]}
+        self.assertEqual(convert.dataset_sets(meta), {
+            "sac-6000": "2026-10-apply-load-20k-c1",
+            "soroswap-1500": "2026-07-18-apply-load-20k",
+            "local": None,
+            "fixture": None,
+        })
+
+    def test_campaign_run_carries_sets(self):
+        root = os.path.join(tempfile.mkdtemp(), "sets")
+        fixtures.build_campaign_bundle(root, paced=True)
+        data, _, _ = run_convert(root)
+        # The fixture locations (gs://bucket/<name>/...) name no set.
+        self.assertEqual(data["dataset"]["sets"], {"sac-6000": None, "soroswap-1500": None})
+
+    def test_legacy_bundle_carries_no_sets_key(self):
+        root = os.path.join(tempfile.mkdtemp(), "leg")
+        fixtures.build_legacy_bundle(root)
+        data, _, _ = run_convert(root, dataset_kind="pubnet", run_id="l", run_name="L",
+                                 run_date="2026-07-13")
+        self.assertNotIn("sets", data["dataset"])
+
+
 class LegacyBundleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

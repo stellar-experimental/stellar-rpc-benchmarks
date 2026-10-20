@@ -647,6 +647,37 @@ function summaryHasBudget(D) {
 /* The summary's own section assertions, shared by the manifest runs and the
    generated fixtures. `text` is the rendered page with #queries cut out — the
    only place the tier words are allowed to appear. */
+// The dataset-sizes file the summary reads, and the summary's own lookup of a
+// unit's sizes: by the run's set (dataset.sets, else legacy_set for a run
+// converted before that field) and profile, never by profile alone.
+const DATASET_SIZES = JSON.parse(fs.readFileSync(path.join(DOCS, "dataset-sizes.json"), "utf8"));
+function runSetOf(D, unit) {
+  const sets = (D.dataset || {}).sets;
+  if (sets === undefined) return DATASET_SIZES.legacy_set || null;
+  return (sets && sets[String(unit).replace(/-c\d+$/, "")]) || null;
+}
+// summaryShowsSizes mirrors summary.js allSized: the size column renders only
+// when every dataset-table unit has a raw size in its own set.
+function summaryShowsSizes(D, sizes = DATASET_SIZES) {
+  const ds = D.dataset || {}, um = ds.unit_meta || {}, ING = D.ingest_hot || {};
+  const units = (ds.unit_order || Object.keys(um))
+    .filter((u) => ING[u] && ING[u].driver && ING[u].driver.ingest_total)
+    .filter((u) => { const k = um[u] || {}; return k.ledgers > 0 && k.txs > 0; });
+  const sized = (u) => {
+    const set = runSetOf(D, u);
+    const p = set && sizes.sets[set] && sizes.sets[set].profiles[String(u).replace(/-c\d+$/, "")];
+    return !!(p && p.raw_meta_gib > 0 && p.raw_meta_ledgers > 0);
+  };
+  return units.length > 0 && units.every(sized);
+}
+// summaryShowsSource is when the summary links the test data: every unit on one
+// set the file knows.
+function summaryShowsSource(D) {
+  const ds = D.dataset || {}, um = ds.unit_meta || {};
+  const sets = [...new Set((ds.unit_order || Object.keys(um)).map((u) => runSetOf(D, u)))];
+  return sets.length === 1 && !!sets[0] && !!(DATASET_SIZES.sets[sets[0]] || {}).source;
+}
+
 function checkSummarySections(sdoc, group, D) {
   const sreport = sdoc.getElementById("report");
   const wantBudget = summaryHasBudget(D);
@@ -1011,6 +1042,33 @@ for (const file of fixtureFiles) {
   check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
   checkSummarySections(sdoc, group + " summary", D);
+  // Sizes are matched by the run's set and profile. phase3 is on the 2026-07
+  // set, whose sizes are measured; phase3b and partial are on the 2026-10 c1
+  // set, whose sizes are not, and partial's sac-6000 also exists in 2026-07.
+  const dsTxt = txt(sdoc.getElementById("dataset-table"));
+  if (D.run_id === "fixture-rps-phase3") {
+    check(group, "summary: a 2026-07 run shows the size column", /Avg ledger size/.test(dsTxt) && /MiB/.test(dsTxt), dsTxt.slice(0, 120));
+  }
+  if (D.run_id === "fixture-rps-phase3b" || D.run_id === "fixture-rps-partial") {
+    check(group, "summary: a 2026-10 run without measured sizes has no size column, not another set's",
+      !/Avg ledger size|MiB/.test(dsTxt), dsTxt.slice(0, 120));
+    check(group, "summary: no test-data link to another set", !/2026-07/.test(txt(sdoc.getElementById("source-data"))), "2026-07 link");
+  }
+  if (D.run_id === "fixture-rps-phase3b") {
+    // With the 2026-10 c1 sizes filled in, the same run shows them.
+    const filled = JSON.parse(JSON.stringify(DATASET_SIZES));
+    const c1 = filled.sets["2026-10-apply-load-20k-c1"].profiles;
+    c1["sac-6000"].raw_meta_gib = 512; c1["sac-6000"].raw_meta_ledgers = 20000;           // 26.2 MiB/ledger
+    c1["soroswap-1500"].raw_meta_gib = 128; c1["soroswap-1500"].raw_meta_ledgers = 20000; // 6.55 MiB/ledger
+    const sf = await loadViewer(`?run=${D.run_id}`, { page: "summary.html", script: "summary.js",
+      fetch: makeFetch({ ...overlay, "dataset-sizes.json": JSON.stringify(filled) }) });
+    const fTxt = txt(sf.window.document.getElementById("dataset-table"));
+    check(group, "summary: a 2026-10 run with sizes shows them", summaryShowsSizes(D, filled)
+      && /Avg ledger size/.test(fTxt) && /26\.2 MiB/.test(fTxt), fTxt.slice(0, 200));
+    check(group, "summary: the test-data link names the 2026-10 c1 set",
+      /2026-10-apply-load-20k-c1/.test(txt(sf.window.document.getElementById("source-data"))), "missing");
+    sf.window.close();
+  }
   if (D.run_id === "fixture-rps-phase3b") {
     const stext = txt(sreport);
     check(group, "summary: no E2E budget section for a phase without a budget", !sdoc.getElementById("budget"), "budget section rendered");
@@ -1234,8 +1292,16 @@ for (const run of manifest.runs) {
   // run's own bundle URI (source_uri, legacy source_gcs) is the raw-results
   // dir, linked from §05.
   const dsTblTxt = txt(doc.getElementById("dataset-table"));
-  check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
-  check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
+  const RD = runJSON(run.id);
+  if (summaryShowsSizes(RD)) {
+    check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
+  } else {
+    check(group, "no avg ledger size column without sizes for every profile of the run's set",
+      !/Avg ledger size/i.test(dsTblTxt), dsTblTxt.slice(0, 120));
+  }
+  if (summaryShowsSource(RD)) {
+    check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
+  }
   check(group, "raw-results link in §05", /(gs|s3):\/\/\S*results\//.test(txt(doc.getElementById("raw-results"))), "missing");
   check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
   // Headline figure: bars plus two visually separate reference lines.

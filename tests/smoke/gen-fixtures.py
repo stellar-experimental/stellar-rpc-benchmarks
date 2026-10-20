@@ -190,9 +190,13 @@ def driver_rows(qt, tokens, tier, profile, run):
     return rows
 
 
-def dataset_entry(unit):
-    """The metadata.json datasets entry for a campaign unit id (<name>-c<chunk>)."""
+def dataset_entry(unit, dataset_set=None):
+    """The metadata.json datasets entry for a campaign unit id (<name>-c<chunk>):
+    fetched from the named synthetic set, or a local tree that names no set."""
     name, chunk = re.match(r"^(.+)-c(\d+)$", unit).groups()
+    if dataset_set:
+        return {"name": name, "kind": "packs-s3", "chunks": [int(chunk)],
+                "location": f"s3://stellar-rpc-bench/inputs/synthetic-ledgers/{dataset_set}/{name}/packs-v4/cold"}
     return {"name": name, "kind": "packs-local",
             "location": f"/data/{name}/packs/cold", "chunks": [int(chunk)]}
 
@@ -243,7 +247,7 @@ def build_bundle(root, spec):
             "ingest": "both", "query": "yes", "close_interval": close,
             "runs": reps, "query_rps_ladder": ",".join(str(x) for x in C.QUERY_LOAD["ladder"]),
         },
-        "datasets": [dataset_entry(u) for u in units],
+        "datasets": [dataset_entry(u, spec.get("set")) for u in units],
         "hardware": {
             "instance_type": "m6id.2xlarge", "instance_id": "i-0123456789abcdef0",
             "uname": "Linux 6.8.0-1015-aws x86_64", "cpus": 8, "mem_total_kb": 32000000,
@@ -292,6 +296,11 @@ def check_common(D, spec):
     """What every fixture must carry: the unit list, per-unit counts, and a full
     ladder of well-formed rate cells wherever a (tier, unit, qtype) exists."""
     assert D["dataset"]["unit_order"] == spec["units"], D["dataset"]["unit_order"]
+    # The converter records each dataset's set from its location; the summary
+    # matches sizes by it.
+    want_set = spec.get("set")
+    assert D["dataset"]["sets"] == {re.sub(r"-c\d+$", "", u): want_set for u in spec["units"]}, \
+        D["dataset"].get("sets")
     for u in spec["units"]:
         meta = D["dataset"]["unit_meta"][u]
         assert all(k in meta for k in ("ledgers", "txs", "events")), meta
@@ -393,6 +402,7 @@ SPECS = [
         "close_interval": "600ms",   # phase 3's block time
         "phase": 3,
         "ladder_phase": 3,
+        "set": "2026-07-18-apply-load-20k",   # a set with sizes: the summary shows them
         "check": check_phase3,
     },
     {
@@ -405,6 +415,7 @@ SPECS = [
         "close_interval": "900ms",   # phase 3b's block time
         "phase": "3b",
         "ladder_phase": "3b",
+        "set": "2026-10-apply-load-20k-c1",   # sizes not measured yet: no size column
         "check": check_phase3,
     },
     {
@@ -430,6 +441,8 @@ SPECS = [
         "close_interval": "600ms",
         "phase": 3,
         "ladder_phase": 3,
+        # sac-6000 also exists in the 2026-07 set; its sizes must not cross over.
+        "set": "2026-10-apply-load-20k-c1",
         "drop_cold_query": ["sac-6000-c1"],
         "check": check_partial,
         "allow_warnings": [r"^missing run dir: query-cold-sac-6000-c1-run\d+$"],

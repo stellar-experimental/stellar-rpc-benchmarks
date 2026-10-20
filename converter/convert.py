@@ -547,6 +547,22 @@ def order_units(units, kind, facts):
     return ordered
 
 
+_SYNTH_SET = re.compile(r"/synthetic-ledgers/([^/]+)/")
+
+
+def dataset_sets(metadata):
+    """{dataset name: synthetic set or None} from the manifest's dataset
+    locations (`…/synthetic-ledgers/<set>/<profile>/…`). The set picks the
+    docs/dataset-sizes.json entry the viewer reads a profile's sizes from;
+    None means the location names no set, and the viewer then shows no sizes."""
+    out = {}
+    for d in (metadata or {}).get("datasets", []):
+        if d.get("name"):
+            m = _SYNTH_SET.search(str(d.get("location") or ""))
+            out[d["name"]] = m.group(1) if m else None
+    return out
+
+
 def order_units_campaign(units, metadata):
     """Campaign display order: datasets in manifest order (then alpha), chunk ascending."""
     ds_order = {}
@@ -1341,6 +1357,8 @@ def convert(args):
         },
         "campaign": campaign,
     }
+    if layout == "campaign" and metadata:
+        data["dataset"]["sets"] = dataset_sets(metadata)
     if hardware:
         data["hardware"] = hardware
     if hostname:

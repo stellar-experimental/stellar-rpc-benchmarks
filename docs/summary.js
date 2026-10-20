@@ -651,10 +651,20 @@
       console.warn("dataset-sizes.json not loaded; dataset sizes omitted", err);
     }
   }
-  // Match a run unit ("sac-5000-c1") to its dataset-sizes profile ("sac-5000").
-  function sizesFor(unit) {
-    const p = DATASET_SIZES && DATASET_SIZES.profiles;
-    return (p && p[String(unit).replace(/-c\d+$/, "")]) || null;
+  // setOf is the synthetic set a run unit's dataset came from: the converter's
+  // dataset.sets entry, or the file's legacy_set for a run converted before
+  // dataset.sets existed. null when the set is unknown.
+  function setOf(D, unit) {
+    const sets = (D.dataset || {}).sets;
+    if (sets === undefined) return (DATASET_SIZES && DATASET_SIZES.legacy_set) || null;
+    return (sets && sets[String(unit).replace(/-c\d+$/, "")]) || null;
+  }
+  // sizesFor is a run unit's dataset-sizes entry, matched by set and profile
+  // ("sac-5000-c1" -> "sac-5000"), never by profile alone.
+  function sizesFor(D, unit) {
+    const set = setOf(D, unit);
+    const entry = set && DATASET_SIZES && DATASET_SIZES.sets && DATASET_SIZES.sets[set];
+    return (entry && entry.profiles && entry.profiles[String(unit).replace(/-c\d+$/, "")]) || null;
   }
   // {targets, sel} — sel is the phase this run was paced for (campaign.phase).
   function phaseState(D) {
@@ -908,7 +918,7 @@
     const allMapped = dsUnits.length > 0 && dsUnits.every(u => wlOf(u));
     // Avg raw (uncompressed) ledger size, from dataset-sizes.json facts.
     const avgLedgerOf = u => {
-      const s = sizesFor(u);
+      const s = sizesFor(D, u);
       return s && s.raw_meta_gib > 0 && s.raw_meta_ledgers > 0 ? s.raw_meta_gib * 1073741824 / s.raw_meta_ledgers : null;
     };
     const allSized = dsUnits.length > 0 && dsUnits.every(u => avgLedgerOf(u) != null);
@@ -943,9 +953,14 @@
       }
       return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
     };
-    const testDataGcs = DATASET_SIZES && DATASET_SIZES.source_gcs;
-    const sourceData = testDataGcs
-      ? `<p class="sec-intro" id="source-data">Source test data: ${bucketLink(testDataGcs)}</p>`
+    // The source link names the run's set, so it shows only when every profile
+    // shares one set the file knows.
+    const runSets = [...new Set(dsUnits.map(u => setOf(D, u)))];
+    const setEntry = runSets.length === 1 && runSets[0] && DATASET_SIZES && DATASET_SIZES.sets
+      ? DATASET_SIZES.sets[runSets[0]] : null;
+    const testDataSrc = setEntry && setEntry.source;
+    const sourceData = testDataSrc
+      ? `<p class="sec-intro" id="source-data">Source test data: ${bucketLink(testDataSrc)}</p>`
       : "";
     const rawSrc = camp.source_uri || camp.source_gcs;
     const rawResults = rawSrc
