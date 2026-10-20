@@ -1205,8 +1205,8 @@ for (const file of fixtureFiles) {
   ];
   const runs = [...manifest.runs, ...extra];
   const overlay = { "runs/index.json": JSON.stringify({ ...manifest, runs }) };
-  const facetRows = async (label) => {
-    const { window, errors } = await loadViewer("", { fetch: makeFetch(overlay) });
+  const facetRows = async (label, ov = overlay) => {
+    const { window, errors } = await loadViewer("", { fetch: makeFetch(ov) });
     const doc = window.document;
     const opt = [...doc.querySelectorAll('.idx-opt[data-f="phase"]')].find((b) => txt(b).startsWith(label));
     if (opt) opt.click();
@@ -1215,10 +1215,19 @@ for (const file of fixtureFiles) {
     window.close();
     return out;
   };
+  // The published 3b runs count too: the manifest gains them as they land.
+  const want3b = (base) => extra.length + base.filter((r) => String(r.phase) === "3b").length;
   const p3b = await facetRows("Phase 3b");
   check(group, "zero JS/console errors", p3b.errors.length === 0, p3b.errors.join(" | ") || "");
-  check(group, "the Phase 3b facet filters to the 3b runs", p3b.found && p3b.on && p3b.rows === extra.length,
-    `found=${p3b.found} on=${p3b.on} rows=${p3b.rows}`);
+  check(group, "the Phase 3b facet filters to the 3b runs", p3b.found && p3b.on && p3b.rows === want3b(manifest.runs),
+    `found=${p3b.found} on=${p3b.on} rows=${p3b.rows} want=${want3b(manifest.runs)}`);
+  // The same check over a manifest that already carries a published 3b run.
+  const published = [...manifest.runs, { id: "idx-3b-published", name: "Published phase 3b run", date: "2026-10-03",
+    kind: "synthetic", path: "runs/idx-3b-published.json", phase: "3b" }];
+  const withPublished = { "runs/index.json": JSON.stringify({ ...manifest, runs: [...published, ...extra] }) };
+  const p3bPub = await facetRows("Phase 3b", withPublished);
+  check(group, "the Phase 3b facet counts a published 3b run too", p3bPub.found && p3bPub.on && p3bPub.rows === want3b(published),
+    `found=${p3bPub.found} on=${p3bPub.on} rows=${p3bPub.rows} want=${want3b(published)}`);
   const numeric = runs.filter((r) => String(r.phase) === "1").length;
   if (numeric) {
     const p1 = await facetRows("Phase 1");
