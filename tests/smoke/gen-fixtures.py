@@ -375,6 +375,14 @@ def check_unfloored(D, spec):
     assert (D["checks"] or {}).get("applies_to"), "a paced run still earns a check"
 
 
+def check_soroswap_only(D, spec):
+    """One soroswap unit, judged at its goal phase like any other profile."""
+    assert D["dataset"]["unit_order"] == ["soroswap-1500-c1"], D["dataset"]["unit_order"]
+    assert D["campaign"]["phase"] == spec["phase"], D["campaign"].get("phase")
+    for tier, unit, qt, qout in qtype_entries(D):
+        assert qout.get("verdict_sla"), (tier, unit, qt)
+
+
 def check_partial(D, spec):
     """The first unit has hot query legs only; the second has both tiers. The
     grid the viewer discovers has to come from the union, not from unit one."""
@@ -417,6 +425,21 @@ SPECS = [
         "ladder_phase": "3b",
         "set": "2026-10-apply-load-20k-c1",   # sizes not measured yet: no size column
         "check": check_phase3,
+    },
+    {
+        # A single-profile campaign without sac: the summary's dataset table
+        # has to name the soroswap workload, not assume a sac row.
+        "id": "fixture-rps-soroswap-only",
+        "name": "Fixture — open-loop query load, one soroswap profile",
+        "units": ["soroswap-1500-c1"],
+        "reps": 1,
+        # Phase 1: soroswap's probe floor (75 rps) differs from its SLA floor,
+        # as the shared open-loop checks require; at phase 3 the two coincide.
+        "close_interval": "2s",
+        "phase": 1,
+        "ladder_phase": 1,
+        "set": "2026-07-18-apply-load-20k",
+        "check": check_soroswap_only,
     },
     {
         "id": "fixture-rps-unfloored",

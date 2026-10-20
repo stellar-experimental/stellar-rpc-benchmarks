@@ -656,13 +656,32 @@ function runSetOf(D, unit) {
   if (sets === undefined) return DATASET_SIZES.legacy_set || null;
   return (sets && sets[String(unit).replace(/-c\d+$/, "")]) || null;
 }
+// summaryDatasetUnits are the units summary.js lists in its dataset table.
+function summaryDatasetUnits(D) {
+  const ds = D.dataset || {}, um = ds.unit_meta || {}, ING = D.ingest_hot || {};
+  return (ds.unit_order || Object.keys(um))
+    .filter((u) => ING[u] && ING[u].driver && ING[u].driver.ingest_total)
+    .filter((u) => { const k = um[u] || {}; return k.ledgers > 0 && k.txs > 0; });
+}
+// checkDatasetWorkloads checks that the dataset table names each unit's own
+// workload, mapped by model the way summary.js workloadFor maps it, or the unit
+// id itself when the run has no goal phase to take workload names from.
+function checkDatasetWorkloads(doc, group, D) {
+  const names = [...doc.querySelectorAll("#dataset-table td.ds-name")].map((td) => txt(td));
+  const want = summaryDatasetUnits(D).map((u) => {
+    if ((D.campaign || {}).phase == null) return u;
+    const id = u.toLowerCase();
+    return id.startsWith("sac") ? "SAC transfers" : id.includes("token") ? "OZ token transfers"
+      : id.includes("soroswap") ? "Soroswap swaps" : u;
+  });
+  check(group, "dataset table names each unit's own workload",
+    want.length > 0 && names.length === want.length && want.every((w, i) => names[i] === w),
+    `${names.join(", ")} vs ${want.join(", ")}`);
+}
 // summaryShowsSizes mirrors summary.js allSized: the size column renders only
 // when every dataset-table unit has a raw size in its own set.
 function summaryShowsSizes(D, sizes = DATASET_SIZES) {
-  const ds = D.dataset || {}, um = ds.unit_meta || {}, ING = D.ingest_hot || {};
-  const units = (ds.unit_order || Object.keys(um))
-    .filter((u) => ING[u] && ING[u].driver && ING[u].driver.ingest_total)
-    .filter((u) => { const k = um[u] || {}; return k.ledgers > 0 && k.txs > 0; });
+  const units = summaryDatasetUnits(D);
   const sized = (u) => {
     const set = runSetOf(D, u);
     const p = set && sizes.sets[set] && sizes.sets[set].profiles[String(u).replace(/-c\d+$/, "")];
@@ -927,6 +946,13 @@ const FIXTURE_CHECKS = {
       (body.match(/.{0,40}(NaN|-\d+(\.\d+)? ?(ms|s)\b).{0,40}/) || [""])[0]);
   },
 
+  /* One profile, and not sac: the summary must name the run's own workload,
+     never assume a sac row. */
+  "fixture-rps-soroswap-only": (doc, group, D) => {
+    check(group, "the run carries one soroswap unit", D.dataset.unit_order.join(",") === "soroswap-1500-c1", D.dataset.unit_order.join(","));
+    check(group, "the run names its goal phase", D.campaign.phase === 1, String(D.campaign.phase));
+  },
+
   /* No phase floor: the run is paced off-phase and names no query_phase, so the
      converter emits r-cells with no verdict at all. The section must still
      render and must judge every row on that endpoint and tier's own latency
@@ -1042,6 +1068,7 @@ for (const file of fixtureFiles) {
   check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
   checkSummarySections(sdoc, group + " summary", D);
+  checkDatasetWorkloads(sdoc, group + " summary", D);
   // Sizes are matched by the run's set and profile. phase3 is on the 2026-07
   // set, whose sizes are measured; phase3b and partial are on the 2026-10 c1
   // set, whose sizes are not, and partial's sac-6000 also exists in 2026-07.
@@ -1287,7 +1314,7 @@ for (const run of manifest.runs) {
   const dsCells = [...doc.querySelectorAll("#dataset-table td")].map(td => txt(td));
   const badCell = c => !c || c === "—" || /NaN|Infinity/.test(c);
   check(group, "dataset table has no empty or — cells", dsCells.length > 0 && !dsCells.some(badCell), dsCells.filter(badCell).length + " bad of " + dsCells.length);
-  check(group, "dataset table names the workloads", /SAC transfers/.test(txt(doc.getElementById("dataset-table"))), "missing");
+  checkDatasetWorkloads(doc, group, runJSON(run.id));
   // Test-data provenance: sizes + source come from dataset-sizes.json; the
   // run's own bundle URI (source_uri, legacy source_gcs) is the raw-results
   // dir, linked from §05.
