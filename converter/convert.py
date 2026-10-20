@@ -309,6 +309,16 @@ def run_manifest_path(d):
     return None
 
 
+# Leg dir (absolute) -> its manifest, as load_invocations read it, so later
+# readers of a leg's manifest do not parse it again.
+_manifests = {}
+
+
+def manifest_of(d):
+    """The manifest load_invocations read from leg dir d, or {}."""
+    return _manifests.get(os.path.abspath(d), {})
+
+
 def load_invocations(results_dir):
     """[(dirname, manifest dict)] for every per-invocation dir that has a
     run.json or an invocation.json. A failed run records an `error` field
@@ -316,6 +326,7 @@ def load_invocations(results_dir):
     that died mid-run: either way its CSVs are partial, so a bundle carrying
     one is loudly suspect."""
     out = []
+    _manifests.clear()
     for d in sorted(glob.glob(os.path.join(results_dir, "*"))):
         p = run_manifest_path(d) if os.path.isdir(d) else None
         if p is None:
@@ -334,6 +345,7 @@ def load_invocations(results_dir):
             warn(f"{name} never finished (run.json status running); its CSVs are partial "
                  "— re-run or drop that leg before publishing this conversion")
         out.append((name, inv))
+        _manifests[os.path.abspath(d)] = inv
     return out
 
 
@@ -606,7 +618,7 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
         "tp_events": stat([counts["events"] / (d["events_total"]["total_ns"] / NS) for d in drivers]),
     }
     out = {"driver": driver_out, "files": files_out, "derived": derived}
-    peak = _peak_rss_bytes(dirs, drivers)
+    peak = _peak_rss_bytes(_with_file(dirs, "driver.csv"), drivers)
     if peak is not None:
         out["peak_rss_bytes"] = peak
     return out
@@ -619,7 +631,7 @@ PEAK_RSS = "peak_rss_bytes"
 def _peak_rss_bytes(dirs, drivers):
     """Peak resident-set-size gauge (bytes), aggregated across runs, or None.
 
-    drivers is read_all(dirs, "driver.csv"). Each run's value is run.json's
+    drivers holds one driver per dir, in dirs order. Each run's value is run.json's
     peakRssBytes (stellar-rpc#1066) when its dir has one, else the older
     driver.csv `peak_rss_bytes` row, a single gauge replicated across the
     duration columns whose `total_ns` is the byte value. Stored as a plain V
@@ -627,9 +639,8 @@ def _peak_rss_bytes(dirs, drivers):
     mark, not a latency distribution. Present in every run or omitted entirely
     (never zero-filled).
     """
-    present = [d for d in dirs if os.path.isfile(os.path.join(d, "driver.csv"))]
     values = []
-    for d, drv in zip(present, drivers):
+    for d, drv in zip(dirs, drivers):
         v = _run_record_peak_rss(d)
         if v is None and PEAK_RSS in drv:
             v = drv[PEAK_RSS]["total_ns"]
@@ -638,7 +649,7 @@ def _peak_rss_bytes(dirs, drivers):
     if not found:
         return None
     if len(found) < len(values):
-        missing = [os.path.basename(d) for d, v in zip(present, values) if v is None]
+        missing = [os.path.basename(d) for d, v in zip(dirs, values) if v is None]
         warn(f"peak RSS present in {len(found)}/{len(values)} runs; omitting it "
              f"(missing in {', '.join(missing)})")
         return None
@@ -646,17 +657,15 @@ def _peak_rss_bytes(dirs, drivers):
 
 
 def _run_record_peak_rss(d):
-    """peakRssBytes from d/run.json, or None when there is no run.json or it
+    """peakRssBytes from d's run.json, or None when there is no run.json or it
     records no peak (the field is omitted where /proc is unreadable)."""
-    p = os.path.join(d, RUN_RECORD)
-    if not os.path.isfile(p):
-        return None
-    try:
-        with open(p) as f:
-            v = json.load(f).get("peakRssBytes")
-    except (json.JSONDecodeError, OSError):
-        return None
+    v = manifest_of(d).get("peakRssBytes")
     return v if isinstance(v, int) and v > 0 else None
+
+
+def _with_file(dirs, filename):
+    """The dirs that hold filename, in order: the dirs read_all read it from."""
+    return [d for d in dirs if os.path.isfile(os.path.join(d, filename))]
 
 
 def _pace_lag_agg(drivers, unit):
@@ -705,7 +714,7 @@ def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
     wall = "chunk_wall" if vocab == "old" else "run_wall"
     derived = {"ledgers_per_s": stat([counts["ledgers"] / (d[wall]["total_ns"] / NS) for d in drivers])}
     out = {"driver": driver_out, "phases": phases_out, "derived": derived}
-    peak = _peak_rss_bytes(dirs, drivers)
+    peak = _peak_rss_bytes(_with_file(dirs, "driver.csv"), drivers)
     if peak is not None:
         out["peak_rss_bytes"] = peak
     return out
@@ -787,7 +796,7 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         # Every leg's driver repeats the same setup rows (they measure the same
         # open/evict prep), so the first type's leg stands for the whole cell.
         if setup_drivers is None:
-            setup_drivers, setup_dirs = drivers, dirs
+            setup_drivers, setup_dirs = drivers, _with_file(dirs, "driver.csv")
         tokens = sorted({m.group(1) for st in rows[0]
                          for m in [_TOTAL_R.match(st)] if m}, key=float)
         qout = {}
