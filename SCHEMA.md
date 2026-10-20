@@ -114,6 +114,11 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   (stellar-rpc#1070; through the daemon's JSON-RPC
                                            //   handlers). "mixed" when the legs disagree. Absent
                                            //   on runs converted before it existed (all tiered).
+    "query_ledgers_limit": 1,              // optional; the --ledgers-limit of the data-dir getLedgers
+                                           //   legs (run.json flags), the page size their cells
+                                           //   measured. The SLA shape is query_load.derivation.
+                                           //   ledgers_span; the site names the page size when the two
+                                           //   differ. Absent on tiered runs.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs,

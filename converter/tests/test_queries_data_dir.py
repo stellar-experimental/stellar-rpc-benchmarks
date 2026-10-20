@@ -14,12 +14,12 @@ import fixtures  # noqa: E402
 from test_queries_rps import UNIT, run_convert   # noqa: E402
 
 
-def build(data_dir, eviction="requested"):
+def build(data_dir, eviction="requested", ledgers_limit=None):
     root = os.path.join(tempfile.mkdtemp(), "b")
     fixtures.build_rps_bundle(root)
     fixtures.to_run_records(root)
     if data_dir:
-        fixtures.to_data_dir_legs(root, eviction=eviction)
+        fixtures.to_data_dir_legs(root, eviction=eviction, ledgers_limit=ledgers_limit)
     return root
 
 
@@ -111,6 +111,19 @@ class CellSetupTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         peak = data["queries"]["hot"][UNIT]["setup"]["peak_rss_bytes"]
         self.assertEqual(peak["r"], [4_500_000_001, 4_500_000_002])
+
+
+class LedgersPageTests(unittest.TestCase):
+    def test_ledgers_limit_is_recorded(self):
+        data, warnings, _ = run_convert(build(data_dir=True, ledgers_limit=1))
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["campaign"]["query_ledgers_limit"], 1)
+        # The SLA's request shape stays what targets.json states.
+        self.assertEqual(data["campaign"]["query_load"]["derivation"]["ledgers_span"], 10)
+
+    def test_no_limit_flag_records_nothing(self):
+        data, _, _ = run_convert(build(data_dir=False))
+        self.assertNotIn("query_ledgers_limit", data["campaign"])
 
 
 class MissingOutputTests(unittest.TestCase):

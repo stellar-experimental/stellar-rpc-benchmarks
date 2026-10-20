@@ -860,6 +860,16 @@
     return { over, breaches, unitBreaches };
   }
 
+  // ledgersPageNote names the getLedgers page size a run queried when it is
+  // not the SLA's request shape, e.g. "1 ledger per page (SLA shape is 10)";
+  // null for a run that records no page size or queried the SLA shape.
+  function ledgersPageNote(D) {
+    const camp = D.campaign || {}, n = camp.query_ledgers_limit;
+    const span = ((camp.query_load || {}).derivation || {}).ledgers_span;
+    if (!(n > 0) || n === span) return null;
+    return `${n} ledger${n === 1 ? "" : "s"} per page${span ? ` (SLA shape is ${span})` : ""}`;
+  }
+
   // ---- open-loop query rendering ----
   // The SLA verdict table: the run's read-path answer to the sustained-load
   // requirement, one row per endpoint × profile × tier, each judged on the
@@ -870,7 +880,7 @@
   // the in-RPC budget folded in as a column: that column stays for them.
   // Returns the counts so the caller's footnote can reconcile with the chips.
   function openVerdictTable(tableId, footId, o) {
-    const { Q, QT, TIERS, C, units, thrFor, short } = o;
+    const { Q, QT, TIERS, C, units, thrFor, short, ledgersNote } = o;
     const t = document.getElementById(tableId);
     if (!t) return { checks: 0, fails: 0, rows: 0, unfloored: 0 };
     const head = ["Endpoint · profile · tier", "Offered", "Served",
@@ -897,7 +907,8 @@
       if (e2e) probed++;
       rows++;
       const r = document.createElement("tr");
-      cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
+      const nameTd = cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
+      if (qt === "ledgers" && ledgersNote) nameTd.appendChild(noteEl(`(${ledgersNote})`));
       // Offered: the phase floor when the run names one, else the rate the leg
       // was actually paced at.
       const target = v && v.target_rps != null ? v.target_rps : cell.target_rps;
@@ -1812,6 +1823,7 @@
     // Conversions that record query_cli sum a cell's evictions over all its
     // legs; older ones kept the first leg's.
     const qCellSetup = !!(D.campaign && D.campaign.query_cli);
+    const qLedgersNote = ledgersPageNote(D);
     // qThr is the one number the prose and the reference lines can name; null
     // when the run states a target per endpoint and tier instead.
     const { check: qCheck, thrFor: qThrFor, perEndpoint: qPerEndpoint, single: qThr } = queryTargets(D);
@@ -2428,7 +2440,7 @@
       if (qMode === "open") {
         const short = u => (parts(u) || {}).name || disp(u);
         openVerdictTable("query-verdict-table", "query-verdict-footnote",
-          { Q, QT, TIERS, C, units: ORDER, thrFor: qThrFor, short });
+          { Q, QT, TIERS, C, units: ORDER, thrFor: qThrFor, short, ledgersNote: qLedgersNote });
         if (hasE2E) e2eProbeTable("query-e2e-table", "query-e2e-footnote", { Q, TIERS, C, units: ORDER, short });
         return;
       }

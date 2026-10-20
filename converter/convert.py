@@ -790,6 +790,8 @@ QUERY_CLI_DATA_DIR = "data-dir"
 _LATENCY_ROWS = {("latency_from_due", "all"): "total_r", ("latency", "all"): "service_r"}
 # Query shapes the legs of this conversion used; convert() records them.
 _query_clis = set()
+# getLedgers page sizes (--ledgers-limit) the data-dir ledgers legs ran with.
+_ledgers_limits = set()
 
 
 def _scenario_row(n, n_items, rec=None, total=0):
@@ -813,6 +815,10 @@ def read_query_leg(d, qt):
         _query_clis.add(QUERY_CLI_TIERED)
         return read_csv(qpath), read_csv(dpath)
     _query_clis.add(QUERY_CLI_DATA_DIR)
+    if qt == "ledgers":
+        limit = manifest_of(d).get("flags", {}).get("ledgers-limit")
+        if limit is not None:
+            _ledgers_limits.add(int(limit))
     rows, driver = {}, {}
     with open(os.path.join(d, QUERY_LATENCY)) as f:
         for rec in csv.DictReader(f):
@@ -1377,6 +1383,7 @@ def convert(args):
     metadata = load_campaign_manifest(results_dir)
     invocations = load_invocations(results_dir)
     _query_clis.clear()
+    _ledgers_limits.clear()
     hardware = (metadata or {}).get("hardware") or {}
     hostname = ((metadata or {}).get("hostname")
                 or (invocations[0][1].get("hostname") if invocations else None))
@@ -1466,6 +1473,13 @@ def convert(args):
         campaign["query_cli"] = "mixed"
     elif _query_clis:
         campaign["query_cli"] = next(iter(_query_clis))
+    # The getLedgers page size the campaign ran, which can be smaller than the
+    # SLA's request shape (query_load.derivation.ledgers_span).
+    if len(_ledgers_limits) > 1:
+        warn(f"ledgers legs ran with different --ledgers-limit values {sorted(_ledgers_limits)}; "
+             f"recording the largest")
+    if _ledgers_limits:
+        campaign["query_ledgers_limit"] = max(_ledgers_limits)
     if args.source_gcs:
         campaign["source_gcs"] = args.source_gcs
     if args.source_uri:

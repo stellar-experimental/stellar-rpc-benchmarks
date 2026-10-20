@@ -1053,12 +1053,18 @@
     const qJudgeTxt = qJudged.length
       ? ` Each cell is judged against its endpoint's own per-tier target${qLegacy ? "" : " from the read-path SLA"}.`
       : "";
+    // The getLedgers page size, when the run queried a smaller page than the
+    // SLA's request shape.
+    const qLedgersN = (D.campaign || {}).query_ledgers_limit;
+    const qLedgersSpan = (((D.campaign || {}).query_load || {}).derivation || {}).ledgers_span;
+    const qLedgersNote = qLedgersN > 0 && qLedgersN !== qLedgersSpan
+      ? `${qLedgersN} ledger${qLedgersN === 1 ? "" : "s"} per page${qLedgersSpan ? ` (SLA shape is ${qLedgersSpan})` : ""}` : "";
     const queryTableHTML = tier => {
       const rows = QV[tier];
       const cells = new Map(rows.map(r => [`${r.qt}\0${r.unit}`, r.v]));
       const head = ORDER.map(unit => `<th scope="col">${esc(disp(unit))}</th>`).join("");
       const body = QT_ORDER.map(qt => `<tr>
-          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}</th>
+          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}${qt === "ledgers" && qLedgersNote ? `<span class="q-page">${esc(qLedgersNote)}</span>` : ""}</th>
           ${ORDER.map(unit => {
             const v = cells.get(`${qt}\0${unit}`);
             if (!v) return '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';

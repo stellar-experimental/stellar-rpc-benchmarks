@@ -222,13 +222,14 @@ def _read_rows(path):
                 for r in csv.DictReader(f)}
 
 
-def to_data_dir_legs(root, eviction="requested"):
+def to_data_dir_legs(root, eviction="requested", ledgers_limit=None):
     """Rewrite every RPS query leg under root the way `bench query --data-dir`
     (stellar-rpc#1070) writes it, carrying the same numbers: latency.csv and
     scenarios.csv replace the per-type CSV and driver.csv, and run.json gains
     the settings and the store open time. Run to_run_records first. eviction is
     the cold legs' settings.pageCacheEviction; a cold leg evicts only when it is
-    "requested"."""
+    "requested". ledgers_limit, when set, is the ledgers legs' --ledgers-limit
+    flag in run.json."""
     for name in sorted(os.listdir(root)):
         m = _QUERY_LEG.match(name)
         if not m:
@@ -271,6 +272,8 @@ def to_data_dir_legs(root, eviction="requested"):
         rec["settings"] = {"tier": tier,
                            "pageCacheEviction": eviction if tier == "cold" else "off"}
         rec["setupNs"] = {"storeOpen": driver["open"]["total_ns"]}
+        if ledgers_limit is not None and qt == "ledgers":
+            rec.setdefault("flags", {})["ledgers-limit"] = str(ledgers_limit)
         with open(run_path, "w") as f:
             json.dump(rec, f, indent=2)
         os.remove(os.path.join(d, f"{qt}.csv"))

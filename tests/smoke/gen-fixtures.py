@@ -12,8 +12,9 @@ query type, one cell per target rate — in a variation no committed run carries
                          latency target alone and say so.
   fixture-rps-data-dir   fixture-rps-phase3's numbers, with every query leg in
                          the latency.csv/scenarios.csv shape of `bench query
-                         --data-dir`: the same cells and verdicts, and
-                         campaign.query_cli = "data-dir".
+                         --data-dir`: the same cells and verdicts,
+                         campaign.query_cli = "data-dir", and 1-ledger
+                         getLedgers pages.
   fixture-rps-partial    two profiles, phase 3, first profile's COLD query legs
                          removed before conversion. The grid must still be
                          discovered from the units that do have cold legs
@@ -266,7 +267,7 @@ def build_bundle(root, spec):
         f.write(F.MACHINE_META.format(commit="0" * 40))
     if spec.get("data_dir"):
         F.to_run_records(root)
-        F.to_data_dir_legs(root)
+        F.to_data_dir_legs(root, ledgers_limit=spec.get("ledgers_limit"))
     return root
 
 
@@ -393,6 +394,7 @@ def check_soroswap_only(D, spec):
 def check_data_dir(D, spec):
     """The phase-3 verdicts, from legs of the data-dir shape."""
     assert D["campaign"]["query_cli"] == "data-dir", D["campaign"].get("query_cli")
+    assert D["campaign"]["query_ledgers_limit"] == spec["ledgers_limit"], D["campaign"].get("query_ledgers_limit")
     check_phase3(D, spec)
 
 
@@ -467,6 +469,7 @@ SPECS = [
         "ladder_phase": 3,
         "set": "2026-07-18-apply-load-20k",
         "data_dir": True,
+        "ledgers_limit": 1,          # the campaigns' getLedgers page, not the SLA's 10
         "check": check_data_dir,
     },
     {

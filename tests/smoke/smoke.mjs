@@ -807,7 +807,9 @@ function checkSummarySections(sdoc, group, D) {
     const cells = new Map(QR[tier].map((r) => [`${r.qt}\0${r.unit}`, r.v]));
     for (const [ri, qt] of SUMMARY_QT_ORDER.entries()) {
       const row = rows[ri];
-      const rowHead = txt(row && row.querySelector("th[scope=row]"));
+      // The endpoint name is the header's own text; a page-size note may follow it.
+      const th = row && row.querySelector("th[scope=row]");
+      const rowHead = th && th.firstChild ? th.firstChild.textContent.trim() : "";
       check(group, `${tier} matrix row ${ri + 1} is ${QT_ENDPOINT[qt]}`,
         rowHead === QT_ENDPOINT[qt], rowHead);
       const data = row ? [...row.querySelectorAll("td")] : [];
@@ -1073,6 +1075,13 @@ for (const file of fixtureFiles) {
     !!(D.campaign.query_load && qEntries(D).some((e) => rateKeys(e.qout).length)), "not the RPS shape");
   check(group, "fixture detected as the open-loop shape", queryShape(D) === "open", queryShape(D));
   checkSyntheticQueries(doc, group, D);
+  // The getLedgers page note belongs to runs that queried a page smaller than
+  // the SLA's 10-ledger shape.
+  const pageNote = /1 ledger per page \(SLA shape is 10\)/;
+  const wantPageNote = D.campaign.query_ledgers_limit === 1;
+  const verdictTxt = txt(doc.getElementById("query-verdict-table"));
+  check(group, "the getLedgers page note shows only on a 1-ledger-page run", pageNote.test(verdictTxt) === wantPageNote,
+    (verdictTxt.match(/getLedgers[^·]*·[^·]*/) || [""])[0]);
   // The generation note belongs to data-dir runs alone.
   const qIntro = txt(doc.querySelector("#queries > .sec-intro"));
   check(group, "the JSON-RPC handler note shows only on a data-dir run",
@@ -1093,6 +1102,12 @@ for (const file of fixtureFiles) {
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
   checkSummarySections(sdoc, group + " summary", D);
   checkDatasetWorkloads(sdoc, group + " summary", D);
+  {
+    const qTxt = txt(sdoc.getElementById("queries"));
+    check(group, "summary: the getLedgers page note shows only on a 1-ledger-page run",
+      /1 ledger per page \(SLA shape is 10\)/.test(qTxt) === (D.campaign.query_ledgers_limit === 1),
+      (qTxt.match(/getLedgers.{0,60}/) || [""])[0]);
+  }
   // Sizes are matched by the run's set and profile. phase3 is on the 2026-07
   // set, whose sizes are measured; phase3b and partial are on the 2026-10 c1
   // set, whose sizes are not, and partial's sac-6000 also exists in 2026-07.
