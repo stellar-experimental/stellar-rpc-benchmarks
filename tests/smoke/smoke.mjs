@@ -1186,6 +1186,48 @@ for (const file of fixtureFiles) {
   window.close();
 }
 
+{
+  /* A phase is a label: the facet and the table sort must handle "3b" beside
+     the numeric phases. Listing entries need no run file to render. */
+  const group = "run-index phase labels";
+  console.log(`\n=== index.html (phase facet with a "3b" label) ===`);
+  const extra = [
+    { id: "idx-3b-a", name: "Phase 3b run A", date: "2026-10-01", kind: "synthetic", path: "runs/idx-3b-a.json", phase: "3b" },
+    { id: "idx-3b-b", name: "Phase 3b run B", date: "2026-10-02", kind: "synthetic", path: "runs/idx-3b-b.json", phase: "3b" },
+  ];
+  const runs = [...manifest.runs, ...extra];
+  const overlay = { "runs/index.json": JSON.stringify({ ...manifest, runs }) };
+  const facetRows = async (label) => {
+    const { window, errors } = await loadViewer("", { fetch: makeFetch(overlay) });
+    const doc = window.document;
+    const opt = [...doc.querySelectorAll('.idx-opt[data-f="phase"]')].find((b) => txt(b).startsWith(label));
+    if (opt) opt.click();
+    const out = { errors, found: !!opt, on: !!opt && !!doc.querySelector('.idx-opt.on[data-f="phase"]'),
+      rows: doc.querySelectorAll(".idx-row").length };
+    window.close();
+    return out;
+  };
+  const p3b = await facetRows("Phase 3b");
+  check(group, "zero JS/console errors", p3b.errors.length === 0, p3b.errors.join(" | ") || "");
+  check(group, "the Phase 3b facet filters to the 3b runs", p3b.found && p3b.on && p3b.rows === extra.length,
+    `found=${p3b.found} on=${p3b.on} rows=${p3b.rows}`);
+  const numeric = runs.filter((r) => String(r.phase) === "1").length;
+  if (numeric) {
+    const p1 = await facetRows("Phase 1");
+    check(group, "a numeric phase facet still filters", p1.found && p1.on && p1.rows === numeric,
+      `found=${p1.found} on=${p1.on} rows=${p1.rows} want=${numeric}`);
+  }
+  const { window } = await loadViewer("?view=table", { fetch: makeFetch(overlay) });
+  const doc = window.document;
+  [...doc.querySelectorAll(".idx-table thead th")].find((th) => th.getAttribute("data-k") === "phase").click();
+  const col = [...doc.querySelectorAll(".idx-table thead th")].findIndex((th) => th.getAttribute("data-k") === "phase");
+  const phases = [...doc.querySelectorAll(".idx-table tbody tr")].map((tr) => txt(tr.children[col])).filter((p) => p !== "—");
+  const want = [...phases].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  check(group, "the phase column sorts 3 before 3b", phases.length > 0 && phases.join(",") === want.join(",")
+    && phases.indexOf("3b") > phases.lastIndexOf("3"), phases.join(","));
+  window.close();
+}
+
 /* ---------------- unit-label display in the default report ---------------- */
 /* The OZ-token assertion needs a run whose unit_meta carries labels (from
    --unit-facts); campaign runs may not have them. Guards the unit-facts label

@@ -2506,8 +2506,12 @@
   }
 
   const idxRuns = () => ((MANIFEST && MANIFEST.runs) || []).slice();
+  // Facet values compare as strings: a phase is a label (1, 2, 3, "3b"), and
+  // the selection comes back from a data attribute as a string anyway.
   const idxMatch = (r, except) => IDX_FACETS.every(f =>
-    f.key === except || !(f.key in idxSel) || r[f.key] === idxSel[f.key]);
+    f.key === except || !(f.key in idxSel) || String(r[f.key]) === idxSel[f.key]);
+  // Table order: numeric runs inside strings, so phase 3 sorts before "3b".
+  const idxCmp = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 
   // Verdict for a facets-view row: the entry's baked per-profile hot ingest
   // p99 vs its phase's goal from live targets.json (the goal is never baked
@@ -2562,7 +2566,7 @@
       if (!counts.size) return "";
       const opts = [...counts.entries()]
         .sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }))
-        .map(([v, n]) => `<button type="button" class="idx-opt ${idxSel[f.key] === v ? "on" : ""}"
+        .map(([v, n]) => `<button type="button" class="idx-opt ${idxSel[f.key] === String(v) ? "on" : ""}"
             data-f="${esc(f.key)}" data-v="${esc(String(v))}">
           <span>${esc((f.fmt || String)(v))}</span><span class="idx-n">${n}</span></button>`).join("");
       return `<div class="idx-facet"><div class="idx-facet-h">${esc(f.label)}</div>${opts}</div>`;
@@ -2613,7 +2617,7 @@
     if (view === "table") {
       rows.sort((a, b) => {
         const av = a[idxSort.k] != null ? a[idxSort.k] : "", bv = b[idxSort.k] != null ? b[idxSort.k] : "";
-        return (av < bv ? -1 : av > bv ? 1 : 0) * idxSort.dir || String(a.id).localeCompare(String(b.id));
+        return idxCmp(av, bv) * idxSort.dir || String(a.id).localeCompare(String(b.id));
       });
     } else {
       rows.sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(a.id).localeCompare(String(b.id)));
@@ -2642,8 +2646,7 @@
       renderIndex();
     }));
     reportEl.querySelectorAll(".idx-opt").forEach(b => b.addEventListener("click", () => {
-      const f = b.getAttribute("data-f"), raw = b.getAttribute("data-v");
-      const v = f === "phase" ? Number(raw) : raw;
+      const f = b.getAttribute("data-f"), v = b.getAttribute("data-v");
       if (f in idxSel && idxSel[f] === v) delete idxSel[f]; else idxSel[f] = v;
       renderIndex();
     }));
