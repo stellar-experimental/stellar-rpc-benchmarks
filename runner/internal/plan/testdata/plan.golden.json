@@ -5,6 +5,8 @@
   "src": "/bench/src",
   "bin": "/bench/bin/stellar-rpc-deadbeef",
   "bench_cli": "bench",
+  "query_cli": "tiered",
+  "build_target": "build-rpc-v2",
   "results_dir": "/bench/results/golden-deadbeef-20260101T000000Z",
   "tarball": "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",
   "steps": [

@@ -245,35 +245,71 @@ func TestDetectBenchCLI(t *testing.T) {
 	}
 }
 
-// TestHasQueryCLI checks the query bench probe in both CLI shapes: `query`
-// under the bench root, `bench-query` on a legacy commit.
-func TestHasQueryCLI(t *testing.T) {
+// TestDetectQueryCLI checks the query bench probe in its three shapes, and
+// that a command declared only in a test file does not count.
+func TestDetectQueryCLI(t *testing.T) {
 	repo, _ := originRepo(t)
 	mustMkdir(t, filepath.Join(repo, "cmd"))
 	path := "cmd/command.go"
 	ingestOnly := commit(t, repo, path, "var c = cobra.Command{Use: \"bench-ingest\"}\n")
 	legacy := commit(t, repo, path, "var c = cobra.Command{Use: \"bench-ingest\"}\nvar q = cobra.Command{Use: \"bench-query\"}\n")
 	rootOnly := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\n")
-	root := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\nvar q = cobra.Command{Use:   \"query\"}\n")
+	testOnly := commit(t, repo, "cmd/command_test.go", "var q = cobra.Command{Use: \"query\"}\n"+
+		"var d = newBenchCommand(\"query\", \"\")\n")
+	tiered := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\nvar q = cobra.Command{Use:   \"query\"}\n")
+	dataDir := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\nfunc q() { cmd = newBenchCommand(\"query\",\n\t\"Benchmark reads\") }\n")
 
 	for _, tc := range []struct {
 		name   string
 		commit string
 		cli    plan.BenchCLI
-		want   bool
+		want   plan.QueryCLI
+		ok     bool
 	}{
-		{"legacy without bench-query", ingestOnly, plan.BenchCLILegacy, false},
-		{"legacy with bench-query", legacy, plan.BenchCLILegacy, true},
-		{"root without query", rootOnly, plan.BenchCLIRoot, false},
-		{"root with query", root, plan.BenchCLIRoot, true},
-		{"a legacy bench-query is not the root query", legacy, plan.BenchCLIRoot, false},
+		{"legacy without bench-query", ingestOnly, plan.BenchCLILegacy, plan.QueryCLITiered, false},
+		{"legacy with bench-query", legacy, plan.BenchCLILegacy, plan.QueryCLITiered, true},
+		{"root without query", rootOnly, plan.BenchCLIRoot, plan.QueryCLITiered, false},
+		{"a query command in a test file only", testOnly, plan.BenchCLIRoot, plan.QueryCLITiered, false},
+		{"root with query cold|hot", tiered, plan.BenchCLIRoot, plan.QueryCLITiered, true},
+		{"root with query --data-dir", dataDir, plan.BenchCLIRoot, plan.QueryCLIDataDir, true},
+		{"a legacy bench-query is not the root query", legacy, plan.BenchCLIRoot, plan.QueryCLITiered, false},
 	} {
-		got, err := HasQueryCLI(repo, tc.commit, tc.cli)
+		got, ok, err := DetectQueryCLI(repo, tc.commit, tc.cli)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("%s: DetectQueryCLI = %q, %t; want %q, %t", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestDetectBuildTarget checks that build-rpc-v2 wins over the rpcv1 alias
+// that older Makefiles also call build-stellar-rpc, and that a Makefile with
+// neither is an error.
+func TestDetectBuildTarget(t *testing.T) {
+	repo, _ := originRepo(t)
+	shared := commit(t, repo, "Makefile", "build-stellar-rpc: build-rpc-v1\n\nbuild-rpc-v2: build-libs\n")
+	static := commit(t, repo, "Makefile", "build-stellar-rpc: build-libs build-native-libs\n")
+	neither := commit(t, repo, "Makefile", "build: build-libs\n")
+
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   plan.BuildTarget
+	}{
+		{"shared libraries", shared, plan.BuildRPCV2},
+		{"one static binary", static, plan.BuildStellarRPC},
+	} {
+		got, err := DetectBuildTarget(repo, tc.commit)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 		if got != tc.want {
-			t.Errorf("%s: HasQueryCLI = %t, want %t", tc.name, got, tc.want)
+			t.Errorf("%s: DetectBuildTarget = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+	if got, err := DetectBuildTarget(repo, neither); err == nil {
+		t.Errorf("DetectBuildTarget of a Makefile with neither target = %q, want an error", got)
 	}
 }

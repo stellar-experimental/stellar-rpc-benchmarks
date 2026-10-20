@@ -51,6 +51,42 @@ const (
 	BenchCLILegacy BenchCLI = "legacy"
 )
 
+// QueryCLI is the shape of the query bench in the stellar-rpc binary under
+// test.
+type QueryCLI string
+
+const (
+	// QueryCLITiered is `query cold|hot` (`bench-query cold|hot` on a legacy
+	// CLI), which reads a cold tree or a hot DB named per tier. It is the zero
+	// value's meaning too.
+	QueryCLITiered QueryCLI = "tiered"
+	// QueryCLIDataDir is `query --data-dir`, from stellar-rpc#1070 on: it reads
+	// the dataset a bench ingest wrote and takes the tier from that dataset's
+	// catalog.
+	QueryCLIDataDir QueryCLI = "data-dir"
+)
+
+// BuildTarget is the Makefile target that builds the binary under test.
+type BuildTarget string
+
+const (
+	// BuildRPCV2 is `make build-rpc-v2`: a stellar-rpc-v2 binary linked against
+	// shared RocksDB and zstd. It is the zero value's meaning too.
+	BuildRPCV2 BuildTarget = "build-rpc-v2"
+	// BuildStellarRPC is `make build-stellar-rpc`, from stellar-rpc#1123 on: one
+	// stellar-rpc binary with RocksDB and zstd linked statically, which runs
+	// rpcv2, and so the bench commands, only under --enable-rpcv2.
+	BuildStellarRPC BuildTarget = "build-stellar-rpc"
+)
+
+// staticLibHomes point a build-stellar-rpc build at its static zstd and RocksDB
+// archives, which the Makefile builds there when they are missing. They are
+// apart from ~/.zstd and ~/.rocksdb because those hold the shared libraries a
+// build-rpc-v2 build links, and the static install scripts refuse a prefix
+// that holds a shared library. runner/bootstrap.sh uses the same paths. Make
+// expands $(HOME) itself.
+var staticLibHomes = []string{"ZSTD_HOME=$(HOME)/.zstd-static", "ROCKSDB_HOME=$(HOME)/.rocksdb-static"}
+
 // Inputs carries everything about the environment that Build would otherwise
 // have to discover for itself. Keeping them in a struct is what makes Build
 // pure: the caller resolves the ref, reads the clock, and picks the storage
@@ -72,6 +108,12 @@ type Inputs struct {
 	// BenchCLI is the command shape of the built commit; empty means
 	// BenchCLIRoot. The CLI probes it from the build clone (run.DetectBenchCLI).
 	BenchCLI BenchCLI
+	// QueryCLI is the query bench shape of the built commit; empty means
+	// QueryCLITiered (run.DetectQueryCLI).
+	QueryCLI QueryCLI
+	// BuildTarget is the built commit's Makefile target; empty means
+	// BuildRPCV2 (run.DetectBuildTarget).
+	BuildTarget BuildTarget
 }
 
 // Step is one unit of scheduling, skipping, and failure. Argv is a *list* of
@@ -125,16 +167,18 @@ type DatasetSpec struct {
 // Plan is a whole campaign as data: the paths it derives and the steps it
 // would execute, in order.
 type Plan struct {
-	SchemaVersion int      `json:"schema_version"`
-	RunID         string   `json:"run_id"` // <name>-<sha8>-<stamp>
-	BenchRoot     string   `json:"bench_root"`
-	Src           string   `json:"src"`         // <bench_root>/src
-	Bin           string   `json:"bin"`         // <bench_root>/bin/stellar-rpc-<sha8>
-	BenchCLI      BenchCLI `json:"bench_cli"`   // bench | legacy: the argv shape of every bench leg
-	ResultsDir    string   `json:"results_dir"` // <bench_root>/results/<run_id>
-	Tarball       string   `json:"tarball"`     // /tmp/bench-results-<run_id>.tgz
-	Notes         []string `json:"notes,omitempty"`
-	Steps         []Step   `json:"steps"`
+	SchemaVersion int         `json:"schema_version"`
+	RunID         string      `json:"run_id"` // <name>-<sha8>-<stamp>
+	BenchRoot     string      `json:"bench_root"`
+	Src           string      `json:"src"`          // <bench_root>/src
+	Bin           string      `json:"bin"`          // <bench_root>/bin/stellar-rpc-<sha8>
+	BenchCLI      BenchCLI    `json:"bench_cli"`    // bench | legacy: the argv shape of every bench leg
+	QueryCLI      QueryCLI    `json:"query_cli"`    // tiered | data-dir: the argv shape of every query leg
+	BuildTarget   BuildTarget `json:"build_target"` // the Makefile target the build step runs
+	ResultsDir    string      `json:"results_dir"`  // <bench_root>/results/<run_id>
+	Tarball       string      `json:"tarball"`      // /tmp/bench-results-<run_id>.tgz
+	Notes         []string    `json:"notes,omitempty"`
+	Steps         []Step      `json:"steps"`
 }
 
 // Build turns a validated config into the ordered steps a campaign executes.
@@ -153,6 +197,14 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	}
 	if p.BenchCLI == "" {
 		p.BenchCLI = BenchCLIRoot
+	}
+	p.QueryCLI = in.QueryCLI
+	if p.QueryCLI == "" {
+		p.QueryCLI = QueryCLITiered
+	}
+	p.BuildTarget = in.BuildTarget
+	if p.BuildTarget == "" {
+		p.BuildTarget = BuildRPCV2
 	}
 
 	// Both query suites read a database this campaign builds. Query-cold needs
@@ -226,13 +278,38 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	return p
 }
 
-// benchArgv is the head of a bench leg's argv: the binary, then the command
-// path of group (ingest or query) and tier in the plan's CLI shape.
-func (p *Plan) benchArgv(group, tier string) []string {
-	if p.BenchCLI == BenchCLILegacy {
-		return []string{p.Bin, "bench-" + group, tier}
+// Check reports a config that the commit shape in cannot run. From
+// stellar-rpc#1070 on, which is also when the query bench takes --data-dir,
+// bench ingest cold writes one dataset per --cold-out-dir and refuses a
+// non-empty one, so a bsb-s3 dataset can no longer backfill several chunks
+// into its one pack root.
+func Check(cfg *config.Config, in Inputs) error {
+	if in.QueryCLI != QueryCLIDataDir {
+		return nil
 	}
-	return []string{p.Bin, "bench", group, tier}
+	for _, d := range cfg.Datasets {
+		if d.Kind == config.KindBSBS3 && len(d.Chunks) > 1 {
+			return fmt.Errorf("dataset '%s' is bsb-s3 with %d chunks, but at this ref bench ingest cold "+
+				"writes one chunk range per empty --cold-out-dir; give it one chunk, or split it into "+
+				"one dataset per chunk", d.Name, len(d.Chunks))
+		}
+	}
+	return nil
+}
+
+// benchArgv is the head of a bench leg's argv: the binary, then the command
+// path of group (ingest or query) and sub in the plan's CLI shape.
+func (p *Plan) benchArgv(group string, sub ...string) []string {
+	argv := []string{p.Bin}
+	if p.BuildTarget == BuildStellarRPC {
+		argv = append(argv, "--enable-rpcv2")
+	}
+	if p.BenchCLI == BenchCLILegacy {
+		argv = append(argv, "bench-"+group)
+	} else {
+		argv = append(argv, "bench", group)
+	}
+	return append(argv, sub...)
 }
 
 // goldenOutDir is the --out of the untimed cold backfill that prepares one
@@ -261,15 +338,32 @@ func buildStep(p *Plan, in Inputs) Step {
 		Argv: [][]string{
 			{"git", "-C", p.Src, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", in.BuiltCommit},
 			{"make", "-C", p.Src, "build-libs"},
-			// build-rpc-v2 goes through the Makefile so the binary carries the
+			// The build goes through the Makefile so the binary carries the
 			// repo's GOLDFLAGS (version, commit, branch, build timestamp) that
-			// `stellar-rpc-v2 version` and run.json report. The target
-			// writes ./stellar-rpc-v2 in the clone root; move it into the
-			// versioned path the campaign runs.
-			{"make", "-C", p.Src, "build-rpc-v2"},
-			{"mv", filepath.Join(p.Src, "stellar-rpc-v2"), p.Bin},
+			// `version` and run.json report. The target writes its binary in
+			// the clone root; move it into the versioned path the campaign
+			// runs.
+			p.makeBuild(),
+			{"mv", filepath.Join(p.Src, p.builtBinary()), p.Bin},
 		},
 	}
+}
+
+// makeBuild is the make command of the plan's build target.
+func (p *Plan) makeBuild() []string {
+	argv := []string{"make", "-C", p.Src, string(p.BuildTarget)}
+	if p.BuildTarget == BuildStellarRPC {
+		argv = append(argv, staticLibHomes...)
+	}
+	return argv
+}
+
+// builtBinary is the name of the binary the plan's build target writes.
+func (p *Plan) builtBinary() string {
+	if p.BuildTarget == BuildStellarRPC {
+		return "stellar-rpc"
+	}
+	return "stellar-rpc-v2"
 }
 
 // datasetStep converges one dataset on a local cold pack root, whatever kind it
@@ -434,21 +528,10 @@ func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	out := filepath.Join(p.ResultsDir, id)
 	cold := coldDir(in, d, chunk)
 	step := Step{
-		ID:    id,
-		Kind:  KindLeg,
-		Timed: true,
-		Argv: [][]string{append(p.benchArgv("query", "cold"),
-			// The store this campaign's own cold ingest built, not the cold
-			// tree banked inside the golden dataset: that one was frozen by
-			// another binary, and the on-disk index format is allowed to
-			// change under it.
-			"--cold-dir="+cold,
-			"--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1",
-			"--types="+qtype,
-			"--target-rps="+targetRPS(in, d, qtype),
-			"--duration="+in.QueryDuration,
-			"--out="+out,
-		)},
+		ID:     id,
+		Kind:   KindLeg,
+		Timed:  true,
+		Argv:   [][]string{queryColdArgv(p, in, d, chunk, qtype, cold, out)},
 		OutDir: out,
 		// The dependency is on the *last* cold-ingest rep of this cell, not on
 		// this leg's own rep number: each rep wipes and rebuilds the cold
@@ -470,20 +553,52 @@ func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	return step
 }
 
+// queryColdArgv is a cold query leg's command in the plan's query CLI shape.
+// Both shapes read the store this campaign's own cold ingest built, not the
+// cold tree banked inside the golden dataset: that one was frozen by another
+// binary, and the on-disk index format is allowed to change under it.
+func queryColdArgv(p *Plan, in Inputs, d *config.Dataset, chunk int, qtype, cold, out string) []string {
+	var argv []string
+	if p.QueryCLI == QueryCLIDataDir {
+		argv = p.benchArgv("query", "--data-dir="+cold)
+	} else {
+		argv = p.benchArgv("query", "cold",
+			"--cold-dir="+cold, "--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1")
+	}
+	argv = append(argv,
+		"--types="+qtype,
+		"--target-rps="+targetRPS(in, d, qtype),
+		"--duration="+in.QueryDuration,
+	)
+	// The tiered shape always evicts a cold leg. The data-dir shape evicts by
+	// default too; the flag pins that, so a changed default cannot turn a cold
+	// leg into a warm one.
+	if p.QueryCLI == QueryCLIDataDir {
+		argv = append(argv, "--evict-page-cache=true")
+	}
+	return append(argv, "--out="+out)
+}
+
 func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int, qtype string) Step {
 	id := fmt.Sprintf("query-hot-%s-c%d-%s-run%d", d.Name, chunk, qtype, rep)
 	out := filepath.Join(p.ResultsDir, id)
 	hot := hotDir(in, d, chunk)
-	argv := append(p.benchArgv("query", "hot"),
-		"--hot-dir="+hot, "--chunk="+strconv.Itoa(chunk),
+	var argv []string
+	if p.QueryCLI == QueryCLIDataDir {
+		argv = p.benchArgv("query", "--data-dir="+hot)
+	} else {
+		argv = p.benchArgv("query", "hot", "--hot-dir="+hot, "--chunk="+strconv.Itoa(chunk))
+	}
+	argv = append(argv,
 		"--types="+qtype,
 		"--target-rps="+targetRPS(in, d, qtype),
 		"--duration="+in.QueryDuration,
 		"--warmup=20",
 	)
-	// A capped hot ingest leaves a truncated DB; keep the query sampler inside
-	// what was ingested.
-	if cfg.HotNumLedgers > 0 {
+	// A capped hot ingest leaves a truncated DB; keep the tiered query sampler
+	// inside what was ingested. A data-dir query reads only the committed
+	// ledgers, which already end at the cap.
+	if cfg.HotNumLedgers > 0 && p.QueryCLI != QueryCLIDataDir {
 		argv = append(argv, "--sample-ledgers="+strconv.Itoa(cfg.HotNumLedgers))
 	}
 	argv = append(argv, "--out="+out)

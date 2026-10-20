@@ -361,10 +361,12 @@ func TestRunWithRealLookPath(t *testing.T) {
 		}
 		has(t, res.Failures, "go not found")
 		has(t, res.Failures, "cargo not found")
+		has(t, res.Warnings, "cmake not found")
+		has(t, res.Warnings, "ninja not found")
 	})
 
 	t.Run("a fully equipped PATH passes", func(t *testing.T) {
-		stubPATH(t, "git", "make", "go", "cargo", "gcloud", "aws")
+		stubPATH(t, "git", "make", "go", "cargo", "cmake", "ninja", "gcloud", "aws")
 		t.Setenv("HOME", t.TempDir())
 		cfg := testConfig(func(c *config.Config) { c.PublishURI = "gs://bucket/results" })
 		res := Run(cfg, t.TempDir(), "", d)

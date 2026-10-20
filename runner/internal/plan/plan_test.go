@@ -801,3 +801,130 @@ func TestPrintDatasetChoreography(t *testing.T) {
 		t.Errorf("Print output missing %q, got:\n%s", want, s3Out.String())
 	}
 }
+
+// singleBinaryInputs are the golden inputs for a commit with the data-dir query
+// bench and the one static stellar-rpc binary.
+func singleBinaryInputs() Inputs {
+	in := goldenInputs()
+	in.QueryCLI = QueryCLIDataDir
+	in.BuildTarget = BuildStellarRPC
+	return in
+}
+
+// TestBuildTargets checks the build step of each Makefile shape: the target,
+// the static library homes, and the binary the target writes.
+func TestBuildTargets(t *testing.T) {
+	cfg := load(t, fmt.Sprintf(hotConfig, 0))
+	for _, tc := range []struct {
+		target BuildTarget
+		want   BuildTarget
+		make   []string
+		binary string
+	}{
+		{"", BuildRPCV2, []string{"make", "-C", "/bench/src", "build-rpc-v2"}, "/bench/src/stellar-rpc-v2"},
+		{BuildStellarRPC, BuildStellarRPC, []string{"make", "-C", "/bench/src", "build-stellar-rpc",
+			"ZSTD_HOME=$(HOME)/.zstd-static", "ROCKSDB_HOME=$(HOME)/.rocksdb-static"}, "/bench/src/stellar-rpc"},
+	} {
+		in := goldenInputs()
+		in.BuildTarget = tc.target
+		p := Build(cfg, in)
+		if p.BuildTarget != tc.want {
+			t.Errorf("BuildTarget %q: plan records %q, want %q", tc.target, p.BuildTarget, tc.want)
+		}
+		build := stepByID(t, p, "build")
+		if !slices.Equal(build.Argv[2], tc.make) {
+			t.Errorf("BuildTarget %q: make = %v, want %v", tc.target, build.Argv[2], tc.make)
+		}
+		if want := []string{"mv", tc.binary, p.Bin}; !slices.Equal(build.Argv[3], want) {
+			t.Errorf("BuildTarget %q: mv = %v, want %v", tc.target, build.Argv[3], want)
+		}
+	}
+}
+
+// TestSingleBinaryLegsEnableRPCv2 checks that every bench leg of the one
+// stellar-rpc binary selects rpcv2, which that binary runs only on request.
+func TestSingleBinaryLegsEnableRPCv2(t *testing.T) {
+	p := Build(load(t, fmt.Sprintf(hotConfig, 0)), singleBinaryInputs())
+	legs := 0
+	for _, s := range p.Steps {
+		if s.Kind != KindLeg {
+			continue
+		}
+		legs++
+		if want := []string{p.Bin, "--enable-rpcv2", "bench"}; !slices.Equal(s.Argv[0][:3], want) {
+			t.Errorf("%s argv = %v, want it to start %v", s.ID, s.Argv[0], want)
+		}
+	}
+	if legs == 0 {
+		t.Fatal("the config planned no legs")
+	}
+}
+
+// TestDataDirQueryLegs checks the query legs of the data-dir shape: each reads
+// the ingest output of its tier, a cold leg evicts the page cache, a hot leg
+// warms up, and the tiered flags are gone.
+func TestDataDirQueryLegs(t *testing.T) {
+	p := Build(load(t, fmt.Sprintf(hotConfig, 50000)), singleBinaryInputs())
+	if p.QueryCLI != QueryCLIDataDir {
+		t.Errorf("plan records query CLI %q, want %q", p.QueryCLI, QueryCLIDataDir)
+	}
+	cases := []struct {
+		id   string
+		want []string
+		gone []string
+	}{
+		{"query-cold-ds-c7-txhash-run1",
+			[]string{"query", "--data-dir=/bench/scratch/ds/7", "--types=txhash", "--evict-page-cache=true"},
+			[]string{"cold", "--cold-dir=", "--start-chunk=", "--num-chunks=", "--warmup="}},
+		{"query-hot-ds-c7-events-run1",
+			[]string{"query", "--data-dir=/bench/hot/ds/7", "--types=events", "--warmup=20"},
+			[]string{"hot", "--hot-dir=", "--chunk=", "--sample-ledgers=", "--evict-page-cache"}},
+	}
+	for _, tc := range cases {
+		argv := stepByID(t, p, tc.id).Argv[0]
+		for _, want := range tc.want {
+			if !slices.Contains(argv, want) {
+				t.Errorf("%s argv = %v, want it to contain %q", tc.id, argv, want)
+			}
+		}
+		for _, gone := range tc.gone {
+			// A flag is gone in any spelling; a subcommand word only as itself.
+			if slices.ContainsFunc(argv, func(a string) bool {
+				return a == gone || strings.HasPrefix(gone, "--") && strings.HasPrefix(a, gone)
+			}) {
+				t.Errorf("%s argv = %v, want no %q", tc.id, argv, gone)
+			}
+		}
+		if last := argv[len(argv)-1]; !strings.HasPrefix(last, "--out=") {
+			t.Errorf("%s last arg = %q, want an --out flag", tc.id, last)
+		}
+	}
+}
+
+// TestCheckRefusesMultiChunkBSBAtDataDirRefs checks that a bsb-s3 dataset with
+// several chunks is refused only where bench ingest cold needs an empty
+// --cold-out-dir per run.
+func TestCheckRefusesMultiChunkBSBAtDataDirRefs(t *testing.T) {
+	src := `
+name = "n"
+ingest = "none"
+query = false
+runs = 1
+
+[[dataset]]
+name = "mainnet"
+kind = "bsb-s3"
+location = "s3://bucket/prefix"
+chunks = %s
+`
+	multi, single := load(t, fmt.Sprintf(src, "[4, 5]")), load(t, fmt.Sprintf(src, "[4]"))
+	if err := Check(multi, singleBinaryInputs()); err == nil || !strings.Contains(err.Error(), "mainnet") {
+		t.Errorf("Check(two bsb-s3 chunks, data-dir) = %v, want an error naming the dataset", err)
+	}
+	if err := Check(single, singleBinaryInputs()); err != nil {
+		t.Errorf("Check(one bsb-s3 chunk, data-dir) = %v, want nil", err)
+	}
+	if err := Check(multi, goldenInputs()); err != nil {
+		t.Errorf("Check(two bsb-s3 chunks, tiered) = %v, want nil", err)
+	}
+}

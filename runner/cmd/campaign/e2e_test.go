@@ -333,6 +333,66 @@ func TestE2E(t *testing.T) {
 		convertBundle(t, bundle)
 	})
 
+	t.Run("DataDirCLI", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "datadir"), cfgPath)
+		sc.cli = "data-dir"
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+		}
+		bundle := sc.bundle(t)
+		var p plan.Plan
+		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(bundle, "plan.json"))), &p); err != nil {
+			t.Fatalf("plan.json: %v", err)
+		}
+		if p.BuildTarget != plan.BuildStellarRPC || p.QueryCLI != plan.QueryCLIDataDir {
+			t.Errorf("plan.json build_target = %q, query_cli = %q; want %q, %q",
+				p.BuildTarget, p.QueryCLI, plan.BuildStellarRPC, plan.QueryCLIDataDir)
+		}
+		for _, leg := range legNames {
+			dir := filepath.Join(bundle, leg)
+			argv := readLeg(t, dir).Argv
+			group := strings.SplitN(leg, "-", 2)[0]
+			if want := []string{"--enable-rpcv2", "bench", group}; len(argv) < 4 || !slices.Equal(argv[1:4], want) {
+				t.Errorf("%s argv = %v, want it to start %v", leg, argv, want)
+			}
+			if group == "query" {
+				for _, f := range []string{"latency.csv", "scenarios.csv", "run.json"} {
+					mustExist(t, filepath.Join(dir, f))
+				}
+			}
+		}
+		coldStore := filepath.Join(sc.root, "scratch", "sac-6000", "1")
+		cold := readLeg(t, filepath.Join(bundle, "query-cold-sac-6000-c1-txhash-run2")).Argv
+		for _, want := range []string{"--data-dir=" + coldStore, "--evict-page-cache=true"} {
+			if !slices.Contains(cold, want) {
+				t.Errorf("query-cold-sac-6000-c1-txhash-run2 argv = %v, want it to carry %s", cold, want)
+			}
+		}
+
+		var run struct {
+			Campaign struct {
+				QueryCLI string `json:"query_cli"`
+			} `json:"campaign"`
+			Queries map[string]map[string]map[string]map[string]any `json:"queries"`
+		}
+		if err := json.Unmarshal([]byte(readFile(t, convertBundle(t, bundle))), &run); err != nil {
+			t.Fatalf("converted run: %v", err)
+		}
+		if run.Campaign.QueryCLI != "data-dir" {
+			t.Errorf("converted campaign.query_cli = %q, want data-dir", run.Campaign.QueryCLI)
+		}
+		for _, tier := range []string{"cold", "hot"} {
+			txhash := run.Queries[tier]["sac-6000-c1"]["txhash"]
+			if txhash["verdict_sla"] == nil {
+				t.Errorf("converted %s txhash carries no SLA verdict: %v", tier, txhash)
+			}
+		}
+		if setup := run.Queries["cold"]["sac-6000-c1"]["setup"]; setup["evict"] == nil || setup["open"] == nil {
+			t.Errorf("converted cold setup = %v, want open and evict rows", setup)
+		}
+	})
+
 	t.Run("QueryCampaignOnACommitWithoutTheQueryBench", func(t *testing.T) {
 		sc := newScenario(t, bin, filepath.Join(work, "noquery"), cfgPath)
 		sc.noQuery = true
@@ -405,14 +465,14 @@ type scenario struct {
 	cfg     string   // the config path passed on the CLI
 	root    string   // BENCH_ROOT
 	control string   // STUB_RPC_CONTROL
-	cli     string   // STUB_RPC_CLI: legacy makes the clone look like a pre-#1105 commit
+	cli     string   // STUB_RPC_CLI: legacy makes the clone a pre-#1105 commit, data-dir a post-#1123 one
 	noQuery bool     // STUB_RPC_NO_QUERY: the clone's commit has no query bench
 	path    []string // dirs prepended to PATH, in order
 }
 
 // convertBundle runs the real converter over bundle and fails the test unless
 // it writes a run JSON.
-func convertBundle(t *testing.T, bundle string) {
+func convertBundle(t *testing.T, bundle string) string {
 	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
@@ -431,7 +491,9 @@ func convertBundle(t *testing.T, bundle string) {
 	if err != nil {
 		t.Fatalf("convert.py: %v\n%s", err, out)
 	}
-	mustExist(t, filepath.Join(outDir, "e2e-test.json"))
+	path := filepath.Join(outDir, "e2e-test.json")
+	mustExist(t, path)
+	return path
 }
 
 func newScenario(t *testing.T, bin, root, cfg string) *scenario {
@@ -448,10 +510,11 @@ func newScenario(t *testing.T, bin, root, cfg string) *scenario {
 	writeExec(t, filepath.Join(stubs, "git"), fmt.Sprintf(`#!/bin/sh
 # Fake git: every rev-parse resolves to one fixed commit, and the clone,
 # fetch, reset, and checkout the runner drives are no-ops. The bench CLI probes
-# (git grep for a command's Use: line) answer as a commit of the STUB_RPC_CLI
-# shape would: bench-ingest and bench-query exist only on a legacy commit, the
-# root query command only on a bench one, and STUB_RPC_NO_QUERY removes the
-# query bench from either.
+# (git grep for a command's Use: line or a Makefile target) answer as a commit
+# of the STUB_RPC_CLI shape would: bench-ingest and bench-query exist only on a
+# legacy commit, the tiered root query command only on a bench one, the
+# data-dir query command and the build-stellar-rpc binary only on a data-dir
+# one, and STUB_RPC_NO_QUERY removes the query bench from any of them.
 grep=
 for arg in "$@"; do
 	if [ "$arg" = rev-parse ]; then
@@ -463,28 +526,32 @@ done
 [ -n "$grep" ] || exit 0
 for arg in "$@"; do
 	case $arg in
+	*'^build-rpc-v2:'*) [ "${STUB_RPC_CLI:-}" != data-dir ]; exit ;;
+	*'^build-stellar-rpc:'*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
+	*newBenchCommand*) [ "${STUB_RPC_CLI:-}" = data-dir ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
 	*'"bench-ingest"'*) [ "${STUB_RPC_CLI:-}" = legacy ]; exit ;;
 	*'"bench-query"'*) [ "${STUB_RPC_CLI:-}" = legacy ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
-	*'"query"'*) [ "${STUB_RPC_CLI:-}" != legacy ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
+	*'"query"'*) [ -z "${STUB_RPC_CLI:-}" ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
 	esac
 done
 exit 1
 `, stubCommit))
 	writeExec(t, filepath.Join(stubs, "make"), fmt.Sprintf(`#!/bin/sh
-# Fake make: build-rpc-v2 installs the stub binary where the real target leaves
-# it, for the runner's own mv to move into the versioned path. Every other
-# target succeeds without doing anything.
+# Fake make: build-rpc-v2 and build-stellar-rpc install the stub binary where
+# the real target leaves it, for the runner's own mv to move into the versioned
+# path. Every other target succeeds without doing anything.
 src=
 prev=
-target=
+binary=
 for arg in "$@"; do
 	if [ "$prev" = -C ]; then src=$arg; fi
-	if [ "$arg" = build-rpc-v2 ]; then target=$arg; fi
+	if [ "$arg" = build-rpc-v2 ]; then binary=stellar-rpc-v2; fi
+	if [ "$arg" = build-stellar-rpc ]; then binary=stellar-rpc; fi
 	prev=$arg
 done
-[ -n "$target" ] || exit 0
-cp %s "$src/stellar-rpc-v2"
-chmod +x "$src/stellar-rpc-v2"
+[ -n "$binary" ] || exit 0
+cp %s "$src/$binary"
+chmod +x "$src/$binary"
 `, absPath(t, filepath.Join("testdata", "stub-rpc.sh"))))
 	sc.path = []string{stubs}
 

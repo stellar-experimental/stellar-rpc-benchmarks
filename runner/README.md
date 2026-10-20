@@ -257,9 +257,12 @@ Each leg then sweeps `query_load.ladder` (`0.5×`, `1×`, `2×`) around its floo
 the result as one `--target-rps` list, so a `getEvents` leg reads:
 
 ```
-$ …/stellar-rpc-<sha> bench query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
-    --types=events --target-rps=50,100,200 --duration=60s --out=…
+$ …/stellar-rpc-<sha> --enable-rpcv2 bench query --data-dir=… \
+    --types=events --target-rps=50,100,200 --duration=60s --evict-page-cache=true --out=…
 ```
+
+On a `query_cli = "tiered"` commit the same leg is `bench query cold --cold-dir=…
+--start-chunk=1 --num-chunks=1 …`, with no `--enable-rpcv2` before a `build-rpc-v2` binary.
 
 For the SLA family the ladder IS the SLA's load tiers: `0.5×` is Light (250 rps aggregate),
 `1×` is Standard (500 rps, the sustained watermark), and `2×` is Heavy (1000 rps). The
@@ -271,8 +274,8 @@ the two, deduplicated and sorted ascending. For sac at phase 3 the SLA ladder is
 `150,300,600` and the demand ladder is `500,1000,2000`, so the leg reads:
 
 ```
-$ …/stellar-rpc-<sha> bench query cold --cold-dir=… --start-chunk=1 --num-chunks=1 \
-    --types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s --out=…
+$ …/stellar-rpc-<sha> --enable-rpcv2 bench query --data-dir=… \
+    --types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s --evict-page-cache=true --out=…
 ```
 
 The converter then judges `r300` against the SLA p99 and `r1000` against the 10 ms in-RPC
@@ -288,7 +291,9 @@ profile or an unresolvable phase fails in seconds rather than at the first query
 
 Both tiers read a database this campaign built: `query-hot` opens the hot DB the cell's
 hot ingest left at `$BENCH_ROOT/hot/<dataset>/<chunk>`, and `query-cold` opens the cold
-store its cold ingest built at `$BENCH_ROOT/scratch/<dataset>/<chunk>` — never the
+store its cold ingest built at `$BENCH_ROOT/scratch/<dataset>/<chunk>` (each passed as
+`--data-dir` on a data-dir commit; a cold leg evicts the store's files from the page cache
+before each rate, a hot leg runs 20 warmup requests first) — never the
 `events/`/`txhash/` tree banked inside the golden dataset. With `runs > 1` both read what
 the **last** rep built: every rep wipes and rebuilds the same chunk, so only the last
 one's success guarantees a whole store. The disk cost is that a query campaign carries
@@ -316,10 +321,27 @@ Both are on `feature/full-history`, so the default `ref = "feature/full-history"
 satisfies the floor.
 
 The command shape follows the built commit. Before planning, the runner greps the build
-clone's `cmd/` tree at that commit for the `bench-ingest` command declaration
-(`run.DetectBenchCLI`): a commit that has it gets `bench-ingest` / `bench-query` argv
-(`"bench_cli": "legacy"` in `plan.json`), any other gets `bench ingest` / `bench query`
-(`"bench_cli": "bench"`). The `fixture` dataset kind is the exception: it always runs
+clone at that commit, leaving out `_test.go` files, and records three answers in
+`plan.json`:
+
+- **`bench_cli`** (`run.DetectBenchCLI`): a commit whose `cmd/` tree declares the
+  `bench-ingest` command gets `bench-ingest` / `bench-query` argv (`"legacy"`), any other
+  gets `bench ingest` / `bench query` (`"bench"`).
+- **`query_cli`** (`run.DetectQueryCLI`, query campaigns only): `"data-dir"` when the query
+  command is built by `newBenchCommand("query", …)` (stellar-rpc#1070), which reads
+  `--data-dir` and takes the tier from the dataset's catalog; `"tiered"` for `query cold|hot`
+  (or `bench-query cold|hot`). A commit with neither fails a query campaign before the build.
+- **`build_target`** (`run.DetectBuildTarget`): `"build-rpc-v2"` while the Makefile has
+  that target, which writes `stellar-rpc-v2` against the shared libraries in `~/.zstd` and
+  `~/.rocksdb`; else `"build-stellar-rpc"` (stellar-rpc#1123), which writes one
+  `stellar-rpc` binary with RocksDB and zstd linked statically from `~/.zstd-static` and
+  `~/.rocksdb-static` (the Makefile builds them there when missing, which takes minutes).
+  That binary runs rpcv1 by default, so every bench command gets `--enable-rpcv2` before
+  `bench`.
+
+From stellar-rpc#1070 on, `bench ingest cold` also refuses a non-empty `--cold-out-dir`, so
+a `bsb-s3` dataset, which backfills every chunk into one pack root, is refused before the
+build when it lists more than one chunk; give each chunk its own dataset. The `fixture` dataset kind is the exception: it always runs
 `bench-ingest fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a
 `fixture` subcommand, so only the stub binary of the e2e test answers it.
 

@@ -78,7 +78,7 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	builtCommit, resolveErr := run.ResolveRef(src, cfg.Ref)
 	if resolveErr == nil {
 		in.BuiltCommit, in.Sha8 = builtCommit, builtCommit[:8]
-		in.BenchCLI = probeBenchCLI(cfg, src, builtCommit, stdout)
+		probeShape(cfg, src, builtCommit, &in, stdout)
 	} else {
 		// A dry run fetches nothing, so the ref may not resolve locally yet:
 		// plan with the ref itself and a placeholder sha in derived paths. The
@@ -128,24 +128,35 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	return 0
 }
 
-// probeBenchCLI is run.DetectBenchCLI, plus run.HasQueryCLI for a query
-// campaign, for the commands that only print a plan: a failed probe or a
-// missing query bench is a note, and the plan falls back to the current shape.
-func probeBenchCLI(cfg *config.Config, src, commit string, stdout io.Writer) plan.BenchCLI {
+// probeShape fills in's commit shape for the commands that only print a plan:
+// run.DetectBenchCLI, run.DetectBuildTarget, and run.DetectQueryCLI for a query
+// campaign. A failed probe, a missing query bench, or a config the shape cannot
+// run is a note, and the plan falls back to the default shape.
+func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout io.Writer) {
 	cli, err := run.DetectBenchCLI(src, commit)
 	if err != nil {
 		run.Notef(stdout, "%s — planning the %s CLI", err, plan.BenchCLIRoot)
-		return plan.BenchCLIRoot
+		return
+	}
+	in.BenchCLI = cli
+	if target, err := run.DetectBuildTarget(src, commit); err != nil {
+		run.Notef(stdout, "%s — planning %s", err, plan.BuildRPCV2)
+	} else {
+		in.BuildTarget = target
 	}
 	if cfg.Query {
-		switch ok, err := run.HasQueryCLI(src, commit, cli); {
+		switch shape, ok, err := run.DetectQueryCLI(src, commit, cli); {
 		case err != nil:
 			run.Notef(stdout, "%s", err)
 		case !ok:
 			run.Notef(stdout, "%s", noQueryCLI(commit, cli))
+		default:
+			in.QueryCLI = shape
 		}
 	}
-	return cli
+	if err := plan.Check(cfg, *in); err != nil {
+		run.Notef(stdout, "%s", err)
+	}
 }
 
 // noQueryCLI is the message for a query campaign whose commit has no query bench.
@@ -197,8 +208,15 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		return 1
 	}
 	run.Notef(out, "bench CLI: %s (%s)", benchCLI, benchCLIDescription(benchCLI))
+	buildTarget, err := run.DetectBuildTarget(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	run.Notef(out, "build target: make %s", buildTarget)
+	var queryCLI plan.QueryCLI
 	if cfg.Query {
-		ok, err := run.HasQueryCLI(src, builtCommit, benchCLI)
+		shape, ok, err := run.DetectQueryCLI(src, builtCommit, benchCLI)
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %s\n", err)
 			return 1
@@ -207,6 +225,8 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 			fmt.Fprintf(stderr, "error: %s\n", noQueryCLI(builtCommit, benchCLI))
 			return 1
 		}
+		queryCLI = shape
+		run.Notef(out, "query CLI: %s", queryCLI)
 	}
 
 	if !noPreflight {
@@ -241,7 +261,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		}
 	}
 
-	p := plan.Build(cfg, plan.Inputs{
+	in := plan.Inputs{
 		BenchRoot:     benchRoot,
 		BuiltCommit:   builtCommit,
 		Sha8:          sha8,
@@ -249,7 +269,14 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		QueryRates:    ql.rates,
 		QueryDuration: queryDuration(cfg),
 		BenchCLI:      benchCLI,
-	})
+		QueryCLI:      queryCLI,
+		BuildTarget:   buildTarget,
+	}
+	if err := plan.Check(cfg, in); err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	p := plan.Build(cfg, in)
 	res := p.ResultsDir
 	if resume != nil && filepath.Clean(res) != filepath.Clean(resume.Dir) {
 		fmt.Fprintf(stderr, "error: --resume: '%s' is not the bundle this config and commit produce (%s)\n",

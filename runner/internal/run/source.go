@@ -79,25 +79,70 @@ func DetectBenchCLI(src, commit string) (plan.BenchCLI, error) {
 	}
 }
 
-// HasQueryCLI reports whether commit declares the query bench in shape cli:
-// `query` under the bench root, or `bench-query` on a legacy commit.
-func HasQueryCLI(src, commit string, cli plan.BenchCLI) (bool, error) {
-	use := "query"
+// DetectQueryCLI reports the query bench shape of commit in CLI shape cli, and
+// false when it has no query bench: `bench-query cold|hot` on a legacy commit,
+// and under the bench root either `query cold|hot` or, from stellar-rpc#1070
+// on, `query --data-dir`, whose command newBenchCommand builds directly.
+func DetectQueryCLI(src, commit string, cli plan.BenchCLI) (plan.QueryCLI, bool, error) {
+	probe := func(pattern string) (bool, error) {
+		ok, err := grepSource(src, commit, pattern)
+		if err != nil {
+			return false, fmt.Errorf("probe the query bench of %s in %s: %w", commit, src, err)
+		}
+		return ok, nil
+	}
 	if cli == plan.BenchCLILegacy {
-		use = "bench-query"
+		ok, err := probe(useRegexp("bench-query"))
+		return plan.QueryCLITiered, ok, err
 	}
-	ok, err := declaresCommand(src, commit, use)
-	if err != nil {
-		return false, fmt.Errorf("probe the query bench of %s in %s: %w", commit, src, err)
+	switch ok, err := probe(`newBenchCommand\([[:space:]]*"query"`); {
+	case err != nil:
+		return "", false, err
+	case ok:
+		return plan.QueryCLIDataDir, true, nil
 	}
-	return ok, nil
+	ok, err := probe(useRegexp("query"))
+	return plan.QueryCLITiered, ok, err
 }
 
-// declaresCommand reports whether commit's cmd/ tree declares a cobra command
-// with Use: "<use>".
+// DetectBuildTarget reports the Makefile target that builds commit's rpcv2
+// binary: build-rpc-v2 while the Makefile has it, and build-stellar-rpc once
+// stellar-rpc#1123 made one binary of rpcv1 and rpcv2. Older Makefiles also
+// have a build-stellar-rpc, which built rpcv1, so build-rpc-v2 decides.
+func DetectBuildTarget(src, commit string) (plan.BuildTarget, error) {
+	for _, target := range []plan.BuildTarget{plan.BuildRPCV2, plan.BuildStellarRPC} {
+		ok, err := grepTree(src, commit, "^"+string(target)+":", "Makefile")
+		if err != nil {
+			return "", fmt.Errorf("probe the build target of %s in %s: %w", commit, src, err)
+		}
+		if ok {
+			return target, nil
+		}
+	}
+	return "", fmt.Errorf("commit %s has neither a %s nor a %s target in its Makefile",
+		commit, plan.BuildRPCV2, plan.BuildStellarRPC)
+}
+
+// declaresCommand reports whether commit's non-test cmd/ sources declare a
+// cobra command with Use: "<use>".
 func declaresCommand(src, commit, use string) (bool, error) {
-	err := exec.Command("git", "-C", src, "grep", "-q", "-E",
-		`Use:[[:space:]]*"`+use+`"`, commit, "--", "cmd").Run()
+	return grepSource(src, commit, useRegexp(use))
+}
+
+func useRegexp(use string) string { return `Use:[[:space:]]*"` + use + `"` }
+
+// grepSource reports whether commit's cmd/ sources match the extended regexp
+// pattern. Test files are left out: a test may build a command the binary
+// does not have.
+func grepSource(src, commit, pattern string) (bool, error) {
+	return grepTree(src, commit, pattern, "cmd", ":(exclude)*_test.go")
+}
+
+// grepTree reports whether the files of commit under pathspecs match the
+// extended regexp pattern.
+func grepTree(src, commit, pattern string, pathspecs ...string) (bool, error) {
+	args := append([]string{"-C", src, "grep", "-q", "-E", pattern, commit, "--"}, pathspecs...)
+	err := exec.Command("git", args...).Run()
 	var exitErr *exec.ExitError
 	switch {
 	case err == nil:

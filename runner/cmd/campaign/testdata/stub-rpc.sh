@@ -9,12 +9,17 @@
 # like a build with stellar-rpc#1105 and #1066: it refuses a non-empty --out,
 # writes run.json, and keeps the peak RSS out of driver.csv. Called as
 # `bench-ingest|bench-query <tier>` it behaves like an older build and writes
-# invocation.json with a driver.csv peak_rss_bytes row.
+# invocation.json with a driver.csv peak_rss_bytes row. Called as
+# `bench query --data-dir=<dir>` it behaves like a build with stellar-rpc#1070:
+# it takes the tier from the dataset and writes latency.csv and scenarios.csv.
 #
 # Environment:
 #   STUB_RPC_COMMIT   40-hex commit to report as the build identity. It must be
 #                     the sha the test's fake git resolves to, or the converter
 #                     warns about a binary/manifest commit mismatch.
+#   STUB_RPC_CLI      data-dir makes this the one stellar-rpc binary of
+#                     stellar-rpc#1123, which runs the bench commands only
+#                     under a leading --enable-rpcv2.
 #   STUB_RPC_CONTROL  optional control file, one `fail <out-basename>` or
 #                     `hang <out-basename>` line per leg to derail. A failed leg
 #                     writes a partial driver.csv and a manifest carrying an
@@ -29,6 +34,16 @@ version=v20.3.1-999-gstubbed
 branch=stub/e2e
 commit=${STUB_RPC_COMMIT:-0123456789abcdef0123456789abcdef01234567}
 header='stage,n,n_items,total_ns,p50_ns,p90_ns,p99_ns,max_ns'
+
+rpcv2=
+if [ "${1:-}" = --enable-rpcv2 ]; then
+	rpcv2=1
+	shift
+fi
+if [ "${STUB_RPC_CLI:-}" = data-dir ] && [ "${1:-}" = bench ] && [ -z "$rpcv2" ]; then
+	echo 'Error: unknown command "bench" for "stellar-rpc"' >&2
+	exit 1
+fi
 
 sub=${1:-}
 tier=${2:-}
@@ -49,6 +64,8 @@ fi
 out=
 pack_dir=
 cold_dir=
+data_dir=
+evict=
 cold_out_dir=
 hot_dir=
 close_interval=
@@ -60,6 +77,8 @@ for arg in "$@"; do
 	--out=*) out=${arg#--out=} ;;
 	--pack-dir=*) pack_dir=${arg#--pack-dir=} ;;
 	--cold-dir=*) cold_dir=${arg#--cold-dir=} ;;
+	--data-dir=*) data_dir=${arg#--data-dir=} ;;
+	--evict-page-cache=*) evict=${arg#--evict-page-cache=} ;;
 	--cold-out-dir=*) cold_out_dir=${arg#--cold-out-dir=} ;;
 	--hot-dir=*) hot_dir=${arg#--hot-dir=} ;;
 	--close-interval=*) close_interval=${arg#--close-interval=} ;;
@@ -83,6 +102,9 @@ write_invocation() {
 	if [ "$cli" = bench ]; then
 		manifest=run.json
 		command="bench ${sub#bench-} $tier"
+		if [ -n "$data_dir" ]; then
+			command="bench ${sub#bench-}"
+		fi
 	else
 		manifest=invocation.json
 		command="$sub $tier"
@@ -122,6 +144,10 @@ write_invocation() {
 		echo '  "startedAt": "2026-07-30T01:00:00Z",'
 		if [ -n "$inv_error" ]; then
 			printf '  "error": "%s",\n' "$inv_error"
+		fi
+		if [ -n "${settings_json:-}" ]; then
+			printf '  "settings": %s,\n' "$settings_json"
+			echo '  "setupNs": {"storeOpen": 5000},'
 		fi
 		echo '  "finishedAt": "2026-07-30T01:00:01Z"'
 		echo '}'
@@ -239,6 +265,43 @@ case "$sub $tier" in
 	csv_row "$out/hot.csv" 'commit,100,0,800,80,90,120,200'
 	csv_row "$out/hot.csv" 'apply,100,0,250,25,30,40,70'
 	write_invocation '' 14000000000
+	;;
+
+"bench-query --data-dir="*)
+	# The dataset says which tier it is: a hot DB, or a cold store written for
+	# this very directory. Anything else fails at open, as the real binary does.
+	if [ -f "$data_dir/hot.stub" ]; then
+		dtier=hot
+		evict_ns=
+		eviction=off
+	elif [ -f "$data_dir/ledgers/chunk-0001.stub" ] && [ "$(cat "$data_dir/ledgers/chunk-0001.stub")" = "$data_dir" ]; then
+		dtier=cold
+		evict_ns=4000
+		eviction=requested
+		if [ "$evict" = false ]; then
+			evict_ns=
+			eviction=off
+		fi
+	else
+		echo "stub-rpc: bench query: no dataset under $data_dir" >&2
+		fail_leg "no dataset under $data_dir"
+	fi
+	mkdir -p "$out"
+	echo 'query_type,target_rps,metric,outcome,count,items,total_ns,p50_ns,p90_ns,p99_ns,max_ns' >"$out/latency.csv"
+	echo 'query_type,target_rps,planned,started,dropped,succeeded,failed,warmup_planned,warmup_dropped,warmup_failed,achieved_rps,completion_rps,schedule_ns,elapsed_ns,overrun_ns,process_cpu_ns,page_cache_evict_ns' >"$out/scenarios.csv"
+	IFS=,
+	for qt in $types; do
+		for rps in $target_rps; do
+			csv_row "$out/latency.csv" "$qt,$rps,latency,all,100,100,500000,5000,6000,7000,9000"
+			csv_row "$out/latency.csv" "$qt,$rps,handler_latency,all,100,100,400000,4000,5000,6000,8000"
+			csv_row "$out/latency.csv" "$qt,$rps,latency_from_due,all,100,100,900000,9000,11000,13000,20000"
+			csv_row "$out/latency.csv" "$qt,$rps,start_delay,all,100,0,100000,500,800,1000,1200"
+			csv_row "$out/scenarios.csv" "$qt,$rps,100,100,0,100,0,0,0,0,$rps,$rps,1000000,1000000,0,500000,$evict_ns"
+		done
+	done
+	unset IFS
+	settings_json="{\"tier\": \"$dtier\", \"pageCacheEviction\": \"$eviction\"}"
+	write_invocation '' 900000000
 	;;
 
 "bench-query cold" | "bench-query hot")

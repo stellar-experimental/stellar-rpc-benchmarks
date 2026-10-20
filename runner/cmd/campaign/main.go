@@ -162,7 +162,7 @@ func planCmd(pos []string, fs *flag.FlagSet, stdout, stderr io.Writer) int {
 	src := filepath.Join(benchRoot, "src")
 	if sha, err := run.ResolveRef(src, cfg.Ref); err == nil {
 		in.BuiltCommit, in.Sha8 = sha, sha[:8]
-		in.BenchCLI = probeBenchCLI(cfg, src, sha, stdout)
+		probeShape(cfg, src, sha, &in, stdout)
 	} else {
 		// Planning fetches nothing, so the ref may not resolve locally yet:
 		// plan with the ref itself and a placeholder sha in derived paths.
