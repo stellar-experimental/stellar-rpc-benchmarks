@@ -334,7 +334,10 @@ converter warns.
   },
   "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows belonging to no cell
                                           //   (open, evict, peak_rss_bytes) — i.e. matching neither
-                                          //   *_c<W> nor *_r<rate>{,_millirps,_lag,_shed}
+                                          //   *_c<W> nor *_r<rate>{,_millirps,_lag,_shed}. In an
+                                          //   open-loop cell, open is the first leg's, evict sums
+                                          //   every leg and rate of a rep, and peak_rss_bytes is the
+                                          //   highest leg of a rep (conversions with query_cli).
 }}}
 
 "golden": { "<unit>": { "wall_ns": int } }   // golden-download-<unit>/driver.csv chunk_wall total_ns (single run)

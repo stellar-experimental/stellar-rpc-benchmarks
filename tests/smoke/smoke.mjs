@@ -937,8 +937,8 @@ const FIXTURE_CHECKS = {
     check(group, "the run records the data-dir query bench", D.campaign.query_cli === "data-dir",
       String(D.campaign.query_cli));
     const setupCap = txt(doc.querySelector("#figq5 figcaption"));
-    check(group, "setup caption says the data-dir bench evicts before each rate",
-      setupCap.includes("before each rate") && setupCap.includes("daemon startup"), setupCap);
+    check(group, "setup caption says the data-dir bench evicts before each rate, summed over the cell",
+      setupCap.includes("before each rate, summed over the cell's legs") && setupCap.includes("daemon startup"), setupCap);
   },
 
   /* Phase 3b: a label rather than a number. The run must select the 3b entry

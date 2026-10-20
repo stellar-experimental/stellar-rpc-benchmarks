@@ -1809,6 +1809,9 @@
     // the daemon's JSON-RPC handlers; the tiered bench before it read the
     // stores directly. Runs without the field are all tiered.
     const qDataDir = !!(D.campaign && D.campaign.query_cli === "data-dir");
+    // Conversions that record query_cli sum a cell's evictions over all its
+    // legs; older ones kept the first leg's.
+    const qCellSetup = !!(D.campaign && D.campaign.query_cli);
     // qThr is the one number the prose and the reference lines can name; null
     // when the run states a target per endpoint and tier instead.
     const { check: qCheck, thrFor: qThrFor, perEndpoint: qPerEndpoint, single: qThr } = queryTargets(D);
@@ -1988,7 +1991,7 @@
       <figure class="fig" id="figq5">
         <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">Per-leg setup and event-scan detail</span></div></div>
         <div class="fig-body"><div class="tv-scroll"><table class="data" id="query-setup-table" style="width:100%"></table></div></div>
-        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> ${qDataDir ? "opens the dataset the way daemon startup does" : "builds the read fixture"}, and <code>evict</code> drops the cold artifacts from the page cache ${qDataDir ? "before each rate, summed over the leg" : "once per leg"} — a hot leg has nothing to evict, so the row is absent. The event columns are what getEvents actually returned at the 1× rate.</figcaption>
+        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> ${qDataDir ? "opens the dataset the way daemon startup does" : "builds the read fixture"}, and <code>evict</code> drops the cold artifacts from the page cache ${qCellSetup ? "before each rate, summed over the cell's legs" : "once per leg"} — a hot leg has nothing to evict, so the row is absent.${qCellSetup ? " Peak RSS is the highest of the cell's legs." : ""} The event columns are what getEvents actually returned at the 1× rate.</figcaption>
       </figure>
     </section>` : hasQueries ? `
     <section id="queries">

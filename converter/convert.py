@@ -873,7 +873,7 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
     along as a secondary column. txhash also splits found/miss sub-stages; like
     the closed-loop found_c<W> rows, they are ignored here.
     """
-    entry, setup_drivers, setup_dirs = {}, None, None
+    entry, setup_drivers, cell_legs = {}, None, []
     for qt in qtypes:
         legs = []
         for d in rps_run_dirs(results_dir, tier, unit, qt, reps):
@@ -887,13 +887,13 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         if not legs:
             warn(f"query-{tier}-{unit} {qt}: no CSVs; skipping")
             continue
-        dirs = [d for d, _, _ in legs]
         rows = [r for _, r, _ in legs]
         drivers = [drv for _, _, drv in legs]
-        # Every leg's driver repeats the same setup rows (they measure the same
-        # open/evict prep), so the first type's leg stands for the whole cell.
+        cell_legs += [(d, drv) for d, _, drv in legs]
+        # Every leg opens the same store, so the first type's leg stands for
+        # the whole cell's open; evict and peak RSS are the cell's own below.
         if setup_drivers is None:
-            setup_drivers, setup_dirs = drivers, dirs
+            setup_drivers = drivers
         tokens = sorted({m.group(1) for st in rows[0]
                          for m in [_TOTAL_R.match(st)] if m}, key=float)
         qout = {}
@@ -938,19 +938,71 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         return None
     setup = {}
     for st in setup_drivers[0]:
-        if _is_leg_row(st):
+        if _is_leg_row(st) or st in (QUERY_EVICT, PEAK_RSS):
             continue
         v = stat([d[st]["total_ns"] for d in setup_drivers])
         v["n_items"] = setup_drivers[0][st]["n_items"]
         setup[st] = v
-    # From stellar-rpc#1066 the peak RSS is in run.json, not driver.csv; keep
-    # it in the same setup row either way.
-    peak = _peak_rss_bytes(setup_dirs, setup_drivers)
+    evict = _cell_evict(cell_legs)
+    if evict is not None:
+        setup[QUERY_EVICT] = evict
+    peak = _cell_peak_rss(cell_legs, f"query-{tier}-{unit}")
     if peak is not None:
-        peak["n_items"] = setup.get(PEAK_RSS, {}).get("n_items", 0)
         setup[PEAK_RSS] = peak
     entry["setup"] = setup
     return entry
+
+
+QUERY_EVICT = "evict"
+_LEG_REP = re.compile(r"-run(\d+)$")
+
+
+def _legs_by_rep(cell_legs):
+    """{rep: [(dir, driver), ...]} of a cell's query legs, by rep number."""
+    out = {}
+    for d, drv in cell_legs:
+        m = _LEG_REP.search(os.path.basename(d))
+        out.setdefault(int(m.group(1)) if m else 0, []).append((d, drv))
+    return dict(sorted(out.items()))
+
+
+def _cell_evict(cell_legs):
+    """Setup evict row of a cell: per rep, every eviction of every leg and rung
+    summed, then V across reps; n_items counts the evictions of a rep. None
+    when no leg evicted."""
+    totals, count = [], None
+    for legs in _legs_by_rep(cell_legs).values():
+        rows = [drv[QUERY_EVICT] for _, drv in legs if QUERY_EVICT in drv]
+        if rows:
+            totals.append(sum(r["total_ns"] for r in rows))
+            count = sum(r["n"] for r in rows) if count is None else count
+    if not totals:
+        return None
+    v = stat(totals)
+    v["n_items"] = count
+    return v
+
+
+def _cell_peak_rss(cell_legs, label):
+    """Peak RSS of a cell: per rep, the highest peak of its legs (run.json, else
+    the driver.csv row), then V across reps. Omitted, with a warning, unless
+    every rep has one."""
+    values, missing = [], []
+    for rep, legs in _legs_by_rep(cell_legs).items():
+        peaks = [v for d, drv in legs
+                 for v in [_run_record_peak_rss(d) or drv.get(PEAK_RSS, {}).get("total_ns")] if v]
+        if peaks:
+            values.append(max(peaks))
+        else:
+            missing.append(rep)
+    if not values:
+        return None
+    if missing:
+        warn(f"{label}: peak RSS missing in rep(s) {missing}; omitting it")
+        return None
+    v = stat(values)
+    v["n_items"] = 0
+    return v
 
 
 def build_queries(results_dir, layout, unit, reps, tier):

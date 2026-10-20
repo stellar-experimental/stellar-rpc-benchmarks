@@ -1,5 +1,6 @@
 """Query legs of `bench query --data-dir` (stellar-rpc#1070): latency.csv and
 scenarios.csv convert to the cells and verdicts the tiered legs give."""
+import json
 import os
 import sys
 import tempfile
@@ -85,6 +86,31 @@ class DataDirWarningTests(unittest.TestCase):
         self.assertNotIn("events", data["queries"]["hot"][UNIT])
         self.assertTrue(any("events: no CSVs" in w for w in warnings), warnings)
         self.assertIn(f"missing query outputs in query-hot-{UNIT}-events-run1", warnings)
+
+
+class CellSetupTests(unittest.TestCase):
+    """A cell's setup rows cover every leg of the cell, not only its first."""
+
+    def test_evict_sums_every_leg_and_rate(self):
+        data, _, _ = run_convert(build(data_dir=True))
+        evict = data["queries"]["cold"][UNIT]["setup"]["evict"]
+        # Each of the four legs evicts once in the fixture, 4000 ns each.
+        self.assertEqual(evict["r"], [16000, 16000])
+        self.assertEqual(evict["n_items"], 4)
+
+    def test_peak_rss_is_the_highest_leg(self):
+        root = build(data_dir=True)
+        for r in (1, 2):
+            path = os.path.join(root, f"query-hot-{UNIT}-txhash-run{r}", "run.json")
+            with open(path) as f:
+                rec = json.load(f)
+            rec["peakRssBytes"] = 4_500_000_000 + r
+            with open(path, "w") as f:
+                json.dump(rec, f)
+        data, warnings, _ = run_convert(root)
+        self.assertEqual(warnings, [])
+        peak = data["queries"]["hot"][UNIT]["setup"]["peak_rss_bytes"]
+        self.assertEqual(peak["r"], [4_500_000_001, 4_500_000_002])
 
 
 class MissingOutputTests(unittest.TestCase):
