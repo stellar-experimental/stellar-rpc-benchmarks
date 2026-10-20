@@ -26,6 +26,7 @@ const (
 	KindLeg     = "leg"
 	KindTarball = "tarball"
 	KindPublish = "publish"
+	KindCleanup = "cleanup"
 )
 
 // queryTypes are the endpoint types the query suites benchmark, in the order
@@ -140,7 +141,7 @@ type Inputs struct {
 // command: the measurement is the process.
 type Step struct {
 	ID    string            `json:"id"`
-	Kind  string            `json:"kind"`  // build|dataset|leg|tarball|publish
+	Kind  string            `json:"kind"`  // build|dataset|leg|cleanup|tarball|publish
 	Timed bool              `json:"timed"` // true only for benchmark legs
 	Argv  [][]string        `json:"argv"`  // external commands, in order
 	Env   map[string]string `json:"env,omitempty"`
@@ -154,7 +155,8 @@ type Step struct {
 	// materializes onto bare ground. It is the single source of truth for those
 	// wipes: the executor removes exactly this list, and the dry run prints it.
 	PreClean []string `json:"pre_clean,omitempty"`
-	// PostClean lists directories to rm -rf after the step succeeds. This is a
+	// PostClean lists directories to rm -rf after the step succeeds, and all
+	// that a cleanup step does once its needs succeeded. This is a
 	// deliberate change from bash, which only cleaned before the next rep and
 	// so left the final rep's cold scratch on disk for the rest of the
 	// campaign; freeing it immediately keeps peak disk to one cell's worth.
@@ -263,6 +265,9 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 		forEachCell(cfg, func(d *config.Dataset, chunk, rep int) {
 			for _, qtype := range queryTypes {
 				p.Steps = append(p.Steps, queryColdLeg(p, in, cfg, d, chunk, rep, qtype))
+			}
+			if rep == cfg.Runs {
+				p.Steps = append(p.Steps, coldStoreCleanup(in, cfg, d, chunk))
 			}
 		})
 	}
@@ -505,7 +510,7 @@ func ingestColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, ch
 	}
 	// With no query suite nothing reads that store afterwards, so it goes away
 	// as soon as the rep is done instead of squatting for the rest of the
-	// campaign. When there is one, the cell's last cold query leg frees it.
+	// campaign. When there is one, the cell's cold store cleanup step frees it.
 	if !cfg.Query {
 		step.PostClean = []string{scratch}
 	}
@@ -560,12 +565,25 @@ func queryColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 			fmt.Sprintf("ingest-cold-%s-c%d-run%d", d.Name, chunk, cfg.Runs),
 		},
 	}
-	// The store is freed as soon as the last leg that reads it succeeds — the
-	// last query type of the last rep — so peak disk stays bounded to the
-	// campaign's cells. A leg that fails keeps its store for diagnosis,
-	// because post-cleaning only runs on success.
-	if rep == cfg.Runs && qtype == queryTypes[len(queryTypes)-1] {
-		step.PostClean = []string{cold}
+	return step
+}
+
+// coldStoreCleanup frees a cell's cold store once every cold query leg that
+// reads it, every type of every rep, has succeeded, so peak disk stays bounded
+// to the campaign's cells. A failed leg skips it: the store stays for
+// diagnosis and for a --resume, which re-runs the failed leg against it while
+// skipping the cold ingest that built it.
+func coldStoreCleanup(in Inputs, cfg *config.Config, d *config.Dataset, chunk int) Step {
+	step := Step{
+		ID:        fmt.Sprintf("cleanup-cold-%s-c%d", d.Name, chunk),
+		Kind:      KindCleanup,
+		Argv:      [][]string{},
+		PostClean: []string{coldDir(in, d, chunk)},
+	}
+	for rep := 1; rep <= cfg.Runs; rep++ {
+		for _, qtype := range queryTypes {
+			step.Needs = append(step.Needs, fmt.Sprintf("query-cold-%s-c%d-%s-run%d", d.Name, chunk, qtype, rep))
+		}
 	}
 	return step
 }
@@ -717,6 +735,9 @@ func (p *Plan) Print(w io.Writer) {
 		}
 		if s.Kind == KindPublish {
 			fmt.Fprintf(w, "  $ campaign publish %s %s\n", p.ResultsDir, s.PublishURI)
+		}
+		if s.Kind == KindCleanup {
+			fmt.Fprintf(w, "  $ rm -rf %s\n", strings.Join(s.PostClean, " "))
 		}
 	}
 }

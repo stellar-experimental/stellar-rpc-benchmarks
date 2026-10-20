@@ -297,8 +297,9 @@ before each rate, a hot leg runs 20 warmup requests first) — never the
 `events/`/`txhash/` tree banked inside the golden dataset. With `runs > 1` both read what
 the **last** rep built: every rep wipes and rebuilds the same chunk, so only the last
 one's success guarantees a whole store. The disk cost is that a query campaign carries
-every cell's cold store, on top of its hot DBs, until that cell's last cold query leg
-succeeds and frees it. What it buys is hermeticity — the binary answering the queries is
+every cell's cold store, on top of its hot DBs, until every cold query leg of that cell
+(every type, every rep) has succeeded and its `cleanup-cold-<dataset>-c<chunk>` step frees
+it. A failed leg keeps the store, so a `--resume` re-runs that leg against it. What it buys is hermeticity — the binary answering the queries is
 the binary that wrote the store — and that is not theoretical: the golden tree's indexes
 were frozen by whatever binary prepared the dataset, and when stellar-rpc#932 changed the
 cold-index on-disk format, the first query campaigns' cold txhash legs all died at open
@@ -377,8 +378,8 @@ $BENCH_ROOT/
 │              (rm -rf golden/<name> to force a re-fetch)
 ├── fixture/   staging area for generated fixture packs
 ├── scratch/   cold stores, one per (dataset, chunk); wiped before every
-│              cold-ingest rep. On a query campaign a store is kept until the
-│              cell's last cold query leg succeeds; otherwise it goes as soon as
+│              cold-ingest rep. On a query campaign a store is kept until every
+│              cold query leg of the cell succeeds; otherwise it goes as soon as
 │              the ingest rep succeeds
 ├── hot/       hot DBs; the last run's DB is kept for the hot query suite
 └── results/   campaign bundles: <name>-<sha>-<stamp>/

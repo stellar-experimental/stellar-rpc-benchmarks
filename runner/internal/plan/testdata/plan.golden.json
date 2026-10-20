@@ -787,13 +787,29 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run2",
-      "post_clean": [
-        "/bench/scratch/sac-6000/1"
-      ],
       "needs": [
         "build",
         "dataset-sac-6000",
         "ingest-cold-sac-6000-c1-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-sac-6000-c1",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/sac-6000/1"
+      ],
+      "needs": [
+        "query-cold-sac-6000-c1-ledgers-run1",
+        "query-cold-sac-6000-c1-txpage-run1",
+        "query-cold-sac-6000-c1-txhash-run1",
+        "query-cold-sac-6000-c1-events-run1",
+        "query-cold-sac-6000-c1-ledgers-run2",
+        "query-cold-sac-6000-c1-txpage-run2",
+        "query-cold-sac-6000-c1-txhash-run2",
+        "query-cold-sac-6000-c1-events-run2"
       ]
     },
     {
@@ -998,13 +1014,29 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run2",
-      "post_clean": [
-        "/bench/scratch/sac-6000/2"
-      ],
       "needs": [
         "build",
         "dataset-sac-6000",
         "ingest-cold-sac-6000-c2-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-sac-6000-c2",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/sac-6000/2"
+      ],
+      "needs": [
+        "query-cold-sac-6000-c2-ledgers-run1",
+        "query-cold-sac-6000-c2-txpage-run1",
+        "query-cold-sac-6000-c2-txhash-run1",
+        "query-cold-sac-6000-c2-events-run1",
+        "query-cold-sac-6000-c2-ledgers-run2",
+        "query-cold-sac-6000-c2-txpage-run2",
+        "query-cold-sac-6000-c2-txhash-run2",
+        "query-cold-sac-6000-c2-events-run2"
       ]
     },
     {
@@ -1209,13 +1241,29 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run2",
-      "post_clean": [
-        "/bench/scratch/soroswap-1500/1"
-      ],
       "needs": [
         "build",
         "dataset-soroswap-1500",
         "ingest-cold-soroswap-1500-c1-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-soroswap-1500-c1",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/soroswap-1500/1"
+      ],
+      "needs": [
+        "query-cold-soroswap-1500-c1-ledgers-run1",
+        "query-cold-soroswap-1500-c1-txpage-run1",
+        "query-cold-soroswap-1500-c1-txhash-run1",
+        "query-cold-soroswap-1500-c1-events-run1",
+        "query-cold-soroswap-1500-c1-ledgers-run2",
+        "query-cold-soroswap-1500-c1-txpage-run2",
+        "query-cold-soroswap-1500-c1-txhash-run2",
+        "query-cold-soroswap-1500-c1-events-run2"
       ]
     },
     {
@@ -1420,13 +1468,29 @@
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run2",
-      "post_clean": [
-        "/bench/scratch/soroswap-1500/2"
-      ],
       "needs": [
         "build",
         "dataset-soroswap-1500",
         "ingest-cold-soroswap-1500-c2-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-soroswap-1500-c2",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/soroswap-1500/2"
+      ],
+      "needs": [
+        "query-cold-soroswap-1500-c2-ledgers-run1",
+        "query-cold-soroswap-1500-c2-txpage-run1",
+        "query-cold-soroswap-1500-c2-txhash-run1",
+        "query-cold-soroswap-1500-c2-events-run1",
+        "query-cold-soroswap-1500-c2-ledgers-run2",
+        "query-cold-soroswap-1500-c2-txpage-run2",
+        "query-cold-soroswap-1500-c2-txhash-run2",
+        "query-cold-soroswap-1500-c2-events-run2"
       ]
     },
     {

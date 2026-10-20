@@ -240,9 +240,10 @@ func TestSuiteOrdering(t *testing.T) {
 	suites := []string{"dataset", "ingest-cold", "ingest-hot", "query-cold", "query-hot"}
 	var blocks []string
 	for _, id := range stepIDs(p) {
-		label := id
+		// A cell's cold store cleanup closes that cell's cold query legs.
+		label := strings.Replace(id, "cleanup-cold-", "query-cold-", 1)
 		for _, s := range suites {
-			if strings.HasPrefix(id, s+"-") {
+			if strings.HasPrefix(label, s+"-") {
 				label = s
 				break
 			}
@@ -356,6 +357,26 @@ func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
 	p := buildGolden(t)
 	seen, cleaners := 0, 0
 	for _, s := range p.Steps {
+		if strings.HasPrefix(s.ID, "cleanup-cold-") {
+			cleaners++
+			cell := strings.TrimPrefix(s.ID, "cleanup-cold-")
+			i := strings.LastIndex(cell, "-c")
+			if want := []string{"/bench/scratch/" + cell[:i] + "/" + cell[i+2:]}; s.Kind != KindCleanup || !slices.Equal(s.PostClean, want) {
+				t.Errorf("%s kind %q post_clean = %v, want a cleanup of %v", s.ID, s.Kind, s.PostClean, want)
+			}
+			// The store goes only once every leg that reads it, every type of
+			// every rep, has succeeded.
+			var want []string
+			for rep := 1; rep <= 2; rep++ {
+				for _, qt := range queryTypes {
+					want = append(want, fmt.Sprintf("query-cold-%s-%s-run%d", cell, qt, rep))
+				}
+			}
+			if !slices.Equal(s.Needs, want) {
+				t.Errorf("%s needs %v, want %v", s.ID, s.Needs, want)
+			}
+			continue
+		}
 		if strings.HasPrefix(s.ID, "ingest-cold-") {
 			if s.PostClean != nil {
 				t.Errorf("%s post_clean = %v, want none — the cold query suite reads that store", s.ID, s.PostClean)
@@ -368,9 +389,7 @@ func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
 		seen++
 		// runs = 2, so every rep — not just rep 2 — waits on rep 2. The ingest
 		// legs are per cell, not per query type, so the type drops off the id.
-		rest := strings.TrimPrefix(s.ID, "query-cold-")
-		cell, rep, _ := strings.Cut(rest, "-run")
-		qtype := cell[strings.LastIndex(cell, "-")+1:]
+		cell, _, _ := strings.Cut(strings.TrimPrefix(s.ID, "query-cold-"), "-run")
 		cell = cell[:strings.LastIndex(cell, "-")]
 		for _, want := range []string{"build", "ingest-cold-" + cell + "-run2"} {
 			if !slices.Contains(s.Needs, want) {
@@ -387,22 +406,15 @@ func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
 		if slices.ContainsFunc(s.Argv[0], func(a string) bool { return strings.HasPrefix(a, "--cold-dir=/bench/golden/") }) {
 			t.Errorf("%s argv = %v, want no --cold-dir under the golden dataset root", s.ID, s.Argv[0])
 		}
-		last := rep == "2" && qtype == queryTypes[len(queryTypes)-1]
-		switch {
-		case last:
-			cleaners++
-			if want := []string{cold}; !slices.Equal(s.PostClean, want) {
-				t.Errorf("%s post_clean = %v, want %v — the last reader frees the store", s.ID, s.PostClean, want)
-			}
-		case s.PostClean != nil:
-			t.Errorf("%s post_clean = %v, want none — later legs still read that store", s.ID, s.PostClean)
+		if s.PostClean != nil {
+			t.Errorf("%s post_clean = %v, want none — the cell's cleanup step frees the store", s.ID, s.PostClean)
 		}
 	}
 	if seen != 32 { // 2 datasets x 2 chunks x 2 reps x 4 query types
 		t.Errorf("found %d query-cold steps, want 32", seen)
 	}
 	if cleaners != 4 { // one per cell: 2 datasets x 2 chunks
-		t.Errorf("%d cold query legs post-clean, want 4 — one per cell", cleaners)
+		t.Errorf("%d cold store cleanups, want 4 — one per cell", cleaners)
 	}
 }
 

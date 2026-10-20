@@ -393,6 +393,44 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("FailedColdQueryKeepsTheStoreForResume", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "coldkeep"), cfgPath)
+		// An early type of the last rep: the cell's later legs still succeed.
+		failing := "query-cold-sac-6000-c1-ledgers-run2"
+		sc.setControl("fail " + failing)
+		coldStore := filepath.Join(sc.root, "scratch", "sac-6000", "1")
+
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want nonzero; output:\n%s", out)
+		}
+		bundle := sc.bundle(t)
+		if got := readLeg(t, filepath.Join(bundle, "query-cold-sac-6000-c1-events-run2")).ExitCode; got != 0 {
+			t.Errorf("the cell's last cold query leg exit_code = %d, want 0", got)
+		}
+		mustExist(t, filepath.Join(coldStore, "ledgers", "chunk-0001.stub"))
+
+		// The resume skips the complete cold ingest and re-runs the failed leg
+		// against the store it kept, then frees the store.
+		sc.setControl("")
+		code, out = sc.run(t, "run", sc.cfg, "--no-preflight", "--resume", bundle)
+		if code != 0 {
+			t.Fatalf("resume exit code = %d, want 0; output:\n%s", code, out)
+		}
+		for _, want := range []string{
+			"resume: ingest-cold-sac-6000-c1-run2 already complete",
+			"resume: " + failing + " failed in an earlier session",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("resume output missing %q:\n%s", want, out)
+			}
+		}
+		if got := readLeg(t, filepath.Join(bundle, failing)).ExitCode; got != 0 {
+			t.Errorf("%s after resume: exit_code = %d, want 0", failing, got)
+		}
+		mustNotExist(t, coldStore)
+	})
+
 	t.Run("IngestOnlyMultiChunkBSBAtADataDirRef", func(t *testing.T) {
 		// The empty --cold-out-dir rule is bench ingest's, so it holds without
 		// query legs too.

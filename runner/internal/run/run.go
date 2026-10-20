@@ -176,9 +176,22 @@ func executeStep(p *plan.Plan, s plan.Step, opts Options) StepResult {
 		return runBuild(p, s, opts)
 	case plan.KindDataset:
 		return runDataset(s, opts)
+	case plan.KindCleanup:
+		return runCleanup(s, opts)
 	default:
 		return failure(s, fmt.Errorf("unknown step kind %q", s.Kind))
 	}
+}
+
+// runCleanup removes a cleanup step's directories. Like a leg's post-clean, a
+// failure to remove them is a warning, not a failed step.
+func runCleanup(s plan.Step, opts Options) StepResult {
+	for _, dir := range s.PostClean {
+		if err := removeAll(opts.Output, dir); err != nil {
+			Notef(opts.Output, "warning: %s: %v", s.ID, err)
+		}
+	}
+	return StepResult{ID: s.ID, Status: StatusOK}
 }
 
 // runLeg runs one timed benchmark leg: the whole point of the campaign, and the
