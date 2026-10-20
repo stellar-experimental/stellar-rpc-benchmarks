@@ -84,6 +84,18 @@ class DataDirWarningTests(unittest.TestCase):
         data, warnings, _ = run_convert(root)
         self.assertNotIn("events", data["queries"]["hot"][UNIT])
         self.assertTrue(any("events: no CSVs" in w for w in warnings), warnings)
+        self.assertIn(f"missing query outputs in query-hot-{UNIT}-events-run1", warnings)
+
+
+class MissingOutputTests(unittest.TestCase):
+    def test_leg_dir_without_outputs_warns(self):
+        root = build(data_dir=True)
+        leg = os.path.join(root, f"query-cold-{UNIT}-txpage-run2")
+        for name in ("latency.csv", "scenarios.csv"):
+            os.remove(os.path.join(leg, name))
+        data, warnings, _ = run_convert(root)
+        self.assertIn(f"missing query outputs in query-cold-{UNIT}-txpage-run2", warnings)
+        self.assertIn("txpage", data["queries"]["cold"][UNIT])   # run 1 still counts
 
 
 class TieredRunRecordTests(unittest.TestCase):

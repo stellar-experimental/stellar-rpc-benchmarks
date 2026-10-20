@@ -1473,10 +1473,11 @@ def convert(args):
         },
         "campaign": campaign,
     }
-    # Always present, empty without a manifest to read locations from: the
-    # viewer falls back to dataset-sizes.json's legacy_set only for a run that
-    # has no sets key, which is a run converted before the key existed.
-    data["dataset"]["sets"] = dataset_sets(metadata)
+    # Only a campaign bundle has a metadata.json to read locations from. A
+    # bundle without one predates campaigns, so it gets no sets key and the
+    # viewer reads its sizes from dataset-sizes.json's legacy_set.
+    if metadata:
+        data["dataset"]["sets"] = dataset_sets(metadata)
     if hardware:
         data["hardware"] = hardware
     if hostname:
