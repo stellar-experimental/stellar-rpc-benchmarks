@@ -15,6 +15,7 @@ runner/
 │   ├── targets/            # docs/targets.json → the query legs' RPS floors
 │   ├── plan/               # config → ordered steps; the campaign as data (plan.json)
 │   ├── run/                # executes a plan: legs, sentinels, resume, the lock
+│   ├── hoststat/           # samples /proc into each leg's host.csv while it runs
 │   ├── preflight/          # does this machine have what this config needs?
 │   ├── publish/            # bundle → gs:// or s3://
 │   └── bundle/             # the bundle root: metadata.json, provenance files,
@@ -482,7 +483,8 @@ contract:
 ├── ingest-{cold,hot}-<dataset>-c<chunk>-run<R>/
 │   ├── driver.csv, hot.csv, *.csv           # ← written by stellar-rpc bench subcommands
 │   ├── run.json                             # ← written by stellar-rpc bench subcommands (invocation.json before #1066)
-│   └── leg.json                             # ← written by the campaign CLI (THIS repo)
+│   ├── leg.json                             # ← written by the campaign CLI (THIS repo)
+│   └── host.csv                             # ← written by the campaign CLI (THIS repo), Linux only
 └── query-{cold,hot}-<dataset>-c<chunk>-<type>-run<R>/
     └── …same shape…                         #   one dir per endpoint type: ledgers,
                                              #   txpage, txhash, events
@@ -513,6 +515,19 @@ Who owns what:
   reason resume no longer has to infer completion from the presence of
   `run.json` / `invocation.json` — that file is written *by the process being measured*, so a process
   killed before it got there leaves no trace at all. The converter ignores it today.
+- **`host.csv`** (each timed `--out` dir, Linux only) — written by the campaign CLI here:
+  the host's counters every 5 s while the leg's process runs, read from `/proc/stat`,
+  `/proc/meminfo` and `/proc/diskstats`. Columns: `timestamp` (UTC, RFC 3339), `device`,
+  `cpu_user_pct`, `cpu_system_pct`, `cpu_iowait_pct`, `cpu_idle_pct`, `mem_used_bytes`,
+  `mem_available_bytes`, `mem_page_cache_bytes`, `read_bytes_per_s`, `write_bytes_per_s`,
+  `read_iops`, `write_iops`, `util_pct`. Each sample is one row with an empty `device`
+  that fills the CPU and memory columns, then one row per whole block device that did I/O
+  in the interval, which fills the disk columns. CPU percentages are of all cores; `user`
+  includes nice, `system` includes irq and softirq. The bench refuses a non-empty
+  `--out`, so the samples stream to `<out dir>.host.csv` beside it and move in when the
+  process exits; a runner killed mid-leg leaves them there, still inside the bundle. A
+  sampler error is logged once in `campaign.log` and stops the sampling, never the leg. The
+  converter ignores the file.
 - **`run.json`** (each `--out` dir, `schemaVersion` 2, camelCase keys) — written by
   stellar-rpc's `bench ingest` / `bench query` (`run_record.go`, stellar-rpc#1066) when
   the run starts and again when it stops. It has the fields `invocation.json` has, plus

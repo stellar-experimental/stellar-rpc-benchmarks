@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/hoststat"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
@@ -232,7 +234,7 @@ func runLeg(s plan.Step, opts Options) StepResult {
 	started := time.Now()
 	runErr := os.MkdirAll(s.OutDir, 0o755)
 	if runErr == nil {
-		runErr = runCommand(s.Argv[0], s.Env, opts.Output)
+		runErr = runSampled(s, opts)
 	}
 	finished := time.Now()
 
@@ -256,6 +258,29 @@ func runLeg(s plan.Step, opts Options) StepResult {
 		}
 	}
 	return StepResult{ID: s.ID, Status: StatusOK}
+}
+
+// hostSamplesName is the host sampler's CSV in a leg's --out directory.
+const hostSamplesName = "host.csv"
+
+// runSampled runs a leg's command under the host sampler. The samples stream
+// to a sibling of the --out directory, because the bench refuses a non-empty
+// --out, and move into it once the command exits; when the move fails they
+// stay beside it, inside the bundle. A sampler failure is a warning, never a
+// leg failure.
+func runSampled(s plan.Step, opts Options) error {
+	partial := s.OutDir + "." + hostSamplesName
+	sampler := hoststat.Start(partial)
+	runErr := runCommand(s.Argv[0], s.Env, opts.Output)
+	if err := sampler.Stop(); err != nil {
+		Notef(opts.Output, "warning: %s: host sampling stopped: %v", s.ID, err)
+	}
+	switch err := os.Rename(partial, filepath.Join(s.OutDir, hostSamplesName)); {
+	case err == nil, errors.Is(err, fs.ErrNotExist):
+	default:
+		Notef(opts.Output, "warning: %s: %v", s.ID, err)
+	}
+	return runErr
 }
 
 // writeLegSentinel records how the leg went, success or failure, into its --out

@@ -492,6 +492,10 @@ additive, so manifest-less bundles convert unchanged:
   to decide what a `--resume` could skip — `invocation.json` is written by the process
   being measured, so a killed process leaves none. Runner-owned and additive; **the
   converter ignores it today**.
+- **`host.csv`** in each timed `--out` dir (Linux runs only) — the runner's host CPU,
+  memory and per-device disk samples, every 5 s while the leg ran (columns in
+  `runner/README.md` § Campaign bundle layout). Runner-owned and additive; **the converter
+  ignores it**, and skips it when it globs a leg dir's `*.csv`.
 - **`invocation.json`** in each per-invocation `--out` dir (`schemaVersion` 1, camelCase
   keys — written by the four bench subcommands; stellar-rpc's `invocation.go` is the
   producer, merged as stellar-rpc#907). Source of truth for binary identity

@@ -214,6 +214,40 @@ class PaceLagInconsistencyTests(unittest.TestCase):
             [800_000_000, 1_600_000_000])
 
 
+class RunnerSidecarTests(unittest.TestCase):
+    """The runner's host.csv and Go profiles in leg dirs leave the conversion unchanged."""
+
+    def test_sidecars_ignored(self):
+        for build in (lambda r: fixtures.build_campaign_bundle(r, paced=True), fixtures.build_rps_bundle):
+            with self.subTest(build=build):
+                self._check(build)
+
+    def _check(self, build):
+        tmp = tempfile.mkdtemp()
+        base, extra = os.path.join(tmp, "base"), os.path.join(tmp, "extra")
+        build(base)
+        build(extra)
+        for name in os.listdir(extra):
+            d = os.path.join(extra, name)
+            if not os.path.isdir(d):
+                continue
+            with open(os.path.join(d, "host.csv"), "w") as f:
+                f.write("timestamp,device,cpu_user_pct\n2026-10-21T12:00:05Z,,42.9\n")
+            for prof in ("cpu.pprof", "cpu.txhash.650rps.pprof", "mem.pprof"):
+                with open(os.path.join(d, prof), "wb") as f:
+                    f.write(b"\x1f\x8b")
+            with open(d + ".host.csv", "w") as f:
+                f.write("timestamp\n")
+        want, want_warnings, _ = run_convert(base)
+        got, got_warnings, _ = run_convert(extra)
+        for k in ("source", "results_dir"):
+            want.pop(k, None)
+            got.pop(k, None)
+        self.assertEqual(got_warnings, want_warnings)
+        self.assertEqual(json.dumps(got, sort_keys=True).replace(extra, base),
+                         json.dumps(want, sort_keys=True))
+
+
 class BinaryMismatchTests(unittest.TestCase):
     def test_warns_on_commit_mismatch(self):
         tmp = tempfile.mkdtemp()

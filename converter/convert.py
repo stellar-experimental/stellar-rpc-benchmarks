@@ -113,6 +113,10 @@ def stage_agg(runs_rows, stage, warn_nitems=True):
     return out
 
 
+# The runner's host sampler CSV in each timed leg dir; not a benchmark CSV.
+HOST_SAMPLES = "host.csv"
+
+
 # ----------------------------------------------------------------- discovery
 def subdirs(results_dir):
     return sorted(n for n in os.listdir(results_dir)
@@ -605,7 +609,7 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
     files_out = {}
     for csv_path in sorted(glob.glob(os.path.join(dirs[0], "*.csv"))):
         stem = os.path.splitext(os.path.basename(csv_path))[0]
-        if stem == "driver":
+        if stem == "driver" or os.path.basename(csv_path) == HOST_SAMPLES:
             continue
         rows = read_all(dirs, f"{stem}.csv")
         if rows:
@@ -1023,7 +1027,7 @@ def build_queries(results_dir, layout, unit, reps, tier):
     entry = {}
     qtypes = sorted(os.path.splitext(os.path.basename(p))[0]
                     for p in glob.glob(os.path.join(dirs[0], "*.csv"))
-                    if os.path.basename(p) != "driver.csv")
+                    if os.path.basename(p) not in ("driver.csv", HOST_SAMPLES))
     for qt in qtypes:
         rows = read_all(dirs, f"{qt}.csv")
         if not rows:
