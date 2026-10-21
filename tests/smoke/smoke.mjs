@@ -927,8 +927,6 @@ const FIXTURE_CHECKS = {
       probe.length > 0 && probe.every((e) => e.qt === "txhash"),
       probe.map((e) => e.qt).join(","));
     check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
-    check(group, "no phase-3 E2E-probe verdict is provisional", probe.every((e) => !e.qout.verdict_e2e.provisional),
-      probe.filter((e) => e.qout.verdict_e2e.provisional).length + " provisional");
   },
 
   /* The phase-3 fixture with its query legs written by `bench query
@@ -953,19 +951,16 @@ const FIXTURE_CHECKS = {
       es.filter((e) => !e.qout.verdict_sla).length + " without a verdict");
     const body = txt(doc.getElementById("report"));
     check(group, "the report labels the phase 3b", /Phase 3b/.test(body), body.slice(0, 200));
-    check(group, "the 3b ingest target is stated as provisional", /105 ms \(provisional\)/.test(body),
+    check(group, "the report states the 3b ingest target", /105 ms/.test(body),
       (body.match(/.{0,60}105 ms.{0,60}/) || [""])[0]);
-    // 3b states no E2E budget, so nothing may be derived from one.
     const sel = (D.campaign.phase_targets || []).find((p) => p.phase === "3b");
-    check(group, "the 3b goal carries no E2E budget", !!sel && sel.e2e_budget_ns == null, JSON.stringify(sel));
+    check(group, "the 3b goal is two 900 ms blocks inside a 2 s budget",
+      !!sel && sel.block_count === 2 && sel.block_time_ns === 900e6 && sel.e2e_budget_ns === 2e9, JSON.stringify(sel));
     check(group, "no NaN or negative budget anywhere in the report", !/NaN|-\d+(\.\d+)? ?(ms|s)\b/.test(body),
       (body.match(/.{0,40}(NaN|-\d+(\.\d+)? ?(ms|s)\b).{0,40}/) || [""])[0]);
-    // 3b's E2E-probe floors are phase 3's, copied until confirmed.
-    const probes = es.filter((e) => e.qout.verdict_e2e);
-    check(group, "every 3b E2E-probe verdict is provisional", probes.length > 0 && probes.every((e) => e.qout.verdict_e2e.provisional === true),
-      probes.length + " probes");
-    const e2eTxt = txt(doc.getElementById("query-e2e-table"));
-    check(group, "the E2E-budget table marks the 3b demand floor provisional", /demand floor, provisional/.test(e2eTxt), e2eTxt.slice(0, 160));
+    const tx = es.filter((e) => e.qt === "txhash");
+    check(group, "every 3b getTransaction leg carries an E2E-budget verdict", tx.length > 0 && tx.every((e) => e.qout.verdict_e2e),
+      tx.filter((e) => !e.qout.verdict_e2e).length + " without a verdict");
   },
 
   /* One profile, and not sac: the summary must name the run's own workload,
@@ -1142,13 +1137,12 @@ for (const file of fixtureFiles) {
   }
   if (D.run_id === "fixture-rps-phase3b") {
     const stext = txt(sreport);
-    check(group, "summary: no E2E budget section for a phase without a budget", !sdoc.getElementById("budget"), "budget section rendered");
+    const budgetTxt = txt(sdoc.getElementById("budget"));
+    check(group, "summary: the 3b E2E budget spans 2 blocks of 900 ms", /2 blocks × 900 ms/.test(budgetTxt),
+      budgetTxt.slice(0, 200));
     check(group, "summary: no NaN", !/NaN/.test(stext), (stext.match(/.{0,40}NaN.{0,40}/) || [""])[0]);
-    check(group, "summary: the 3b goal is stated as provisional", /105 ms \(provisional\)/.test(stext),
+    check(group, "summary: the 3b goal is 105 ms", /105 ms/.test(stext),
       (stext.match(/.{0,60}105 ms.{0,60}/) || [""])[0]);
-  }
-  if (D.run_id === "fixture-rps-phase3") {
-    check(group, "summary: a confirmed phase goal is not marked provisional", !/\(provisional\)/.test(txt(sreport)), "provisional shown");
   }
   sm.window.close();
 }
@@ -1288,8 +1282,10 @@ for (const file of fixtureFiles) {
     body = txt(dom.window.document.body);
   }
   check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
-  check(group, "the 3b ingestion target is tagged provisional", /ingestion target [\d.]+ ms \(provisional\)/.test(body),
+  check(group, "the 3b ingestion target is 105 ms", /ingestion target 105 ms/.test(body),
     (body.match(/.{0,40}ingestion target.{0,60}/) || [""])[0]);
+  check(group, "the 3b goal counts 2 blocks of 900 ms in a 2 s budget", /900 ms block time × 2, 2 s E2E budget/.test(body),
+    (body.match(/.{0,40}block time ×.{0,60}/) || [""])[0]);
   dom.window.close();
 }
 

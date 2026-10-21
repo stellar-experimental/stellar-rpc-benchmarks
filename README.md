@@ -22,10 +22,10 @@ results are mirrored to GCS under `gs://rpc-full-history/results/`.
 static viewer in `docs/` renders any committed run via a dropdown or `?run=<id>`. Appending
 `&view=hot` (or the toolbar toggle) shows a focused, stakeholder-facing hot-ingestion-only view.
 
-Campaign runs also carry the **Phase 1/2/3 performance targets** as data
+Campaign runs also carry the **phase performance targets** (phases 1, 2, 3, 3b) as data
 (see [SCHEMA.md](SCHEMA.md#phase-123-performance-targets-campaign-layout)). The converter
 matches the run's phase from its recorded close interval (2 s → Phase 1, 1 s → Phase 2,
-600 ms → Phase 3) and the viewer judges hot ingestion against that phase by default —
+600 ms → Phase 3, 900 ms → Phase 3b) and the viewer judges hot ingestion against that phase by default —
 budget lines, keep-up verdicts, and the ingest-slice p99 target. Append `&phase=N` (or use
 the selector next to the target table) to view the same measurements against another
 phase's targets; a caveat states the run's actual pace when it differs. The pacing-lag
@@ -297,7 +297,7 @@ stellar-rpc-benchmarks/
     ├── summary.html         # stakeholder summary page (summary.js + summary.css)
     ├── latency-model.html   # end-to-end latency model against the phase targets
     ├── tx-submission.html   # transaction-submission report (txsub.js)
-    ├── targets.json         # Phase 1/2/3 performance targets — single source of truth
+    ├── targets.json         # phase performance targets — single source of truth
     ├── dataset-sizes.json   # measured sizes of the synthetic dataset profiles
     ├── txsub/               # tx-submission harvest summaries, verbatim (+ index.json)
     └── runs/

@@ -44,17 +44,17 @@ class MatchPhaseTests(unittest.TestCase):
 
 
 class Phase3bTableTests(unittest.TestCase):
-    def test_3b_copies_phase3_and_flags_its_ingest_target(self):
+    def test_3b_keeps_phase3_budget_on_two_900ms_blocks(self):
         by = {str(p["phase"]): p for p in convert.PHASE_TARGETS}
         p3, p3b = by["3"], by["3b"]
         self.assertEqual(p3b["block_time_ns"], 900_000_000)
-        for k in ("block_count", "ingest_p99_target_ns", "orgs", "retention"):
+        self.assertEqual(p3b["block_count"], 2)
+        for k in ("e2e_budget_ns", "ingest_p99_target_ns", "orgs", "retention"):
             self.assertEqual(p3b[k], p3[k], k)
-        # Phase 3's 2 s budget cannot hold three 900 ms blocks, so 3b states
-        # none until management sets one, and no budget verdict is drawn.
-        self.assertNotIn("e2e_budget_ns", p3b)
-        self.assertIn("E2E budget and block count await management confirmation",
-                      p3b["ingest_p99_target_note"])
+        # The stated target is the one the E2E formula derives.
+        self.assertEqual(p3b["ingest_p99_target_ns"], convert.ingest_p99_target(
+            p3b["block_time_ns"], p3b["e2e_budget_ns"], p3b["block_count"]))
+        self.assertEqual([w["tps"] for w in p3b["workloads"]], [w["tps"] for w in p3["workloads"]])
         self.assertEqual([w["tx_per_ledger"] for w in p3b["workloads"]], [9000, 5400, 2700])
 
     def test_phase_by_number_matches_labels_as_strings(self):
@@ -201,7 +201,7 @@ class PhaseEmissionTests(unittest.TestCase):
             "ledgers": {"hot": 150_000_000, "cold": 200_000_000},
         })
         self.assertEqual(convert.E2E_IN_RPC_P99_NS, 10_000_000)
-        # One floor per phases-table entry; 3b copies phase 3.
+        # One floor per phases-table entry; 3b shares phase 3's.
         self.assertEqual(convert.E2E_FLOORS_RPS["sac"], [300, 500, 1000, 1000])
         # The floors are derived numbers, so pin them to the inputs they come from.
         deriv = convert.QUERY_LOAD["derivation"]

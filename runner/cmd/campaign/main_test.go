@@ -238,7 +238,7 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
 		}
-		// 3b copies phase 3's sac demand floor (1000 rps).
+		// 3b shares phase 3's sac demand floor (1000 rps).
 		if want := "--types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s"; !strings.Contains(stdout, want) {
 			t.Errorf("stdout missing %q, got:\n%s", want, stdout)
 		}

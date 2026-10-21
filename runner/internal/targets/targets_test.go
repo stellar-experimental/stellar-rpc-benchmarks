@@ -82,7 +82,7 @@ func TestRates(t *testing.T) {
 		{"custom_token", "3", "txhash", []float64{150, 300, 600, 1200}},
 		{"soroswap", "1", "txhash", []float64{37.5, 75, 150, 300, 600}},
 		{"soroswap", "3", "txhash", []float64{150, 300, 600}},   // e2e floor 300 again
-		// 3b copies phase 3's floors; it is the table's fourth entry, not 3+1.
+		// 3b shares phase 3's floors; it is the table's fourth entry, not 3+1.
 		{"sac", "3b", "txhash", []float64{150, 300, 500, 600, 1000, 2000}},
 		{"soroswap", "3b", "txhash", []float64{150, 300, 600}},
 		// The other three answer to the SLA family alone: the mix share of

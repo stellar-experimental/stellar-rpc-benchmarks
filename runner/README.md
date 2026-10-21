@@ -236,7 +236,7 @@ goal, and no floor is hardcoded in the runner.
 The campaign answers two separate requirements, and the load model keeps them apart. The full derivation of both is in [`docs/sla-derivation.md`](../docs/sla-derivation.md).
 
 - **The SLA family** (`query_load.sla`) asks every endpoint to hold its latency target while it serves its share of the sustained request-rate watermark. Its floor is a property of the endpoint alone — `txhash` 300, `events` 100, `txpage` 75, `ledgers` 25 rps — so it is the same in every phase and every dataset profile.
-- **The end-to-end-budget probe** (`query_load.e2e_probe`) asks one endpoint, `txhash`, to answer inside the 10 ms slice it owns in the transaction-lifecycle budget, at the rate the demand model of work item 856 predicts. Those floors ARE per profile and per phase: sac reads 300 / 500 / 1000, custom_token 200 / 400 / 600, soroswap 75 / 150 / 300.
+- **The end-to-end-budget probe** (`query_load.e2e_probe`) asks one endpoint, `txhash`, to answer inside the 10 ms slice it owns in the transaction-lifecycle budget, at the rate the demand model of work item 856 predicts. Those floors ARE per profile and per phase (phases 1 / 2 / 3 / 3b): sac reads 300 / 500 / 1000 / 1000, custom_token 200 / 400 / 600 / 600, soroswap 75 / 150 / 300 / 300.
 
 Three things decide a leg's rate ladder:
 

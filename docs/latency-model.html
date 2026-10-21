@@ -395,10 +395,8 @@
 
   // Ingest-slice target: stated, else derived from the E2E budget (same rule the
   // converter uses): budget - block_count*block - ⌊3*rtt/2⌋ - send_tx - get_tx.
-  // A phase with neither has no target (null).
   function ingestTargetNs(p) {
     if (p.ingest_p99_target_ns != null) return p.ingest_p99_target_ns;
-    if (!(p.e2e_budget_ns > 0)) return null;
     return p.e2e_budget_ns - blockCount(p) * p.block_time_ns - fixedNs();
   }
 
@@ -492,7 +490,7 @@
       btn.type = "button";
       btn.className = "phase-pill";
       btn.dataset.phase = p.phase;
-      btn.innerHTML = `Phase ${p.phase}<small>${fmt(p.block_time_ns)} block${p.e2e_budget_ns > 0 ? ` · ${fmt(p.e2e_budget_ns)} budget` : " · no budget set"}</small>`;
+      btn.innerHTML = `Phase ${p.phase}<small>${fmt(p.block_time_ns)} block · ${fmt(p.e2e_budget_ns)} budget</small>`;
       btn.addEventListener("click", () => setPhase(p.phase));
       el.appendChild(btn);
     });
@@ -594,7 +592,7 @@
       ? ` · <span class="${goalWithin ? "br-good" : "br-warn"}">${goalE2E === ceiling ? "on budget" : goalWithin ? fmt(ceiling - goalE2E) + " under" : fmt(goalE2E - ceiling) + " over"}</span>` : "";
     const goalRow = `
       <div class="bar-row">
-        <span class="br-name">Phase ${p.phase} goal<span class="br-sub">ingestion target ${fmt(targetNs)}${p.provisional ? " (provisional)" : ""}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}</span></span>
+        <span class="br-name">Phase ${p.phase} goal<span class="br-sub">ingestion target ${fmt(targetNs)}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}</span></span>
         <span class="br-val">E2E ${fmt(goalE2E)}${goalVerdict}</span>
       </div>
       ${barHTML(goalVals, scaleMax, ceiling, goalProvs, n, `budget ${fmt(ceiling)}`)}`;

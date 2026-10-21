@@ -96,7 +96,7 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   `checks` is NOT derived from this: block_keepup
                                            //   comes from close_interval_ns alone, so an unpaced
                                            //   run with a phase still earns no keep-up check.
-    "phase_targets": [ { … }, … ],         // campaign layout only; the full three-phase target
+    "phase_targets": [ { … }, … ],         // campaign layout only; the full phases target
                                            //   table, copied verbatim at convert time — see
                                            //   "Phase 1/2/3 performance targets" below.
     "query_load": { … },                   // campaign layout only, and only when the run carries
@@ -193,7 +193,7 @@ The converter matches a campaign run's phase from `campaign.close_interval_ns`:
 exact. Any other paced value gives a pace-only run with no phase. An unpaced run (0 or
 absent) gets no phase and no keep-up check.
 
-The converter copies the full three-phase table into `campaign.phase_targets` of every
+The converter copies the full phases table into `campaign.phase_targets` of every
 campaign-layout run. That baked copy pins each run to the targets in force when it was
 converted and lets the viewer degrade gracefully offline; the live viewer/model prefer
 `targets.json` and use the baked copy only as a fallback. Each entry has:
@@ -210,12 +210,6 @@ converted and lets the viewer degrade gracefully offline; the live viewer/model 
                                       //   omits it (phase 2), the converter derives it from the
                                       //   e2e budget: e2e = 25ms + 10ms + block_time*block_count
                                       //   + ingest + 50ms + 10ms.
-  "provisional": true,                // optional; the phase's targets are not confirmed (phase
-                                      //   3b). The viewers append "(provisional)" to its stated
-                                      //   target values; slack-payload.sh to its target line
-  "ingest_p99_target_note": "…",      // optional free text about the target (phase 3b: copied
-                                      //   from phase 3, awaits management confirmation);
-                                      //   the converter copies it, the viewer ignores it
   "workloads": [                      // the three model workloads at this phase
     { "name": "SAC transfers", "tps": 3000, "tx_per_ledger": 6000 }, … ],
   "orgs": 10,
@@ -328,13 +322,12 @@ converter warns.
     },
     "verdict_e2e": {                      // txhash ONLY; a DIFFERENT requirement at a DIFFERENT rate
       "rate": "r1000",                    // the cell at this profile and phase's demand-derived floor
-      "target_rps": 1000.0,               // campaign.query_load.e2e_probe.floors_rps.<profile>[phase−1]
+      "target_rps": 1000.0,               // campaign.query_load.e2e_probe.floors_rps.<profile>, at
+                                          //   the phase's position in the phases table
       "achieved_rps_m": 999.998,          // that cell's achieved_rps median (absent if unmeasured)
       "p99_ns": 15000000,                 // that cell's SCHEDULED p99 median — CONTEXT, never judged
       "in_rpc": { "p99_ns": 5000000, "threshold_ns": 10000000, "pass": true },  // the only judged number
-      "pass": true,                       // == in_rpc.pass; there is no threshold_ns on this object
-      "provisional": true                 // only when the goal phase is provisional (3b): its
-                                          //   demand floor awaits confirmation
+      "pass": true                        // == in_rpc.pass; there is no threshold_ns on this object
     }
   },
   "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows belonging to no cell
@@ -380,7 +373,7 @@ rather than one number for the run.
 
 `verdict_e2e` is the end-to-end-budget probe, and only `txhash` has one. The judged cell
 is the one paced at the demand-derived floor for this profile and phase
-(`query_load.e2e_probe.floors_rps.<profile>[phase−1]`), and the only judged number is
+(`query_load.e2e_probe.floors_rps.<profile>`, at the phase's position in the phases table), and the only judged number is
 `in_rpc.p99_ns` against the 10 ms slice that getTransaction owns in the transaction
 lifecycle. The object's `p99_ns` is the scheduled p99 of the same cell, carried as
 context: it includes the client's queueing and the assumed network model, neither of

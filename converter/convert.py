@@ -433,7 +433,7 @@ def resolve_close_interval_ns(metadata, invocations):
 # trip (rtt): half a round trip carries the submission request (the response is
 # off the critical path), and a full round trip carries the getTransaction
 # call. The formula counts block time once per ledger close on the path
-# (block_count, a per-phase consensus plan: 2 for phases 1-2, 3 for phase 3).
+# (block_count, a per-phase consensus plan: 3 for phase 3, 2 for the others).
 # The in-RPC handler latencies (sendTransaction, getTransaction) are fixed
 # across phases. This leaves ingest_p99 as the only unknown.
 TARGETS_PATH = os.path.join(
@@ -480,12 +480,13 @@ E2E_FLOORS_RPS = QUERY_LOAD["e2e_probe"]["floors_rps"]
 PHASE_TARGETS = _TARGETS["phases"]
 
 # Fill the ingest-slice target for any phase that does not state one (phase 2).
-# The value comes from the end-to-end budget via the formula above, so a phase
-# with no budget (3b) gets no derived target.
+# The value comes from the end-to-end budget via the formula above.
 for _p in PHASE_TARGETS:
-    if "ingest_p99_target_ns" not in _p and _p.get("e2e_budget_ns"):
-        _p["ingest_p99_target_ns"] = ingest_p99_target(
-            _p["block_time_ns"], _p["e2e_budget_ns"], _p.get("block_count", 2))
+    _p.setdefault(
+        "ingest_p99_target_ns",
+        ingest_p99_target(_p["block_time_ns"], _p["e2e_budget_ns"],
+                          _p.get("block_count", 2)),
+    )
 
 
 def match_phase(close_interval_ns):
@@ -1127,19 +1128,16 @@ def _verdict_sla(cell, rate_key, floor, qt, tier):
     return v
 
 
-def _verdict_e2e(cell, rate_key, floor, phase):
+def _verdict_e2e(cell, rate_key, floor):
     """The E2E-budget verdict: getTransaction's time INSIDE the RPC at the
     demand-derived rate, against its slice of the end-to-end budget. The
     scheduled p99 rides along as context and is never judged — the arrival rate
-    this cell is paced at is a demand estimate, not an SLA the tail answers to.
-    A provisional phase's floor is provisional, and so is the verdict on it."""
+    this cell is paced at is a demand estimate, not an SLA the tail answers to."""
     v = _verdict_head(cell, rate_key, floor)
     in_rpc = cell["service"]["p99"]["m"]
     v["in_rpc"] = {"p99_ns": in_rpc, "threshold_ns": E2E_IN_RPC_P99_NS,
                    "pass": in_rpc <= E2E_IN_RPC_P99_NS}
     v["pass"] = v["in_rpc"]["pass"]
-    if phase.get("provisional"):
-        v["provisional"] = True
     return v
 
 
@@ -1194,7 +1192,7 @@ def attach_query_verdicts(queries, phase):
                     warn(f"query-{tier}-{unit} {qt}: no service row at the "
                          f"E2E-probe floor of {e2e_floor} rps; no E2E-budget verdict")
                 else:
-                    qout["verdict_e2e"] = _verdict_e2e(cells[hit], hit, e2e_floor, phase)
+                    qout["verdict_e2e"] = _verdict_e2e(cells[hit], hit, e2e_floor)
 
 
 def build_golden(results_dir, unit):
