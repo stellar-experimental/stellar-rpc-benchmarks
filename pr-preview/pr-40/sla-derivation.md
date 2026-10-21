@@ -48,7 +48,7 @@ One number deviates from section 4.1: the getEvents Recent (cold) P99. Section 4
 
 The section 4.1 rows state the request each latency applies to, so the bench drives the same shapes.
 
-- getLedgers: 10 ledgers per request.
+- getLedgers: 10 ledgers per request. Campaigns of the `bench query --data-dir` bench query 1 ledger per request (`query_load.ledgers_page_campaign` in `docs/targets.json`), decision by Marwen on 2026-10-20: one 9000-TPL synthetic ledger is about 43.5 MB of XDR, so a 10-ledger page is a ~579 MB JSON response, and the handler holds 4–7× that per request with 32 handlers in flight. Every 10-ledger leg was OOM-killed on every profile and tier. The getLedgers verdict of those runs is for 1 ledger per page, and the site says so.
 - getTransactions: 200 transactions per page.
 - getEvents: a small page, 10 matches — the shape the section 3.4 mix names.
 

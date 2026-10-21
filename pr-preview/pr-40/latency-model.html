@@ -594,7 +594,7 @@
       ? ` · <span class="${goalWithin ? "br-good" : "br-warn"}">${goalE2E === ceiling ? "on budget" : goalWithin ? fmt(ceiling - goalE2E) + " under" : fmt(goalE2E - ceiling) + " over"}</span>` : "";
     const goalRow = `
       <div class="bar-row">
-        <span class="br-name">Phase ${p.phase} goal<span class="br-sub">ingestion target ${fmt(targetNs)}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}</span></span>
+        <span class="br-name">Phase ${p.phase} goal<span class="br-sub">ingestion target ${fmt(targetNs)}${p.provisional ? " (provisional)" : ""}${p.ingest_p99_target_ns == null ? " (derived from budget)" : ""}</span></span>
         <span class="br-val">E2E ${fmt(goalE2E)}${goalVerdict}</span>
       </div>
       ${barHTML(goalVals, scaleMax, ceiling, goalProvs, n, `budget ${fmt(ceiling)}`)}`;
