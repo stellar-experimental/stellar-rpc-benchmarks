@@ -68,8 +68,11 @@ type Config struct {
 	Phase         targets.PhaseLabel `toml:"phase"`
 	Workers       int                `toml:"workers"`
 	HotNumLedgers int                `toml:"hot_num_ledgers"`
-	PublishURI    string             `toml:"publish_uri"`
-	Datasets      []Dataset          `toml:"dataset"`
+	// Profile passes --cpuprofile and --memprofile to every timed leg, so each
+	// leg dir holds Go CPU and heap profiles of the binary under test.
+	Profile    bool      `toml:"profile"`
+	PublishURI string    `toml:"publish_uri"`
+	Datasets   []Dataset `toml:"dataset"`
 }
 
 // Dataset is one [[dataset]] table: a named pack tree and the chunks of it
@@ -97,6 +100,7 @@ func defaults() Config {
 		Runs:          DefaultRuns,
 		QueryDuration: DefaultQueryDuration,
 		Workers:       DefaultWorkers,
+		Profile:       true,
 	}
 }
 

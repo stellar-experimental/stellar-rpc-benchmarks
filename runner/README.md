@@ -128,6 +128,7 @@ ignored: a misspelled key fails in the first second of the campaign, naming itse
 | `phase` | int or string | `0` (unset) | Which goal phase's RPS floors the query legs target: a label of the `docs/targets.json` phases table, `1` \| `2` \| `3` \| `"3b"`. Consulted only when `query = true`. Left unset, the phase is derived by matching `close_interval` against a phase block time in [`docs/targets.json`](../docs/targets.json); set both and they must agree. |
 | `workers` | int ≥ 1 | `1` | `bench ingest cold --workers`. |
 | `hot_num_ledgers` | int ≥ 0 | `0` | Cap the hot ingest at this many ledgers; `0` = the whole range. A capped ingest also caps the hot query sampler (`--sample-ledgers`), so it stays inside what was ingested. |
+| `profile` | bool | `true` | Pass `--cpuprofile=<leg dir>/cpu.pprof --memprofile=<leg dir>/mem.pprof` to every timed leg. An ingest leg writes one `cpu.pprof` over the whole run; a query leg writes one `cpu.<type>.<rps>rps.pprof` per rate, over its measured iterations. `mem.pprof` is written when the run ends, with or without an error; read it with `go tool pprof -alloc_space`. Every bench generation the runner supports has both flags. `false` gives the argv of a runner without this key. `plan.json` records the effective value as `profile`. |
 | `publish_uri` | string | `""` | Object-storage root to publish the finished bundle to; must be `gs://` or `s3://`. Empty = no publish. The bundle lands at `<publish_uri>/<run_id>/`. |
 | `[[dataset]]` | table array | — (at least one) | See below. |
 

@@ -994,3 +994,48 @@ func TestLedgersLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestProfileFlags checks, for each CLI generation, that a profiled plan adds
+// --cpuprofile and --memprofile into the leg dir just before every timed leg's
+// --out and changes nothing else, and that an unprofiled plan passes neither.
+func TestProfileFlags(t *testing.T) {
+	legacy := goldenInputs()
+	legacy.BenchCLI = BenchCLILegacy
+	for name, in := range map[string]Inputs{
+		"legacy": legacy, "tiered": goldenInputs(), "data-dir": singleBinaryInputs(),
+	} {
+		cfg, err := config.Load("testdata/campaign.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.Profile {
+			t.Fatal("config default profile = false, want true")
+		}
+		on := Build(cfg, in)
+		cfg.Profile = false
+		off := Build(cfg, in)
+		if !on.Profile || off.Profile {
+			t.Errorf("%s: plan profile = %t/%t, want true/false", name, on.Profile, off.Profile)
+		}
+		for i, s := range off.Steps {
+			for j, argv := range s.Argv {
+				for _, a := range argv {
+					if strings.HasPrefix(a, "--cpuprofile") || strings.HasPrefix(a, "--memprofile") {
+						t.Errorf("%s: unprofiled %s passes %s", name, s.ID, a)
+					}
+				}
+				want := argv
+				if s.Kind == KindLeg {
+					n := len(argv) - 1
+					want = append(slices.Clone(argv[:n]),
+						"--cpuprofile="+filepath.Join(s.OutDir, "cpu.pprof"),
+						"--memprofile="+filepath.Join(s.OutDir, "mem.pprof"),
+						argv[n])
+				}
+				if got := on.Steps[i].Argv[j]; !slices.Equal(got, want) {
+					t.Errorf("%s: profiled %s argv = %v, want %v", name, s.ID, got, want)
+				}
+			}
+		}
+	}
+}

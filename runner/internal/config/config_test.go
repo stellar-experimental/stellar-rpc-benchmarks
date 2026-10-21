@@ -65,6 +65,7 @@ query_duration = "90s"
 phase = 2
 workers = 4
 hot_num_ledgers = 1000
+profile = false
 publish_uri = "s3://bucket/bench"
 
 [[dataset]]
@@ -112,6 +113,9 @@ chunks = [0]
 	}
 	if cfg.HotNumLedgers != 1000 {
 		t.Errorf("hot_num_ledgers = %d, want 1000", cfg.HotNumLedgers)
+	}
+	if cfg.Profile {
+		t.Error("profile = true, want false")
 	}
 	if cfg.PublishURI != "s3://bucket/bench" {
 		t.Errorf("publish_uri = %q", cfg.PublishURI)
@@ -167,6 +171,9 @@ func TestLoadMinimalConfigAppliesDefaults(t *testing.T) {
 	}
 	if cfg.HotNumLedgers != 0 {
 		t.Errorf("hot_num_ledgers = %d, want 0", cfg.HotNumLedgers)
+	}
+	if !cfg.Profile {
+		t.Error("profile = false, want true")
 	}
 	if cfg.PublishURI != "" {
 		t.Errorf("publish_uri = %q, want empty", cfg.PublishURI)

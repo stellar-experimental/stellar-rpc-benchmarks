@@ -68,6 +68,10 @@ query = false
 # Cap the hot ingest at this many ledgers. Default 0 = the whole range.
 #hot_num_ledgers = 0
 
+# Write Go CPU and heap profiles of the binary under test into every timed leg
+# dir (--cpuprofile, --memprofile). Default true.
+#profile = true
+
 # Publish the finished bundle to object storage (gs:// or s3://) at the end of
 # the campaign. Default "" = keep results local; publish later by hand with
 # `campaign publish <bundle> <dest-root>`.

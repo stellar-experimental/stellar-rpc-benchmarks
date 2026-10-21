@@ -199,6 +199,9 @@ type Plan struct {
 	QueryCLI      QueryCLI    `json:"query_cli"`    // tiered | data-dir: the argv shape of every query leg
 	BuildTarget   BuildTarget `json:"build_target"` // the Makefile target the build step runs
 	StaticLibs    bool        `json:"static_libs"`  // static RocksDB and zstd, and --enable-rpcv2 on every bench leg
+	// Profile reports that every timed leg passes --cpuprofile and --memprofile
+	// into its --out dir.
+	Profile bool `json:"profile"`
 	// QueryLedgersLimit is the --ledgers-limit every ledgers query leg passes;
 	// absent when the legs pass none.
 	QueryLedgersLimit int      `json:"query_ledgers_limit,omitempty"`
@@ -234,6 +237,7 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 		p.BuildTarget = BuildRPCV2
 	}
 	p.StaticLibs = in.StaticLibs
+	p.Profile = cfg.Profile
 	if cfg.Query && p.QueryCLI == QueryCLIDataDir {
 		p.QueryLedgersLimit = in.QueryLedgersLimit
 	}
@@ -504,13 +508,12 @@ func ingestColdLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, ch
 		ID:    id,
 		Kind:  KindLeg,
 		Timed: true,
-		Argv: [][]string{append(p.benchArgv("ingest", "cold"),
+		Argv: [][]string{p.legOut(append(p.benchArgv("ingest", "cold"),
 			"--source=pack", "--pack-dir="+filepath.Join(datasetRoot(in, d), "ledgers"),
 			"--start-chunk="+strconv.Itoa(chunk), "--num-chunks=1",
 			"--workers="+strconv.Itoa(cfg.Workers),
 			"--cold-out-dir="+scratch,
-			"--out="+out,
-		)},
+		), out)},
 		OutDir: out,
 		// The cold store is wiped before each rep, so every rep is timed
 		// against bare ground. Every rep of a cell builds the same chunk, so
@@ -540,7 +543,7 @@ func ingestHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chu
 	if cfg.HotNumLedgers > 0 {
 		argv = append(argv, "--num-ledgers="+strconv.Itoa(cfg.HotNumLedgers))
 	}
-	argv = append(argv, "--out="+out)
+	argv = p.legOut(argv, out)
 	return Step{
 		ID:     id,
 		Kind:   KindLeg,
@@ -623,7 +626,7 @@ func queryColdArgv(p *Plan, in Inputs, d *config.Dataset, chunk int, qtype, cold
 	if p.QueryCLI == QueryCLIDataDir {
 		argv = append(argv, "--evict-page-cache=true")
 	}
-	return append(argv, "--out="+out)
+	return p.legOut(argv, out)
 }
 
 func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chunk, rep int, qtype string) Step {
@@ -649,7 +652,7 @@ func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chun
 	if cfg.HotNumLedgers > 0 && p.QueryCLI != QueryCLIDataDir {
 		argv = append(argv, "--sample-ledgers="+strconv.Itoa(cfg.HotNumLedgers))
 	}
-	argv = append(argv, "--out="+out)
+	argv = p.legOut(argv, out)
 	return Step{
 		ID:     id,
 		Kind:   KindLeg,
@@ -665,6 +668,19 @@ func queryHotLeg(p *Plan, in Inputs, cfg *config.Config, d *config.Dataset, chun
 			fmt.Sprintf("ingest-hot-%s-c%d-run%d", d.Name, chunk, cfg.Runs),
 		},
 	}
+}
+
+// legOut ends a timed leg's argv: the profile flags when the plan profiles,
+// then --out. On the query bench --cpuprofile is a base path, from which it
+// writes one cpu.<type>.<rps>rps.pprof per rate; the heap profile is written
+// when the run ends.
+func (p *Plan) legOut(argv []string, out string) []string {
+	if p.Profile {
+		argv = append(argv,
+			"--cpuprofile="+filepath.Join(out, "cpu.pprof"),
+			"--memprofile="+filepath.Join(out, "mem.pprof"))
+	}
+	return append(argv, "--out="+out)
 }
 
 // ledgersLimitArgs is the --ledgers-limit flag of a ledgers query leg, or
