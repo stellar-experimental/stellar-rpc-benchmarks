@@ -211,3 +211,10 @@
 .pace-note.warn { fill: var(--warn); }
 .pace-note.anchor { fill: var(--ink-2); }
 .pace-barlab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #fff; }
+
+/* Tooltip on the summary page: one grid for all rows, so values and labels align; labels wrap. */
+.tip { max-width: min(420px, calc(100vw - 16px)); display: grid; grid-template-columns: 12px max-content minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.tip-title { grid-column: 1 / -1; }
+.tip-row { display: contents; white-space: normal; }
+.tip-row .tip-val { text-align: right; }
+.tip-total > * { border-top: 1px solid var(--tip-ink2); margin-top: 4px; padding-top: 4px; }

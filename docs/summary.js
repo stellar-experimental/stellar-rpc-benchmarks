@@ -212,8 +212,8 @@
     tip.replaceChildren();
     const t = document.createElement("div"); t.className = "tip-title"; t.textContent = title; tip.appendChild(t);
     for (const r of rows) {
-      const d = document.createElement("div"); d.className = "tip-row";
-      if (r.color) { const k = document.createElement("span"); k.className = "tip-key"; k.style.background = r.color; d.appendChild(k); }
+      const d = document.createElement("div"); d.className = r.total ? "tip-row tip-total" : "tip-row";
+      const k = document.createElement("span"); k.className = "tip-key"; if (r.color) k.style.background = r.color; d.appendChild(k);
       const v = document.createElement("span"); v.className = "tip-val"; v.textContent = r.value; d.appendChild(v);
       const l = document.createElement("span"); l.className = "tip-lab"; l.textContent = r.label; d.appendChild(l);
       tip.appendChild(d);
@@ -990,10 +990,10 @@
     const getShort = MEASURED_GET && MEASURED_GET.fromProbe && MEASURED_GET.achievedRps != null
       && MEASURED_GET.achievedRps < 0.95 * MEASURED_GET.rps;
     const getRateTxt = MEASURED_GET && MEASURED_GET.fromProbe
-      ? `getTransaction is measured at ${esc(fmtRps(MEASURED_GET.rps))}${getW ? ` on ${esc(getW.name)}` : ""}: the getTransaction traffic estimated for the Phase ${sel.phase} transaction volume, higher than the SLA rate of the query sections. ${getShort ? `At that rate this box served only ${esc(fmtRps(MEASURED_GET.achievedRps))}, so requests queued inside the RPC and most of the ${fmtNs(MEASURED_GET.ns)} is waiting time. ` : ""}`
+      ? ` getTransaction is measured at ${esc(fmtRps(MEASURED_GET.rps))}${getW ? ` on ${esc(getW.name)}` : ""}, the load expected at Phase ${sel.phase} volume${getShort ? `; this box served only ${esc(fmtRps(MEASURED_GET.achievedRps))}, so most of the ${fmtNs(MEASURED_GET.ns)} is queueing` : ""}.`
       : "";
     const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
-      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. ${getRateTxt}Hatched segments are targets or estimates; solid segments are measured.`) : "";
+      `Top: the Phase ${sel.phase} budget. Bottom: this run. Grey segments are assumed: a ${fmtNsAxis(rttNs)} network round trip and ${nBlocks} blocks × ${fmtNsAxis(blockNs)} of consensus.${getRateTxt}`) : "";
 
     // One tile per slice this work owns: what it measured, on which profile,
     // against what it was allocated. The mark judges the slice alone — the
@@ -1163,9 +1163,9 @@
     // network and consensus slices stay de-emphasized grey. A slice with no
     // measurement behind it keeps its allocation and stays hatched.
     if (canBudget) {
-      const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
+      const txRunLabel = MEASURED_TX ? "sendTransaction (measured)" : "sendTransaction (estimate)";
       const getRunLabel = MEASURED_GET
-        ? `getTransaction (measured, in-RPC${MEASURED_GET.fromProbe ? `, at ${fmtRps(MEASURED_GET.rps)}` : ""})` : "getTransaction (estimate)";
+        ? `getTransaction (measured${MEASURED_GET.fromProbe ? ` at ${fmtRps(MEASURED_GET.rps)}` : ""})` : "getTransaction (estimate)";
       const segs = (ingNs, measured, txV, getV) => [
         { color: C.de, ns: netSendNs, hatch: true },
         { color: C.s5, ns: txV, hatch: !(measured && MEASURED_TX) },
@@ -1175,13 +1175,13 @@
         { color: C.s2, ns: getV, hatch: !(measured && MEASURED_GET) },
       ];
       const tip = (ingNs, ingLabel, txV, txLabel, getV, getLabel) => [
-        { color: C.de, value: fmtNs(netSendNs), label: "network — submission request (assumed)" },
+        { color: C.de, value: fmtNs(netSendNs), label: "network, submit (assumed)" },
         { color: C.s5, value: fmtNs(txV), label: txLabel },
-        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
+        { color: C.de, value: fmtNs(blockTotal), label: `consensus, ${nBlocks} blocks × ${fmtNsAxis(blockNs)} (assumed)` },
         { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
-        { color: C.de, value: fmtNs(netReadNs), label: "network — getTransaction round trip (assumed)" },
+        { color: C.de, value: fmtNs(netReadNs), label: "network, getTransaction (assumed)" },
         { color: C.s2, value: fmtNs(getV), label: getLabel },
-        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end (derived)" },
+        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end", total: true },
       ];
       budgetChart("fig11-body", [
         { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
@@ -1189,7 +1189,7 @@
           tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)", getNs, "getTransaction (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
           segs: segs(wp99, true, txRunNs, getRunNs),
-          tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
+          tip: tip(wp99, "ingestion (measured)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
       ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
       legend("fig11-legend", [
         { label: "sendTransaction", color: C.s5 },
