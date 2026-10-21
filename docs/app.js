@@ -908,7 +908,7 @@
       rows++;
       const r = document.createElement("tr");
       const nameTd = cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
-      if (qt === "ledgers" && ledgersNote) nameTd.appendChild(noteEl(`(${ledgersNote})`));
+      if (qt === "ledgers" && ledgersNote) nameTd.appendChild(noteEl(`· ${ledgersNote}`));
       // Offered: the phase floor when the run names one, else the rate the leg
       // was actually paced at.
       const target = v && v.target_rps != null ? v.target_rps : cell.target_rps;

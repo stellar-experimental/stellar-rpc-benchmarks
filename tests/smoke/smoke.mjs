@@ -1082,6 +1082,11 @@ for (const file of fixtureFiles) {
   const verdictTxt = txt(doc.getElementById("query-verdict-table"));
   check(group, "the getLedgers page note shows only on a 1-ledger-page run", pageNote.test(verdictTxt) === wantPageNote,
     (verdictTxt.match(/getLedgers[^·]*·[^·]*/) || [""])[0]);
+  if (wantPageNote) {
+    check(group, "the getLedgers page note follows the tier with a separator, not in nested parentheses",
+      /· (cold|hot) · 1 ledger per page \(SLA shape is 10\)/.test(verdictTxt) && !/\(1 ledger per page/.test(verdictTxt),
+      (verdictTxt.match(/.{0,30}1 ledger per page.{0,30}/) || [""])[0]);
+  }
   // The generation note belongs to data-dir runs alone.
   const qIntro = txt(doc.querySelector("#queries > .sec-intro"));
   check(group, "the JSON-RPC handler note shows only on a data-dir run",
