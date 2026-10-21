@@ -743,7 +743,7 @@
       const ir = (r.e2e && r.e2e.in_rpc) || r.v.in_rpc;
       if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) {
         worst = { ns: ir.p99_ns, unit: r.unit, rps: (r.e2e || r.v).target_rps,
-                  fromProbe: !!r.e2e };
+                  achievedRps: r.e2e ? r.e2e.achieved_rps_m : null, fromProbe: !!r.e2e };
       }
     }
     return worst;
@@ -985,8 +985,15 @@
     const e2eGoal = canBudget ? e2eOf(goalNs, sendNs, getNs) : 0;
     const e2eRun = canBudget ? e2eOf(wp99, txRunNs, getRunNs) : 0;
     const slack = budgetNs - e2eRun;
+    // getRateTxt names the getTransaction rate behind the run bar, because it is the phase's demand rate, not the SLA rate of the query sections.
+    const getW = MEASURED_GET && MEASURED_GET.fromProbe ? workloadFor(MEASURED_GET.unit, sel) : null;
+    const getShort = MEASURED_GET && MEASURED_GET.fromProbe && MEASURED_GET.achievedRps != null
+      && MEASURED_GET.achievedRps < 0.95 * MEASURED_GET.rps;
+    const getRateTxt = MEASURED_GET && MEASURED_GET.fromProbe
+      ? `getTransaction is measured at ${esc(fmtRps(MEASURED_GET.rps))}${getW ? ` on ${esc(getW.name)}` : ""}: the getTransaction traffic estimated for the Phase ${sel.phase} transaction volume, higher than the SLA rate of the query sections. ${getShort ? `At that rate this box served only ${esc(fmtRps(MEASURED_GET.achievedRps))}, so requests queued inside the RPC and most of the ${fmtNs(MEASURED_GET.ns)} is waiting time. ` : ""}`
+      : "";
     const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
-      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. Hatched segments are targets or estimates; solid segments are measured.`) : "";
+      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. ${getRateTxt}Hatched segments are targets or estimates; solid segments are measured.`) : "";
 
     // One tile per slice this work owns: what it measured, on which profile,
     // against what it was allocated. The mark judges the slice alone — the
@@ -1157,7 +1164,8 @@
     // measurement behind it keeps its allocation and stays hatched.
     if (canBudget) {
       const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
-      const getRunLabel = MEASURED_GET ? "getTransaction (measured, in-RPC)" : "getTransaction (estimate)";
+      const getRunLabel = MEASURED_GET
+        ? `getTransaction (measured, in-RPC${MEASURED_GET.fromProbe ? `, at ${fmtRps(MEASURED_GET.rps)}` : ""})` : "getTransaction (estimate)";
       const segs = (ingNs, measured, txV, getV) => [
         { color: C.de, ns: netSendNs, hatch: true },
         { color: C.s5, ns: txV, hatch: !(measured && MEASURED_TX) },

@@ -698,6 +698,17 @@ function summaryShowsSource(D) {
 }
 
 function checkSummarySections(sdoc, group, D) {
+  // The E2E figure names the getTransaction probe rate, and says when the box fell short of it.
+  const probes = Object.values((D.queries || {}).hot || {}).map(u => u.txhash && u.txhash.verdict_e2e).filter(Boolean);
+  const budgetEl = sdoc.getElementById("budget");
+  if (probes.length && budgetEl && summaryHasBudget(D)) {
+    const bTxt = txt(budgetEl);
+    check(group, "summary: the E2E figure names the getTransaction probe rate",
+      /getTransaction is measured at [\d,]+ rps/.test(bTxt), bTxt.slice(0, 200));
+    const short = probes.some(v => v.achieved_rps_m != null && v.achieved_rps_m < 0.95 * v.target_rps);
+    if (short) check(group, "summary: the E2E figure says the box fell short of the probe rate",
+      /served only [\d,]+ rps/.test(bTxt), bTxt.slice(0, 200));
+  }
   const sreport = sdoc.getElementById("report");
   const wantBudget = summaryHasBudget(D);
   const QR = summaryQueryRows(D);
