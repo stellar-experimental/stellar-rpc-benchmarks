@@ -75,7 +75,7 @@ Print the ordered steps the campaign would execute, one `$ command` line each. I
 resolves no ref against the network and writes nothing; when the ref is not resolvable in
 the local build clone it plans with the placeholder sha `deadbeef` in the derived paths
 and the shapes of current stellar-rpc commits (the `bench` CLI, the `data-dir` query CLI,
-and a static `build-stellar-rpc` build with `--enable-rpcv2`), and says so. This is the same data the runner writes to `plan.json` in the bundle. A
+and a static `build-stellar-rpc RPCV2=true` build with `--enable-rpcv2`), and says so. This is the same data the runner writes to `plan.json` in the bundle. A
 query campaign's RPS ladders are resolved for real, so the printed `--target-rps` lists
 are the ones a run would drive.
 
@@ -350,6 +350,12 @@ clone at that commit, leaving out `_test.go` files, and records what it finds in
   `--enable-rpcv2` before `bench`. Before #1123 the build links the shared libraries in
   `~/.zstd` and `~/.rocksdb`: `"build-rpc-v2"` (`stellar-rpc-v2`) where the Makefile has
   it, else `"build-stellar-rpc"` (`stellar-rpc`, as on c48a55c6), both without the flag.
+- **`rpcv2_build_flag`** (`run.DetectRPCV2BuildFlag`): a Makefile that defines `RPCV2`
+  (stellar-rpc#1136 on) gets `true`, and the build runs `make build-stellar-rpc … RPCV2=true`.
+  Without it, that Makefile writes a binary that refuses `--enable-rpcv2`. Every static
+  build then runs `<bin> --enable-rpcv2 version`, and the build step fails when the binary
+  prints `not available in this build`, so the legs never start with a binary that refuses
+  rpcv2.
 
 The `fixture` dataset kind is the exception to the CLI shape: it always runs `bench-ingest
 fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a `fixture` subcommand,

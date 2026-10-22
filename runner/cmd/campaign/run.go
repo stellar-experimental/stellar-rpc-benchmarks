@@ -136,8 +136,8 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 }
 
 // probeShape fills in's commit shape for the commands that only print a plan:
-// run.DetectBenchCLI, run.DetectBuildTarget, run.DetectEmptyColdOutDir, and
-// run.DetectQueryCLI for a query campaign. A failed probe, a missing query
+// run.DetectBenchCLI, run.DetectBuildTarget, run.DetectRPCV2BuildFlag,
+// run.DetectEmptyColdOutDir, and run.DetectQueryCLI for a query campaign. A failed probe, a missing query
 // bench, or a config the shape cannot run is a note, and the plan falls back
 // to the default shape.
 func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout io.Writer) {
@@ -151,6 +151,11 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 		run.Notef(stdout, "%s — planning %s", err, plan.BuildRPCV2)
 	} else {
 		in.BuildTarget, in.StaticLibs = target, static
+	}
+	if flag, err := run.DetectRPCV2BuildFlag(src, commit); err != nil {
+		run.Notef(stdout, "%s", err)
+	} else {
+		in.RPCV2BuildFlag = flag
 	}
 	if empty, err := run.DetectEmptyColdOutDir(src, commit); err != nil {
 		run.Notef(stdout, "%s", err)
@@ -177,9 +182,9 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 // that name it for the note. A config that shape cannot run is named too.
 func assumeCurrentShape(cfg *config.Config, in *plan.Inputs) string {
 	in.BenchCLI, in.QueryCLI = plan.BenchCLIRoot, plan.QueryCLIDataDir
-	in.BuildTarget, in.StaticLibs, in.EmptyColdOutDir = plan.BuildStellarRPC, true, true
+	in.BuildTarget, in.StaticLibs, in.RPCV2BuildFlag, in.EmptyColdOutDir = plan.BuildStellarRPC, true, true, true
 	assumed := fmt.Sprintf("assuming the current shapes: the %s CLI (%s), the %s query CLI, and make %s "+
-		"with static libs (--enable-rpcv2)", in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget)
+		"RPCV2=true with static libs (--enable-rpcv2)", in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget)
 	if err := plan.Check(cfg, *in); err != nil {
 		assumed += "; " + err.Error()
 	}
@@ -240,7 +245,12 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 1
 	}
-	run.Notef(out, "build target: make %s (static libs: %t)", buildTarget, staticLibs)
+	rpcv2BuildFlag, err := run.DetectRPCV2BuildFlag(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	run.Notef(out, "build target: make %s (static libs: %t, RPCV2=true: %t)", buildTarget, staticLibs, rpcv2BuildFlag)
 	emptyColdOutDir, err := run.DetectEmptyColdOutDir(src, builtCommit)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
@@ -305,6 +315,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		QueryCLI:          queryCLI,
 		BuildTarget:       buildTarget,
 		StaticLibs:        staticLibs,
+		RPCV2BuildFlag:    rpcv2BuildFlag,
 		EmptyColdOutDir:   emptyColdOutDir,
 	}
 	if err := plan.Check(cfg, in); err != nil {

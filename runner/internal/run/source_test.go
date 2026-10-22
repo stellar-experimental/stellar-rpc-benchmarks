@@ -320,6 +320,32 @@ func TestDetectBuildTarget(t *testing.T) {
 	}
 }
 
+// TestDetectRPCV2BuildFlag checks the probe for the Makefile's RPCV2 variable,
+// which a mention of RPCV2 in a comment does not satisfy.
+func TestDetectRPCV2BuildFlag(t *testing.T) {
+	repo, _ := originRepo(t)
+	before := commit(t, repo, "Makefile", "build-native-libs: $(ZSTD_HOME)/lib/libzstd.a\n")
+	comment := commit(t, repo, "Makefile", "# unless built with RPCV2=true\nbuild-native-libs:\n")
+	after := commit(t, repo, "Makefile", "RPCV2 ?= false\n\nbuild-native-libs:\n")
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   bool
+	}{
+		{"before #1136", before, false},
+		{"RPCV2 in a comment only", comment, false},
+		{"from #1136 on", after, true},
+	} {
+		got, err := DetectRPCV2BuildFlag(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: DetectRPCV2BuildFlag = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestDetectEmptyColdOutDir checks the probe for bench ingest cold's empty
 // --cold-out-dir rule, which a test file alone does not satisfy.
 func TestDetectEmptyColdOutDir(t *testing.T) {
