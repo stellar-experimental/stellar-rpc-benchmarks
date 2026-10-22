@@ -10,11 +10,15 @@ import (
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/bundle"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/memlimit"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/preflight"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/run"
 )
+
+// meminfoPath is where gomemlimit = auto reads MemTotal.
+const meminfoPath = "/proc/meminfo"
 
 // startedAtLayout is metadata.json's timestamp format: UTC, second precision.
 const startedAtLayout = "2006-01-02T15:04:05Z"
@@ -68,6 +72,8 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	if cfg.Query {
 		run.Notef(stdout, "query load: phase %s floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
 	}
+	_, limitNote := memlimit.Resolve(cfg.GoMemLimit, meminfoPath)
+	run.Notef(stdout, "%s", limitNote)
 
 	in := plan.Inputs{
 		BenchRoot:         benchRoot,
@@ -351,6 +357,8 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		// reading this bundle six months later will want to know.
 		run.Notef(out, "query load: phase %s floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
 	}
+	limit, limitNote := memlimit.Resolve(cfg.GoMemLimit, meminfoPath)
+	run.Notef(out, "%s", limitNote)
 
 	hostname, _ := os.Hostname()
 	meta := bundle.MetadataInput{
@@ -360,6 +368,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		BuiltCommit:       builtCommit,
 		QueryPhase:        ql.phase,
 		QueryLedgersLimit: p.QueryLedgersLimit,
+		GoMemLimit:        &limit,
 		Resumed:           resume != nil,
 		Hardware:          bundle.CollectHardware(bundle.DefaultIMDSBase),
 		Hostname:          hostname,
@@ -387,6 +396,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		Output:   out,
 		Resume:   resume != nil,
 		FailFast: failFast,
+		BenchEnv: limit.Env(),
 		OnStepDone: func(s plan.Step, r run.StepResult) {
 			// Right after the build, not at the end: a campaign that dies in
 			// its legs still says which binary produced them.

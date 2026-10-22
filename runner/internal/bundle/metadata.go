@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/memlimit"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/targets"
 )
 
@@ -53,6 +54,9 @@ type MetadataInput struct {
 	StartedAt         string // RFC3339-like UTC, 2026-07-31T22:00:00Z
 	FinishedAt        string // "" on the up-front write
 	Status            string // StatusRunning / StatusFinished / StatusFailed
+
+	// GoMemLimit is the session's resolved Go memory limit; nil omits it.
+	GoMemLimit *memlimit.Resolved
 }
 
 // metadataFile is the write-side of the manifest. It is a separate type from
@@ -92,6 +96,8 @@ type campaignMetadata struct {
 	HotNumLedgers     int `json:"hot_num_ledgers"`
 	// Resumed is present only on resumed bundles, matching bash's del().
 	Resumed bool `json:"resumed,omitempty"`
+	// GoMemLimit is the Go memory limit of the newest session's bench processes.
+	GoMemLimit *memlimit.Resolved `json:"gomemlimit,omitempty"`
 }
 
 type datasetMetadata struct {
@@ -138,6 +144,7 @@ func marshalMetadata(in MetadataInput) ([]byte, error) {
 			Workers:           cfg.Workers,
 			HotNumLedgers:     cfg.HotNumLedgers,
 			Resumed:           in.Resumed,
+			GoMemLimit:        in.GoMemLimit,
 		},
 		Datasets:   make([]datasetMetadata, 0, len(cfg.Datasets)),
 		Hardware:   in.Hardware,

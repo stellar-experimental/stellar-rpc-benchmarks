@@ -19,6 +19,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/memlimit"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/targets"
 )
 
@@ -71,6 +72,7 @@ type Config struct {
 	// Profile passes --cpuprofile and --memprofile to every timed leg, so each
 	// leg dir holds Go CPU and heap profiles of the binary under test.
 	Profile    bool      `toml:"profile"`
+	GoMemLimit string    `toml:"gomemlimit"` // auto (GOMEMLIMIT = 80% of MemTotal on bench processes) | off
 	PublishURI string    `toml:"publish_uri"`
 	Datasets   []Dataset `toml:"dataset"`
 }
@@ -101,6 +103,7 @@ func defaults() Config {
 		QueryDuration: DefaultQueryDuration,
 		Workers:       DefaultWorkers,
 		Profile:       true,
+		GoMemLimit:    memlimit.Auto,
 	}
 }
 
@@ -182,6 +185,9 @@ func (c *Config) validate() error {
 	}
 	if err := validateQueryDuration(c.QueryDuration); err != nil {
 		return err
+	}
+	if c.GoMemLimit != memlimit.Auto && c.GoMemLimit != memlimit.Off {
+		return fmt.Errorf("config: gomemlimit must be auto|off (got '%s')", c.GoMemLimit)
 	}
 	if c.PublishURI != "" && !strings.HasPrefix(c.PublishURI, "gs://") && !strings.HasPrefix(c.PublishURI, "s3://") {
 		return fmt.Errorf("config: publish_uri must be a gs:// or s3:// URI (got '%s')", c.PublishURI)

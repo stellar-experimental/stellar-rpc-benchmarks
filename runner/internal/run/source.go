@@ -23,7 +23,7 @@ func EnsureSrc(src, repo string, out io.Writer) error {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("inspect build clone at %s: %w", src, err)
 		}
-		if err := runCommand([]string{"git", "clone", repo, src}, nil, out); err != nil {
+		if err := runCommand([]string{"git", "clone", repo, src}, nil, nil, out); err != nil {
 			return fmt.Errorf("clone %s into %s: %w", repo, src, err)
 		}
 	}
@@ -34,7 +34,7 @@ func EnsureSrc(src, repo string, out io.Writer) error {
 		{"git", "-C", src, "reset", "-q", "--hard"},
 		{"git", "-C", src, "clean", "-qfd"},
 	} {
-		if err := runCommand(argv, nil, out); err != nil {
+		if err := runCommand(argv, nil, nil, out); err != nil {
 			return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 		}
 	}

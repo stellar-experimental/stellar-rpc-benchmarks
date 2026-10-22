@@ -16,6 +16,7 @@ runner/
 │   ├── plan/               # config → ordered steps; the campaign as data (plan.json)
 │   ├── run/                # executes a plan: legs, sentinels, resume, the lock
 │   ├── hoststat/           # samples /proc into each leg's host.csv while it runs
+│   ├── memlimit/           # the gomemlimit setting → the bench processes' GOMEMLIMIT
 │   ├── preflight/          # does this machine have what this config needs?
 │   ├── publish/            # bundle → gs:// or s3://
 │   └── bundle/             # the bundle root: metadata.json, provenance files,
@@ -129,6 +130,7 @@ ignored: a misspelled key fails in the first second of the campaign, naming itse
 | `workers` | int ≥ 1 | `1` | `bench ingest cold --workers`. |
 | `hot_num_ledgers` | int ≥ 0 | `0` | Cap the hot ingest at this many ledgers; `0` = the whole range. A capped ingest also caps the hot query sampler (`--sample-ledgers`), so it stays inside what was ingested. |
 | `profile` | bool | `true` | Pass `--cpuprofile=<leg dir>/cpu.pprof --memprofile=<leg dir>/mem.pprof` to every timed leg. An ingest leg writes one `cpu.pprof` over the whole run; a query leg writes one `cpu.<type>.<rps>rps.pprof` per rate, over its measured iterations. `mem.pprof` is written when the run ends, with or without an error; read it with `go tool pprof -alloc_space`. Every bench generation the runner supports has both flags. `false` gives the argv of a runner without this key. `plan.json` records the effective value as `profile`. |
+| `gomemlimit` | string | `"auto"` | `"auto"` \| `"off"`. `"auto"` sets `GOMEMLIMIT` to 80% of `MemTotal` (`/proc/meminfo`), rounded down to MiB, on every command that runs the binary under test (49.4 GiB on a 61.8 GiB c6id.8xlarge); the other 20% is headroom for RocksDB and zstd memory, which `GOMEMLIMIT` does not cover. Without `/proc/meminfo` (macOS), `"auto"` logs one line and sets nothing. `"off"` sets nothing. argv does not change. `metadata.json` records the resolved limit as `campaign.gomemlimit` (`bytes`, `source` `auto`\|`off`, `mem_total_bytes`). |
 | `publish_uri` | string | `""` | Object-storage root to publish the finished bundle to; must be `gs://` or `s3://`. Empty = no publish. The bundle lands at `<publish_uri>/<run_id>/`. |
 | `[[dataset]]` | table array | — (at least one) | See below. |
 
@@ -495,7 +497,7 @@ Who owns what:
 
 - **`metadata.json`** (bundle root, `schema_version` 1) — written by the campaign CLI
   here. Run identity (`run_id`, `started_at`), the campaign config knobs (incl.
-  `close_interval`), the dataset list, structured `hardware`, and `hostname`. It is written
+  `close_interval`), the session's resolved Go memory limit (`campaign.gomemlimit`), the dataset list, structured `hardware`, and `hostname`. It is written
   as soon as the bundle directory exists — without `finished_at`, which only the
   end-of-campaign rewrite adds — so a campaign that is killed still leaves a parseable
   bundle. It also carries `status`: `running` up front, rewritten to `finished` or

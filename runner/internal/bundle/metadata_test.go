@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/memlimit"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/metadata.golden.json from the current writer output")
@@ -150,6 +151,23 @@ func TestMetadataResumed(t *testing.T) {
 	in.Resumed = true
 	if got := marshal(t, in); !strings.Contains(got, `"resumed": true`) {
 		t.Errorf("a resumed campaign should record resumed: true:\n%s", got)
+	}
+}
+
+// TestMetadataGoMemLimit checks that campaign.gomemlimit is recorded when
+// resolved and absent otherwise.
+func TestMetadataGoMemLimit(t *testing.T) {
+	in := goldenInput(t)
+	if got := marshal(t, in); strings.Contains(got, "gomemlimit") {
+		t.Errorf("manifest records an unresolved limit:\n%s", got)
+	}
+	in.GoMemLimit = &memlimit.Resolved{Bytes: 53084160000, Source: memlimit.Auto, MemTotalBytes: 66356318208}
+	if got := marshal(t, in); !strings.Contains(got, `"gomemlimit": {
+      "bytes": 53084160000,
+      "source": "auto",
+      "mem_total_bytes": 66356318208
+    }`) {
+		t.Errorf("manifest lacks campaign.gomemlimit:\n%s", got)
 	}
 }
 
