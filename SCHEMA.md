@@ -119,6 +119,11 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   measured. The SLA shape is query_load.derivation.
                                            //   ledgers_span; the site names the page size when the two
                                            //   differ. Absent on tiered runs.
+    "gomemlimit": {                        // optional; the GOMEMLIMIT of the bench processes, from
+      "bytes": 53084160000,                //   metadata.json campaign.gomemlimit. auto = 80% of
+      "source": "auto" | "off",            //   MemTotal; off = no limit (bytes 0). Absent on runs
+      "mem_total_bytes": 66356318208       //   whose bundle predates the gomemlimit setting.
+    },
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs,

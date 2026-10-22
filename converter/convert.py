@@ -1521,8 +1521,11 @@ def convert(args):
             campaign["name"] = mc["name"]
         if mc.get("config_file"):
             campaign["config_file"] = mc["config_file"]
+        gml = mc.get("gomemlimit")
+        if isinstance(gml, dict) and isinstance(gml.get("bytes"), int) and gml.get("source"):
+            campaign["gomemlimit"] = {k: gml[k] for k in ("bytes", "source", "mem_total_bytes") if k in gml}
         cfg = {k: v for k, v in mc.items()
-               if k not in ("name", "config_file", "close_interval")}
+               if k not in ("name", "config_file", "close_interval", "gomemlimit")}
         if cfg:
             campaign["config"] = cfg
 
