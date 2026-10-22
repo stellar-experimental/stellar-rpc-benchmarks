@@ -860,6 +860,16 @@
     return { over, breaches, unitBreaches };
   }
 
+  // ledgersPageNote names the getLedgers page size a run queried when it is
+  // not the SLA's request shape, e.g. "1 ledger per page (SLA shape is 10)";
+  // null for a run that records no page size or queried the SLA shape.
+  function ledgersPageNote(D) {
+    const camp = D.campaign || {}, n = camp.query_ledgers_limit;
+    const span = ((camp.query_load || {}).derivation || {}).ledgers_span;
+    if (!(n > 0) || n === span) return null;
+    return `${n} ledger${n === 1 ? "" : "s"} per page${span ? ` (SLA shape is ${span})` : ""}`;
+  }
+
   // ---- open-loop query rendering ----
   // The SLA verdict table: the run's read-path answer to the sustained-load
   // requirement, one row per endpoint × profile × tier, each judged on the
@@ -870,7 +880,7 @@
   // the in-RPC budget folded in as a column: that column stays for them.
   // Returns the counts so the caller's footnote can reconcile with the chips.
   function openVerdictTable(tableId, footId, o) {
-    const { Q, QT, TIERS, C, units, thrFor, short } = o;
+    const { Q, QT, TIERS, C, units, thrFor, short, ledgersNote } = o;
     const t = document.getElementById(tableId);
     if (!t) return { checks: 0, fails: 0, rows: 0, unfloored: 0 };
     const head = ["Endpoint · profile · tier", "Offered", "Served",
@@ -897,7 +907,8 @@
       if (e2e) probed++;
       rows++;
       const r = document.createElement("tr");
-      cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
+      const nameTd = cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
+      if (qt === "ledgers" && ledgersNote) nameTd.appendChild(noteEl(`· ${ledgersNote}`));
       // Offered: the phase floor when the run names one, else the rate the leg
       // was actually paced at.
       const target = v && v.target_rps != null ? v.target_rps : cell.target_rps;
@@ -1238,6 +1249,7 @@
   // every phase feature then disappears and legacy runs render exactly as
   // before. The selected phase comes from ?phase=N, defaulting to the matched
   // phase (campaign.phase); both can be absent.
+
   function phaseState(D) {
     const camp = D.campaign || {};
     // The baked campaign.phase_targets flags that this run participates in phases;
@@ -1253,8 +1265,9 @@
     const byNum = {};
     targets.forEach(p => { byNum[p.phase] = p; });
     const matched = camp.phase != null && byNum[camp.phase] ? byNum[camp.phase] : null;
-    const q = parseInt(new URL(location.href).searchParams.get("phase"), 10);
-    const sel = byNum[q] || matched;
+    // Phase labels are not all numbers ("3b"), so ?phase is matched as a string.
+    const q = new URL(location.href).searchParams.get("phase");
+    const sel = (q != null && byNum[q]) || matched;
     return { targets, matched, sel, closeNs: camp.close_interval_ns || 0 };
   }
 
@@ -1293,7 +1306,7 @@
         ? `<div class="note-callout phase-caveat">This run was ${phasePaceText(PH)} — no phase targets apply by default. Select a phase to view its targets.</div>`
         : "");
     return `<div class="phase-block" id="phase-block">
-      <div class="fig-head"><div><span class="fig-no">Targets</span><span class="fig-title">Phase 1/2/3 performance targets</span></div>
+      <div class="fig-head"><div><span class="fig-no">Targets</span><span class="fig-title">Phase performance targets</span></div>
         <div class="filter-row" style="margin:0"><span class="filter-lab">View against</span>${btns}</div></div>
       <div class="tv-scroll"><table class="data phase-table"><tr><th>Target</th>${head}</tr>${rows}</table></div>
       <p class="phase-caption">This benchmark measures the per-ledger ingest slice only: the time from meta available in captive core to data ingested in RPC (recorded as <code>ingest_total</code>). Cold ingestion (backfill) has no phase targets.</p>
@@ -1800,6 +1813,14 @@
     // two share nothing but the cell grid, so the section branches whole.
     const qMode = qGrid ? qGrid.mode : null;
     const qLadder = (D.campaign && D.campaign.query_load && D.campaign.query_load.ladder) || null;
+    // `bench query --data-dir` (stellar-rpc#1070) sends each request through
+    // the daemon's JSON-RPC handlers; the tiered bench before it read the
+    // stores directly. Runs without the field are all tiered.
+    const qDataDir = !!(D.campaign && D.campaign.query_cli === "data-dir");
+    // Conversions that record query_cli sum a cell's evictions over all its
+    // legs; older ones kept the first leg's.
+    const qCellSetup = !!(D.campaign && D.campaign.query_cli);
+    const qLedgersNote = ledgersPageNote(D);
     // qThr is the one number the prose and the reference lines can name; null
     // when the run states a target per endpoint and tier instead.
     const { check: qCheck, thrFor: qThrFor, perEndpoint: qPerEndpoint, single: qThr } = queryTargets(D);
@@ -1955,7 +1976,7 @@
     ${hasQueries && qMode === "open" ? `
     <section id="queries">
       <div class="sec-head"><span class="sec-num">${secQueries}</span><h2>Queries — the read path at a fixed request rate</h2></div>
-      <p class="sec-intro">The read side of the same stores the sections above filled, driven <strong>open-loop</strong>: every endpoint gets a fixed number of requests per second on a fixed schedule, rather than a fixed pool of clients that only asks again once the last answer came back. A server that slows down therefore builds a queue instead of quietly being asked for less. Each endpoint runs three legs — at <strong>half, exactly, and twice</strong> the request rate the load model asks of it — for a fixed span each. The latency reported everywhere below is the <strong>scheduled</strong> one: the clock starts when a request was <em>due</em>, not when the client got round to sending it, so queueing counts against the server rather than disappearing. The verdict is read at the 1× leg; the half and double legs are the context on either side of it. Cold legs drop the profile's files from the OS page cache before measuring; hot legs warm them first, because a warm cache is the hot tier's steady state.</p>
+      <p class="sec-intro">The read side of the same stores the sections above filled, driven <strong>open-loop</strong>: every endpoint gets a fixed number of requests per second on a fixed schedule, rather than a fixed pool of clients that only asks again once the last answer came back. A server that slows down therefore builds a queue instead of quietly being asked for less. Each endpoint runs three legs — at <strong>half, exactly, and twice</strong> the request rate the load model asks of it — for a fixed span each. The latency reported everywhere below is the <strong>scheduled</strong> one: the clock starts when a request was <em>due</em>, not when the client got round to sending it, so queueing counts against the server rather than disappearing. The verdict is read at the 1× leg; the half and double legs are the context on either side of it. Cold legs drop the profile's files from the OS page cache before measuring; hot legs warm them first, because a warm cache is the hot tier's steady state.${qDataDir ? " Each request goes through the daemon's own JSON-RPC handlers in process, so the time inside the RPC covers the request parse, the wait for a free handler, the handler and the response write. Runs of the earlier tiered bench read the stores directly, so their numbers do not compare with these." : ""}</p>
       ${hasE2E ? `<p class="sec-intro">This section answers <strong>two separate requirements</strong>, and keeps them apart. The <strong>SLA</strong> asks every endpoint to hold its latency target while serving its share of the sustained request rate. The <strong>end-to-end budget</strong> asks one endpoint, getTransaction, to answer inside a fixed slice of the transaction-lifecycle target, at the rate the phase's own demand model predicts. The two are measured at different rates and judged on different numbers, so they get a table each and never share a row.</p>` : ""}
       <figure class="fig" id="figq1">
         <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">${hasE2E ? "SLA verdict at the 1× request rate" : "Verdict at the 1× request rate"}</span></div></div>
@@ -1979,7 +2000,7 @@
       <figure class="fig" id="figq5">
         <div class="fig-head"><div><span class="fig-no">${qFig()}</span><span class="fig-title">Per-leg setup and event-scan detail</span></div></div>
         <div class="fig-body"><div class="tv-scroll"><table class="data" id="query-setup-table" style="width:100%"></table></div></div>
-        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> builds the read fixture, and <code>evict</code> drops the cold artifacts from the page cache once per leg — a hot leg has nothing to evict, so the row is absent. The event columns are what getEvents actually returned at the 1× rate.</figcaption>
+        <figcaption>Setup is the untimed work each leg does before it measures: <code>open</code> ${qDataDir ? "opens the dataset the way daemon startup does" : "builds the read fixture"}, and <code>evict</code> drops the cold artifacts from the page cache ${qCellSetup ? "before each rate, summed over the cell's legs" : "once per leg"} — a hot leg has nothing to evict, so the row is absent.${qCellSetup ? " Peak RSS is the highest of the cell's legs." : ""} The event columns are what getEvents actually returned at the 1× rate.</figcaption>
       </figure>
     </section>` : hasQueries ? `
     <section id="queries">
@@ -2416,7 +2437,7 @@
       if (qMode === "open") {
         const short = u => (parts(u) || {}).name || disp(u);
         openVerdictTable("query-verdict-table", "query-verdict-footnote",
-          { Q, QT, TIERS, C, units: ORDER, thrFor: qThrFor, short });
+          { Q, QT, TIERS, C, units: ORDER, thrFor: qThrFor, short, ledgersNote: qLedgersNote });
         if (hasE2E) e2eProbeTable("query-e2e-table", "query-e2e-footnote", { Q, TIERS, C, units: ORDER, short });
         return;
       }
@@ -2497,8 +2518,12 @@
   }
 
   const idxRuns = () => ((MANIFEST && MANIFEST.runs) || []).slice();
+  // Facet values compare as strings: a phase is a label (1, 2, 3, "3b"), and
+  // the selection comes back from a data attribute as a string anyway.
   const idxMatch = (r, except) => IDX_FACETS.every(f =>
-    f.key === except || !(f.key in idxSel) || r[f.key] === idxSel[f.key]);
+    f.key === except || !(f.key in idxSel) || String(r[f.key]) === idxSel[f.key]);
+  // Table order: numeric runs inside strings, so phase 3 sorts before "3b".
+  const idxCmp = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 
   // Verdict for a facets-view row: the entry's baked per-profile hot ingest
   // p99 vs its phase's goal from live targets.json (the goal is never baked
@@ -2553,7 +2578,7 @@
       if (!counts.size) return "";
       const opts = [...counts.entries()]
         .sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }))
-        .map(([v, n]) => `<button type="button" class="idx-opt ${idxSel[f.key] === v ? "on" : ""}"
+        .map(([v, n]) => `<button type="button" class="idx-opt ${idxSel[f.key] === String(v) ? "on" : ""}"
             data-f="${esc(f.key)}" data-v="${esc(String(v))}">
           <span>${esc((f.fmt || String)(v))}</span><span class="idx-n">${n}</span></button>`).join("");
       return `<div class="idx-facet"><div class="idx-facet-h">${esc(f.label)}</div>${opts}</div>`;
@@ -2604,7 +2629,7 @@
     if (view === "table") {
       rows.sort((a, b) => {
         const av = a[idxSort.k] != null ? a[idxSort.k] : "", bv = b[idxSort.k] != null ? b[idxSort.k] : "";
-        return (av < bv ? -1 : av > bv ? 1 : 0) * idxSort.dir || String(a.id).localeCompare(String(b.id));
+        return idxCmp(av, bv) * idxSort.dir || String(a.id).localeCompare(String(b.id));
       });
     } else {
       rows.sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : String(a.id).localeCompare(String(b.id)));
@@ -2633,8 +2658,7 @@
       renderIndex();
     }));
     reportEl.querySelectorAll(".idx-opt").forEach(b => b.addEventListener("click", () => {
-      const f = b.getAttribute("data-f"), raw = b.getAttribute("data-v");
-      const v = f === "phase" ? Number(raw) : raw;
+      const f = b.getAttribute("data-f"), v = b.getAttribute("data-v");
       if (f in idxSel && idxSel[f] === v) delete idxSel[f]; else idxSel[f] = v;
       renderIndex();
     }));

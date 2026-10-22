@@ -212,8 +212,8 @@
     tip.replaceChildren();
     const t = document.createElement("div"); t.className = "tip-title"; t.textContent = title; tip.appendChild(t);
     for (const r of rows) {
-      const d = document.createElement("div"); d.className = "tip-row";
-      if (r.color) { const k = document.createElement("span"); k.className = "tip-key"; k.style.background = r.color; d.appendChild(k); }
+      const d = document.createElement("div"); d.className = r.total ? "tip-row tip-total" : "tip-row";
+      const k = document.createElement("span"); k.className = "tip-key"; if (r.color) k.style.background = r.color; d.appendChild(k);
       const v = document.createElement("span"); v.className = "tip-val"; v.textContent = r.value; d.appendChild(v);
       const l = document.createElement("span"); l.className = "tip-lab"; l.textContent = r.label; d.appendChild(l);
       tip.appendChild(d);
@@ -651,10 +651,20 @@
       console.warn("dataset-sizes.json not loaded; dataset sizes omitted", err);
     }
   }
-  // Match a run unit ("sac-5000-c1") to its dataset-sizes profile ("sac-5000").
-  function sizesFor(unit) {
-    const p = DATASET_SIZES && DATASET_SIZES.profiles;
-    return (p && p[String(unit).replace(/-c\d+$/, "")]) || null;
+  // setOf is the synthetic set a run unit's dataset came from: the converter's
+  // dataset.sets entry, or the file's legacy_set for a run converted before
+  // dataset.sets existed. null when the set is unknown.
+  function setOf(D, unit) {
+    const sets = (D.dataset || {}).sets;
+    if (sets === undefined) return (DATASET_SIZES && DATASET_SIZES.legacy_set) || null;
+    return (sets && sets[String(unit).replace(/-c\d+$/, "")]) || null;
+  }
+  // sizesFor is a run unit's dataset-sizes entry, matched by set and profile
+  // ("sac-5000-c1" -> "sac-5000"), never by profile alone.
+  function sizesFor(D, unit) {
+    const set = setOf(D, unit);
+    const entry = set && DATASET_SIZES && DATASET_SIZES.sets && DATASET_SIZES.sets[set];
+    return (entry && entry.profiles && entry.profiles[String(unit).replace(/-c\d+$/, "")]) || null;
   }
   // {targets, sel} — sel is the phase this run was paced for (campaign.phase).
   function phaseState(D) {
@@ -733,7 +743,7 @@
       const ir = (r.e2e && r.e2e.in_rpc) || r.v.in_rpc;
       if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) {
         worst = { ns: ir.p99_ns, unit: r.unit, rps: (r.e2e || r.v).target_rps,
-                  fromProbe: !!r.e2e };
+                  achievedRps: r.e2e ? r.e2e.achieved_rps_m : null, fromProbe: !!r.e2e };
       }
     }
     return worst;
@@ -906,7 +916,7 @@
     const allMapped = dsUnits.length > 0 && dsUnits.every(u => wlOf(u));
     // Avg raw (uncompressed) ledger size, from dataset-sizes.json facts.
     const avgLedgerOf = u => {
-      const s = sizesFor(u);
+      const s = sizesFor(D, u);
       return s && s.raw_meta_gib > 0 && s.raw_meta_ledgers > 0 ? s.raw_meta_gib * 1073741824 / s.raw_meta_ledgers : null;
     };
     const allSized = dsUnits.length > 0 && dsUnits.every(u => avgLedgerOf(u) != null);
@@ -941,9 +951,14 @@
       }
       return href ? `<a href="${esc(href)}">${esc(u)} ↗</a>` : esc(u);
     };
-    const testDataGcs = DATASET_SIZES && DATASET_SIZES.source_gcs;
-    const sourceData = testDataGcs
-      ? `<p class="sec-intro" id="source-data">Source test data: ${bucketLink(testDataGcs)}</p>`
+    // The source link names the run's set, so it shows only when every profile
+    // shares one set the file knows.
+    const runSets = [...new Set(dsUnits.map(u => setOf(D, u)))];
+    const setEntry = runSets.length === 1 && runSets[0] && DATASET_SIZES && DATASET_SIZES.sets
+      ? DATASET_SIZES.sets[runSets[0]] : null;
+    const testDataSrc = setEntry && setEntry.source;
+    const sourceData = testDataSrc
+      ? `<p class="sec-intro" id="source-data">Source test data: ${bucketLink(testDataSrc)}</p>`
       : "";
     const rawSrc = camp.source_uri || camp.source_gcs;
     const rawResults = rawSrc
@@ -970,8 +985,15 @@
     const e2eGoal = canBudget ? e2eOf(goalNs, sendNs, getNs) : 0;
     const e2eRun = canBudget ? e2eOf(wp99, txRunNs, getRunNs) : 0;
     const slack = budgetNs - e2eRun;
+    // getRateTxt names the getTransaction rate behind the run bar, because it is the phase's demand rate, not the SLA rate of the query sections.
+    const getW = MEASURED_GET && MEASURED_GET.fromProbe ? workloadFor(MEASURED_GET.unit, sel) : null;
+    const getShort = MEASURED_GET && MEASURED_GET.fromProbe && MEASURED_GET.achievedRps != null
+      && MEASURED_GET.achievedRps < 0.95 * MEASURED_GET.rps;
+    const getRateTxt = MEASURED_GET && MEASURED_GET.fromProbe
+      ? ` getTransaction is measured at ${esc(fmtRps(MEASURED_GET.rps))}${getW ? ` on ${esc(getW.name)}` : ""}, the load expected at Phase ${sel.phase} volume${getShort ? `; this box served only ${esc(fmtRps(MEASURED_GET.achievedRps))}, so most of the ${fmtNs(MEASURED_GET.ns)} is queueing` : ""}.`
+      : "";
     const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
-      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. Hatched segments are targets or estimates; solid segments are measured.`) : "";
+      `Top: the Phase ${sel.phase} budget. Bottom: this run. Grey segments are assumed: a ${fmtNsAxis(rttNs)} network round trip and ${nBlocks} blocks × ${fmtNsAxis(blockNs)} of consensus.${getRateTxt}`) : "";
 
     // One tile per slice this work owns: what it measured, on which profile,
     // against what it was allocated. The mark judges the slice alone — the
@@ -1036,12 +1058,18 @@
     const qJudgeTxt = qJudged.length
       ? ` Each cell is judged against its endpoint's own per-tier target${qLegacy ? "" : " from the read-path SLA"}.`
       : "";
+    // The getLedgers page size, when the run queried a smaller page than the
+    // SLA's request shape.
+    const qLedgersN = (D.campaign || {}).query_ledgers_limit;
+    const qLedgersSpan = (((D.campaign || {}).query_load || {}).derivation || {}).ledgers_span;
+    const qLedgersNote = qLedgersN > 0 && qLedgersN !== qLedgersSpan
+      ? `${qLedgersN} ledger${qLedgersN === 1 ? "" : "s"} per page${qLedgersSpan ? ` (SLA shape is ${qLedgersSpan})` : ""}` : "";
     const queryTableHTML = tier => {
       const rows = QV[tier];
       const cells = new Map(rows.map(r => [`${r.qt}\0${r.unit}`, r.v]));
       const head = ORDER.map(unit => `<th scope="col">${esc(disp(unit))}</th>`).join("");
       const body = QT_ORDER.map(qt => `<tr>
-          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}</th>
+          <th scope="row" class="q-endpoint">${esc(endpointLabel(qt))}${qt === "ledgers" && qLedgersNote ? `<span class="q-page">${esc(qLedgersNote)}</span>` : ""}</th>
           ${ORDER.map(unit => {
             const v = cells.get(`${qt}\0${unit}`);
             if (!v) return '<td class="q-cell"><span class="q-missing" aria-label="No data">—</span></td>';
@@ -1135,8 +1163,9 @@
     // network and consensus slices stay de-emphasized grey. A slice with no
     // measurement behind it keeps its allocation and stays hatched.
     if (canBudget) {
-      const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
-      const getRunLabel = MEASURED_GET ? "getTransaction (measured, in-RPC)" : "getTransaction (estimate)";
+      const txRunLabel = MEASURED_TX ? "sendTransaction (measured)" : "sendTransaction (estimate)";
+      const getRunLabel = MEASURED_GET
+        ? `getTransaction (measured${MEASURED_GET.fromProbe ? ` at ${fmtRps(MEASURED_GET.rps)}` : ""})` : "getTransaction (estimate)";
       const segs = (ingNs, measured, txV, getV) => [
         { color: C.de, ns: netSendNs, hatch: true },
         { color: C.s5, ns: txV, hatch: !(measured && MEASURED_TX) },
@@ -1146,13 +1175,13 @@
         { color: C.s2, ns: getV, hatch: !(measured && MEASURED_GET) },
       ];
       const tip = (ingNs, ingLabel, txV, txLabel, getV, getLabel) => [
-        { color: C.de, value: fmtNs(netSendNs), label: "network — submission request (assumed)" },
+        { color: C.de, value: fmtNs(netSendNs), label: "network, submit (assumed)" },
         { color: C.s5, value: fmtNs(txV), label: txLabel },
-        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
+        { color: C.de, value: fmtNs(blockTotal), label: `consensus, ${nBlocks} blocks × ${fmtNsAxis(blockNs)} (assumed)` },
         { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
-        { color: C.de, value: fmtNs(netReadNs), label: "network — getTransaction round trip (assumed)" },
+        { color: C.de, value: fmtNs(netReadNs), label: "network, getTransaction (assumed)" },
         { color: C.s2, value: fmtNs(getV), label: getLabel },
-        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end (derived)" },
+        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end", total: true },
       ];
       budgetChart("fig11-body", [
         { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
@@ -1160,7 +1189,7 @@
           tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)", getNs, "getTransaction (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
           segs: segs(wp99, true, txRunNs, getRunNs),
-          tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
+          tip: tip(wp99, "ingestion (measured)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
       ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
       legend("fig11-legend", [
         { label: "sendTransaction", color: C.s5 },
