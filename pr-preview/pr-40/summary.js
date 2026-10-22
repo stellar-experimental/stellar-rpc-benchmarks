@@ -212,8 +212,8 @@
     tip.replaceChildren();
     const t = document.createElement("div"); t.className = "tip-title"; t.textContent = title; tip.appendChild(t);
     for (const r of rows) {
-      const d = document.createElement("div"); d.className = "tip-row";
-      if (r.color) { const k = document.createElement("span"); k.className = "tip-key"; k.style.background = r.color; d.appendChild(k); }
+      const d = document.createElement("div"); d.className = r.total ? "tip-row tip-total" : "tip-row";
+      const k = document.createElement("span"); k.className = "tip-key"; if (r.color) k.style.background = r.color; d.appendChild(k);
       const v = document.createElement("span"); v.className = "tip-val"; v.textContent = r.value; d.appendChild(v);
       const l = document.createElement("span"); l.className = "tip-lab"; l.textContent = r.label; d.appendChild(l);
       tip.appendChild(d);
@@ -743,7 +743,7 @@
       const ir = (r.e2e && r.e2e.in_rpc) || r.v.in_rpc;
       if (ir && typeof ir.p99_ns === "number" && (!worst || ir.p99_ns > worst.ns)) {
         worst = { ns: ir.p99_ns, unit: r.unit, rps: (r.e2e || r.v).target_rps,
-                  fromProbe: !!r.e2e };
+                  achievedRps: r.e2e ? r.e2e.achieved_rps_m : null, fromProbe: !!r.e2e };
       }
     }
     return worst;
@@ -836,8 +836,6 @@
     const PH = phaseState(D);
     const sel = PH && PH.sel;
     const goalNs = sel ? sel.ingest_p99_target_ns : null;
-    // A provisional goal (phase 3b) says so wherever its value is stated.
-    const goalTxt = goalNs != null ? fmtNsAxis(goalNs) + (sel.provisional ? " (provisional)" : "") : "";
     const blockNs = sel ? sel.block_time_ns : null;
     const closeNs = camp.close_interval_ns || 0;
 
@@ -897,13 +895,13 @@
       const w = goalWorst ? ING[goalWorst].driver.ingest_total : null;
       const note = goalMet
         ? `The slowest tail is ${esc(disp(goalWorst))}: p99 ${fmtNs(w.p99.m)} — ${(w.p99.m / goalNs * 100).toFixed(0)} % of the goal. The chart below compares the profiles; <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a> shows where the time goes.`
-        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${goalTxt} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
+        : `${esc(disp(goalWorst))} misses: p99 ${fmtNs(w.p99.m)} against the ${fmtNsAxis(goalNs)} goal (worst ledger ${fmtNs(w.max.m)}).${tailPhase ? ` At p99 the largest phase is <strong>${esc(tailPhase.name)}</strong> — see <a href="#phases">§${secNo("phases")} · Per-ledger latency breakdown</a>.` : ""}${goalPass ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.` : ""}`;
       return `<div class="banner${goalMet ? "" : " warn-tail"}">
         <div class="banner-figure">${goalPass}<span class="of"> / ${units.length}</span></div>
         <div class="banner-copy">
           <div class="lead">${goalMet
-            ? `All profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(goalTxt)}. <span class="chip">✓ MEETS GOAL</span>`
-            : `${goalPass} of ${units.length} profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(goalTxt)}. <span class="chip warn">▲ ${units.length - goalPass} MISS</span>`}</div>
+            ? `All profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip">✓ MEETS GOAL</span>`
+            : `${goalPass} of ${units.length} profiles meet the Phase ${sel.phase} goal: ingestion latency p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip warn">▲ ${units.length - goalPass} MISS</span>`}</div>
           <p>${note}</p>
         </div>
       </div>`;
@@ -987,8 +985,15 @@
     const e2eGoal = canBudget ? e2eOf(goalNs, sendNs, getNs) : 0;
     const e2eRun = canBudget ? e2eOf(wp99, txRunNs, getRunNs) : 0;
     const slack = budgetNs - e2eRun;
+    // getRateTxt names the getTransaction rate behind the run bar, because it is the phase's demand rate, not the SLA rate of the query sections.
+    const getW = MEASURED_GET && MEASURED_GET.fromProbe ? workloadFor(MEASURED_GET.unit, sel) : null;
+    const getShort = MEASURED_GET && MEASURED_GET.fromProbe && MEASURED_GET.achievedRps != null
+      && MEASURED_GET.achievedRps < 0.95 * MEASURED_GET.rps;
+    const getRateTxt = MEASURED_GET && MEASURED_GET.fromProbe
+      ? ` getTransaction is measured at ${esc(fmtRps(MEASURED_GET.rps))}${getW ? ` on ${esc(getW.name)}` : ""}, the load expected at Phase ${sel.phase} volume${getShort ? `; this box served only ${esc(fmtRps(MEASURED_GET.achievedRps))}, so most of the ${fmtNs(MEASURED_GET.ns)} is queueing` : ""}.`
+      : "";
     const budgetFig = canBudget ? figHTML("fig11", `Fig ${+secNo("budget")}.1`, "End-to-end latency — budget vs. this run", "fig11-legend",
-      `End-to-end latency by lifecycle stage. The top bar shows the Phase ${sel.phase} budget; the bottom shows this run. Network time assumes a ${fmtNsAxis(rttNs)} round trip: ${fmtNsAxis(netSendNs)} for submission and ${fmtNsAxis(rttNs)} for getTransaction. Consensus assumes ${nBlocks} × ${fmtNsAxis(blockNs)} ledger closes because a newly submitted transaction can only land in the next ledger. Hatched segments are targets or estimates; solid segments are measured.`) : "";
+      `Top: the Phase ${sel.phase} budget. Bottom: this run. Grey segments are assumed: a ${fmtNsAxis(rttNs)} network round trip and ${nBlocks} blocks × ${fmtNsAxis(blockNs)} of consensus.${getRateTxt}`) : "";
 
     // One tile per slice this work owns: what it measured, on which profile,
     // against what it was allocated. The mark judges the slice alone — the
@@ -1113,7 +1118,7 @@
       <div class="sec-head"><span class="sec-num">${secNo("goal")}</span><h2>RPC ingestion latency vs the ${sel ? `Phase ${sel.phase} goal` : "phase goal"}</h2></div>
       ${banner}
       ${figHTML("fig31", `Fig ${+secNo("goal")}.1`, "Ingestion latency p99 by workload profile", "fig31-legend",
-        `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${goalTxt}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
+        `Bars: p99 per-ledger ingestion latency (${medRuns}; linear scale). ${goalNs ? `Dashed line: the Phase ${sel.phase} ingestion target (p99 ≤ ${fmtNsAxis(goalNs)}).` : ""} ${blockNs ? `Solid line: the ${fmtNsAxis(blockNs)} block time.` : ""}`)}
       <p class="sec-intro" id="goal-readout"></p>
     </section>
 
@@ -1158,8 +1163,9 @@
     // network and consensus slices stay de-emphasized grey. A slice with no
     // measurement behind it keeps its allocation and stays hatched.
     if (canBudget) {
-      const txRunLabel = MEASURED_TX ? "sendTransaction (measured, in-RPC)" : "sendTransaction (estimate)";
-      const getRunLabel = MEASURED_GET ? "getTransaction (measured, in-RPC)" : "getTransaction (estimate)";
+      const txRunLabel = MEASURED_TX ? "sendTransaction (measured)" : "sendTransaction (estimate)";
+      const getRunLabel = MEASURED_GET
+        ? `getTransaction (measured${MEASURED_GET.fromProbe ? ` at ${fmtRps(MEASURED_GET.rps)}` : ""})` : "getTransaction (estimate)";
       const segs = (ingNs, measured, txV, getV) => [
         { color: C.de, ns: netSendNs, hatch: true },
         { color: C.s5, ns: txV, hatch: !(measured && MEASURED_TX) },
@@ -1169,21 +1175,21 @@
         { color: C.s2, ns: getV, hatch: !(measured && MEASURED_GET) },
       ];
       const tip = (ingNs, ingLabel, txV, txLabel, getV, getLabel) => [
-        { color: C.de, value: fmtNs(netSendNs), label: "network — submission request (assumed)" },
+        { color: C.de, value: fmtNs(netSendNs), label: "network, submit (assumed)" },
         { color: C.s5, value: fmtNs(txV), label: txLabel },
-        { color: C.de, value: fmtNs(blockTotal), label: `Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})` },
+        { color: C.de, value: fmtNs(blockTotal), label: `consensus, ${nBlocks} blocks × ${fmtNsAxis(blockNs)} (assumed)` },
         { color: C.s1, value: fmtNs(ingNs), label: ingLabel },
-        { color: C.de, value: fmtNs(netReadNs), label: "network — getTransaction round trip (assumed)" },
+        { color: C.de, value: fmtNs(netReadNs), label: "network, getTransaction (assumed)" },
         { color: C.s2, value: fmtNs(getV), label: getLabel },
-        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end (derived)" },
+        { value: fmtNs(e2eOf(ingNs, txV, getV)), label: "end-to-end", total: true },
       ];
       budgetChart("fig11-body", [
-        { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${goalTxt}`,
+        { label: `Phase ${sel.phase} goal`, sub: `ingestion ≤ ${fmtNsAxis(goalNs)}`,
           segs: segs(goalNs, false, sendNs, getNs),
           tip: tip(goalNs, "ingestion (target)", sendNs, "sendTransaction (allocated)", getNs, "getTransaction (allocated)") },
         { label: "This run", sub: `${disp(goalWorst)} p99`,
           segs: segs(wp99, true, txRunNs, getRunNs),
-          tip: tip(wp99, "ingestion (measured p99)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
+          tip: tip(wp99, "ingestion (measured)", txRunNs, txRunLabel, getRunNs, getRunLabel) },
       ], { budgetNs, budgetLabel: `${fmtNsAxis(budgetNs)} — E2E budget` });
       legend("fig11-legend", [
         { label: "sendTransaction", color: C.s5 },
@@ -1199,7 +1205,7 @@
         ["network — submission request", fmtNsAxis(netSendNs), fmtNsAxis(netSendNs), "assumed constant (half the round trip)"],
         ["sendTransaction", fmtNsAxis(sendNs), MEASURED_TX ? fmtNs(txRunNs) : fmtNsAxis(sendNs), MEASURED_TX ? "allocated → measured" : "estimate"],
         [`Stellar Core consensus (${nBlocks} blocks × ${fmtNsAxis(blockNs)})`, fmtNsAxis(blockTotal), fmtNsAxis(blockTotal), "consensus cadence"],
-        ["ingestion (p99)", goalTxt + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
+        ["ingestion (p99)", fmtNsAxis(goalNs) + " target", `${fmtNs(wp99)} (${disp(goalWorst)})`, "target → measured"],
         ["network — getTransaction round trip", fmtNsAxis(netReadNs), fmtNsAxis(netReadNs), "assumed constant"],
         ["getTransaction", fmtNsAxis(getNs), MEASURED_GET ? `${fmtNs(getRunNs)} (${disp(MEASURED_GET.unit)})` : fmtNsAxis(getNs), MEASURED_GET ? "allocated → measured" : "estimate"],
         ["end-to-end (derived)", fmtNs(e2eGoal), fmtNs(e2eRun), "derived"],
@@ -1221,7 +1227,7 @@
         };
       });
       goalChart("fig31-body", rows, {
-        targetNs: goalNs, targetLabel: goalNs ? `${goalTxt} — Phase ${sel.phase} ingestion target (p99)` : "",
+        targetNs: goalNs, targetLabel: goalNs ? `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` : "",
         blockNs: blockNs, blockLabel: blockNs ? `${fmtNsAxis(blockNs)} — block time` : "",
       });
       legend("fig31-legend", [
@@ -1233,7 +1239,7 @@
         units.map(u => {
           const it = ING[u].driver.ingest_total;
           const base = [disp(u), fmtNs(it.p50.m), fmtNs(it.p90.m), fmtNs(it.p99.m), fmtNs(it.max.m)];
-          if (goalNs) base.push(goalTxt, it.p99.m <= goalNs ? "✓ PASS" : "▲ MISS");
+          if (goalNs) base.push(fmtNsAxis(goalNs), it.p99.m <= goalNs ? "✓ PASS" : "▲ MISS");
           return base;
         }));
       const readout = document.getElementById("goal-readout");
@@ -1279,7 +1285,7 @@
         }).filter(Boolean);
         const reflines = [];
         if (PHASE_PICK === "end to end") {
-          if (goalNs) reflines.push({ ns: goalNs, label: `${goalTxt} — Phase ${sel.phase} ingestion target (p99)` });
+          if (goalNs) reflines.push({ ns: goalNs, label: `${fmtNsAxis(goalNs)} — Phase ${sel.phase} ingestion target (p99)` });
           if (blockNs) reflines.push({ ns: blockNs, label: `${fmtNsAxis(blockNs)} — block time`, block: true });
         }
         dotRangeChart("fig42-body", rows, { linear: true, reflines });

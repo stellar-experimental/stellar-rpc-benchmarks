@@ -54,7 +54,7 @@ The section 4.1 rows state the request each latency applies to, so the bench dri
 
 ## Family 2 — the end-to-end-budget probe
 
-getTransaction also runs at the demand-derived floors of work item 856, per dataset profile and per phase: sac 300 / 500 / 1000 rps, custom_token 200 / 400 / 600, soroswap 75 / 150 / 300.
+getTransaction also runs at the demand-derived floors of work item 856, per dataset profile and per phase (phases 1 / 2 / 3 / 3b): sac 300 / 500 / 1000 / 1000 rps, custom_token 200 / 400 / 600 / 600, soroswap 75 / 150 / 300 / 300.
 
 That leg answers for one number only: an in-RPC P99 of 10 ms. This is getTransaction's slice of the end-to-end transaction-lifecycle budget in `targets.json` `fixed_estimates`, so it measures the time inside the RPC and excludes the client's queueing and the assumed network legs. The scheduled P99 of the same cell is reported for context and is not judged: the arrival rate here is a demand estimate, not a rate the SLA states a tail for.
 

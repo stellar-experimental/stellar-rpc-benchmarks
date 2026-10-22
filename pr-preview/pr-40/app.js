@@ -1001,7 +1001,7 @@
     for (const { qt, u, tier, v, cell } of probes) {
       const r = document.createElement("tr");
       cellTd(r, tierTag(tier, C), `${endpointLabel(qt)} · ${short(u)} · ${tier}`);
-      cellTd(r, rpsTxt(v.target_rps), noteEl(v.provisional ? "(demand floor, provisional)" : "(demand floor)"));
+      cellTd(r, rpsTxt(v.target_rps), noteEl("(demand floor)"));
       const ach = cell.achieved_rps;
       const sTd = cellTd(r, ach ? rpsTxt(ach.m) : "—");
       const under = underTarget(ach, v.target_rps);
@@ -1249,9 +1249,6 @@
   // every phase feature then disappears and legacy runs render exactly as
   // before. The selected phase comes from ?phase=N, defaulting to the matched
   // phase (campaign.phase); both can be absent.
-  // provTag marks a provisional phase target (phase 3b) wherever its value is
-  // stated.
-  function provTag(p) { return p && p.provisional ? " (provisional)" : ""; }
 
   function phaseState(D) {
     const camp = D.campaign || {};
@@ -1292,7 +1289,7 @@
     let rows = "";
     rows += row("Block time", p => fmtNsAxis(p.block_time_ns));
     rows += row("End-to-end budget (externalized → client)", p => p.e2e_budget_ns ? fmtNsAxis(p.e2e_budget_ns) : "—");
-    rows += row("Ingest slice, p99 (meta available → ingested in RPC)", p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) + provTag(p) : "—");
+    rows += row("Ingest slice, p99 (meta available → ingested in RPC)", p => p.ingest_p99_target_ns ? fmtNsAxis(p.ingest_p99_target_ns) : "—");
     for (const name of (PH.targets[0].workloads || []).map(w => w.name)) {
       rows += row(esc(name), p => {
         const w = (p.workloads || []).find(x => x.name === name);
@@ -1329,7 +1326,7 @@
     const bits = units.map(u => {
       const p99 = hot[u].driver.ingest_total.p99.m;
       const ok = p99 <= t;
-      return `<strong>${esc(disp(u))}</strong> ingest p99 ${fmtNs(p99)} vs Phase ${sel.phase} target ${fmtNsAxis(t)}${provTag(sel)} <span class="${ok ? "cell-ok" : "cell-warn"}">${ok ? "✓ PASS" : "▲ MISS"}</span>`;
+      return `<strong>${esc(disp(u))}</strong> ingest p99 ${fmtNs(p99)} vs Phase ${sel.phase} target ${fmtNsAxis(t)} <span class="${ok ? "cell-ok" : "cell-warn"}">${ok ? "✓ PASS" : "▲ MISS"}</span>`;
     });
     return `<p class="sec-intro" id="ingest-target-readout">${bits.join(" · ")}</p>`;
   }
@@ -1650,7 +1647,7 @@
       const dotOpts = { groupSeparators: true };
       if (PH && PH.sel) {
         dotOpts.reflines = [{ ns: PH.sel.block_time_ns, label: `${fmtNsAxis(PH.sel.block_time_ns)} — Phase ${PH.sel.phase} block time` }];
-        if (PH.sel.ingest_p99_target_ns) dotOpts.reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)}${provTag(PH.sel)} — Phase ${PH.sel.phase} ingest target (p99)` });
+        if (PH.sel.ingest_p99_target_ns) dotOpts.reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
       }
       dotRangeChart("fig42-body", rows, dotOpts);
       const legendLanes = CH.length ? lanesFor(CH[0]) : [];
@@ -1902,8 +1899,8 @@
         <div class="banner-figure">${goalPass}<span class="of"> / ${ORDER.length}</span></div>
         <div class="banner-copy">
           <div class="lead">${goalMet
-            ? `All profiles meet the Phase ${PH.sel.phase} goal — ingest p99 within ${esc(fmtNsAxis(goalNs) + provTag(PH.sel))}. <span class="chip">✓ MEETS GOAL</span>`
-            : `${goalPass} of ${ORDER.length} profiles meet the Phase ${PH.sel.phase} goal — ingest p99 within ${esc(fmtNsAxis(goalNs) + provTag(PH.sel))}. <span class="chip warn">▲ ${ORDER.length - goalPass} MISS</span>`}</div>
+            ? `All profiles meet the Phase ${PH.sel.phase} goal — ingest p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip">✓ MEETS GOAL</span>`
+            : `${goalPass} of ${ORDER.length} profiles meet the Phase ${PH.sel.phase} goal — ingest p99 within ${esc(fmtNsAxis(goalNs))}. <span class="chip warn">▲ ${ORDER.length - goalPass} MISS</span>`}</div>
           <p id="goal-note"></p>
         </div>
       </div>` : "";
@@ -2117,9 +2114,9 @@
           const otherClause = goalPass > 0
             ? ` The other ${goalPass === 1 ? "profile clears" : goalPass + " profiles clear"} the goal.`
             : "";
-          gn.innerHTML = `${ORDER.length - goalPass === 1 ? "The miss" : "The worst miss"} is the <strong>${esc(disp(goalWorst))}</strong> profile: ingest p99 <strong>${fmtNs(w.p99.m)}</strong>, over the ${fmtNsAxis(goalNs)}${provTag(PH.sel)} Phase ${PH.sel.phase} goal (worst single ledger ${fmtNs(w.max.m)}) — an overrun in the per-ledger tail (§${+secHot}).${otherClause}`;
+          gn.innerHTML = `${ORDER.length - goalPass === 1 ? "The miss" : "The worst miss"} is the <strong>${esc(disp(goalWorst))}</strong> profile: ingest p99 <strong>${fmtNs(w.p99.m)}</strong>, over the ${fmtNsAxis(goalNs)} Phase ${PH.sel.phase} goal (worst single ledger ${fmtNs(w.max.m)}) — an overrun in the per-ledger tail (§${+secHot}).${otherClause}`;
         } else {
-          gn.innerHTML = `Every profile's ingest p99 clears the ${fmtNsAxis(goalNs)}${provTag(PH.sel)} Phase ${PH.sel.phase} goal — per-profile readout in §${+secHot}.`;
+          gn.innerHTML = `Every profile's ingest p99 clears the ${fmtNsAxis(goalNs)} Phase ${PH.sel.phase} goal — per-profile readout in §${+secHot}.`;
         }
       }
       const bn = document.getElementById("banner-note");
@@ -2236,7 +2233,7 @@
       }));
       const reflines = [];
       if (interval) reflines.push({ ns: interval, label: PH && PH.sel ? `${intervalTxt} — Phase ${PH.sel.phase} block time` : intervalMs + " ms — block interval" });
-      if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)}${provTag(PH.sel)} — Phase ${PH.sel.phase} ingest target (p99)` });
+      if (PH && PH.sel && PH.sel.ingest_p99_target_ns) reflines.push({ ns: PH.sel.ingest_p99_target_ns, label: `${fmtNsAxis(PH.sel.ingest_p99_target_ns)} — Phase ${PH.sel.phase} ingest target (p99)` });
       dotRangeChart("fig42-body", rows, { reflines, groupSeparators: true });
       const legendLanes = ORDER.length ? lanesFor(ORDER[0]) : [];
       legend("fig42-legend", [
