@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/targets"
 )
 
 // Defaults for the keys that have one, matching the bash campaign runner this
@@ -59,14 +61,18 @@ type Config struct {
 	// duration. Every query leg is open-loop: it drives a fixed arrival rate for
 	// this long rather than a fixed number of iterations.
 	QueryDuration string `toml:"query_duration"`
-	// Phase is the goal phase whose RPS floors the query legs target. 0 means
-	// unset, in which case a query campaign derives it by matching
-	// close_interval against a phase block time in docs/targets.json.
-	Phase         int       `toml:"phase"`
-	Workers       int       `toml:"workers"`
-	HotNumLedgers int       `toml:"hot_num_ledgers"`
-	PublishURI    string    `toml:"publish_uri"`
-	Datasets      []Dataset `toml:"dataset"`
+	// Phase is the goal phase whose RPS floors the query legs target: a label
+	// of the docs/targets.json phases table, `phase = 3` or `phase = "3b"`.
+	// Empty (or 0) means unset, in which case a query campaign derives it by
+	// matching close_interval against a phase block time.
+	Phase         targets.PhaseLabel `toml:"phase"`
+	Workers       int                `toml:"workers"`
+	HotNumLedgers int                `toml:"hot_num_ledgers"`
+	// Profile passes --cpuprofile and --memprofile to every timed leg, so each
+	// leg dir holds Go CPU and heap profiles of the binary under test.
+	Profile    bool      `toml:"profile"`
+	PublishURI string    `toml:"publish_uri"`
+	Datasets   []Dataset `toml:"dataset"`
 }
 
 // Dataset is one [[dataset]] table: a named pack tree and the chunks of it
@@ -94,6 +100,7 @@ func defaults() Config {
 		Runs:          DefaultRuns,
 		QueryDuration: DefaultQueryDuration,
 		Workers:       DefaultWorkers,
+		Profile:       true,
 	}
 }
 
@@ -176,9 +183,6 @@ func (c *Config) validate() error {
 	if err := validateQueryDuration(c.QueryDuration); err != nil {
 		return err
 	}
-	if c.Phase < 0 || c.Phase > 3 {
-		return fmt.Errorf("config: phase must be 1|2|3, or 0 to derive it from close_interval (got '%d')", c.Phase)
-	}
 	if c.PublishURI != "" && !strings.HasPrefix(c.PublishURI, "gs://") && !strings.HasPrefix(c.PublishURI, "s3://") {
 		return fmt.Errorf("config: publish_uri must be a gs:// or s3:// URI (got '%s')", c.PublishURI)
 	}
@@ -242,6 +246,11 @@ func validateQueryDuration(s string) error {
 func (d *Dataset) validate(seen map[string]bool) error {
 	if !reName.MatchString(d.Name) {
 		return fmt.Errorf("config: dataset name must match [A-Za-z0-9._-]+ (got '%s')", d.Name)
+	}
+	// The name is a path segment under golden/, scratch/ and hot/, where . and
+	// .. would resolve to the parent directories the plan pre-cleans.
+	if d.Name == "." || d.Name == ".." {
+		return fmt.Errorf("config: dataset name must not be '.' or '..' (got '%s')", d.Name)
 	}
 	if seen[d.Name] {
 		return fmt.Errorf("config: duplicate dataset name '%s'", d.Name)

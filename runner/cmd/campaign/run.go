@@ -66,26 +66,28 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	run.Notef(stdout, "dry run: printing commands only — nothing is built, downloaded, or executed")
 	run.Notef(stdout, "source: %s @ %s → %s (the build clone is not touched)", cfg.Repo, cfg.Ref, src)
 	if cfg.Query {
-		run.Notef(stdout, "query load: phase %d floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
+		run.Notef(stdout, "query load: phase %s floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
 	}
 
 	in := plan.Inputs{
-		BenchRoot:     benchRoot,
-		Stamp:         time.Now().UTC().Format(stampLayout),
-		QueryRates:    ql.rates,
-		QueryDuration: queryDuration(cfg),
+		BenchRoot:         benchRoot,
+		Stamp:             time.Now().UTC().Format(stampLayout),
+		QueryRates:        ql.rates,
+		QueryDuration:     queryDuration(cfg),
+		QueryLedgersLimit: ql.ledgersLimit,
 	}
 	builtCommit, resolveErr := run.ResolveRef(src, cfg.Ref)
 	if resolveErr == nil {
 		in.BuiltCommit, in.Sha8 = builtCommit, builtCommit[:8]
+		probeShape(cfg, src, builtCommit, &in, stdout)
 	} else {
 		// A dry run fetches nothing, so the ref may not resolve locally yet:
 		// plan with the ref itself and a placeholder sha in derived paths. The
 		// placeholder is 8 hex digits, or a --resume would reject the run ids
 		// derived from it as malformed.
 		in.BuiltCommit, in.Sha8 = cfg.Ref, placeholderSha
-		run.Notef(stdout, "dry run: ref '%s' not resolvable without the clone — using placeholder sha '%s' in paths",
-			cfg.Ref, placeholderSha)
+		run.Notef(stdout, "dry run: ref '%s' not resolvable without the clone — using placeholder sha '%s' in paths, "+
+			"%s", cfg.Ref, placeholderSha, assumeCurrentShape(cfg, &in))
 	}
 
 	var resume *bundle.Resume
@@ -127,6 +129,71 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 	return 0
 }
 
+// probeShape fills in's commit shape for the commands that only print a plan:
+// run.DetectBenchCLI, run.DetectBuildTarget, run.DetectEmptyColdOutDir, and
+// run.DetectQueryCLI for a query campaign. A failed probe, a missing query
+// bench, or a config the shape cannot run is a note, and the plan falls back
+// to the default shape.
+func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout io.Writer) {
+	cli, err := run.DetectBenchCLI(src, commit)
+	if err != nil {
+		run.Notef(stdout, "%s — planning the %s CLI", err, plan.BenchCLIRoot)
+		return
+	}
+	in.BenchCLI = cli
+	if target, static, err := run.DetectBuildTarget(src, commit); err != nil {
+		run.Notef(stdout, "%s — planning %s", err, plan.BuildRPCV2)
+	} else {
+		in.BuildTarget, in.StaticLibs = target, static
+	}
+	if empty, err := run.DetectEmptyColdOutDir(src, commit); err != nil {
+		run.Notef(stdout, "%s", err)
+	} else {
+		in.EmptyColdOutDir = empty
+	}
+	if cfg.Query {
+		switch shape, ok, err := run.DetectQueryCLI(src, commit, cli); {
+		case err != nil:
+			run.Notef(stdout, "%s", err)
+		case !ok:
+			run.Notef(stdout, "%s", noQueryCLI(commit, cli))
+		default:
+			in.QueryCLI = shape
+		}
+	}
+	if err := plan.Check(cfg, *in); err != nil {
+		run.Notef(stdout, "%s", err)
+	}
+}
+
+// assumeCurrentShape fills in with the shape of current stellar-rpc commits,
+// for a plan whose ref the build clone cannot resolve, and returns the words
+// that name it for the note. A config that shape cannot run is named too.
+func assumeCurrentShape(cfg *config.Config, in *plan.Inputs) string {
+	in.BenchCLI, in.QueryCLI = plan.BenchCLIRoot, plan.QueryCLIDataDir
+	in.BuildTarget, in.StaticLibs, in.EmptyColdOutDir = plan.BuildStellarRPC, true, true
+	assumed := fmt.Sprintf("assuming the current shapes: the %s CLI (%s), the %s query CLI, and make %s "+
+		"with static libs (--enable-rpcv2)", in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget)
+	if err := plan.Check(cfg, *in); err != nil {
+		assumed += "; " + err.Error()
+	}
+	return assumed
+}
+
+// noQueryCLI is the message for a query campaign whose commit has no query bench.
+func noQueryCLI(commit string, cli plan.BenchCLI) string {
+	return fmt.Sprintf("commit %s has no query bench (%s CLI: %s); query = true needs a ref that has one",
+		commit, cli, benchCLIDescription(cli))
+}
+
+// benchCLIDescription names the commands a CLI shape stands for.
+func benchCLIDescription(cli plan.BenchCLI) string {
+	if cli == plan.BenchCLILegacy {
+		return "bench-ingest/bench-query"
+	}
+	return "bench ingest/bench query"
+}
+
 // realRun is the campaign itself.
 func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir string,
 	failFast, noPreflight bool, stdout, stderr io.Writer) int {
@@ -156,6 +223,37 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	}
 	sha8 := builtCommit[:8]
 	binPath := filepath.Join(benchRoot, "bin", "stellar-rpc-"+sha8)
+	benchCLI, err := run.DetectBenchCLI(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	run.Notef(out, "bench CLI: %s (%s)", benchCLI, benchCLIDescription(benchCLI))
+	buildTarget, staticLibs, err := run.DetectBuildTarget(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	run.Notef(out, "build target: make %s (static libs: %t)", buildTarget, staticLibs)
+	emptyColdOutDir, err := run.DetectEmptyColdOutDir(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	var queryCLI plan.QueryCLI
+	if cfg.Query {
+		shape, ok, err := run.DetectQueryCLI(src, builtCommit, benchCLI)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %s\n", err)
+			return 1
+		}
+		if !ok {
+			fmt.Fprintf(stderr, "error: %s\n", noQueryCLI(builtCommit, benchCLI))
+			return 1
+		}
+		queryCLI = shape
+		run.Notef(out, "query CLI: %s", queryCLI)
+	}
 
 	if !noPreflight {
 		// Everything this campaign needs and does not have, named now rather
@@ -189,14 +287,25 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		}
 	}
 
-	p := plan.Build(cfg, plan.Inputs{
-		BenchRoot:     benchRoot,
-		BuiltCommit:   builtCommit,
-		Sha8:          sha8,
-		Stamp:         stamp,
-		QueryRates:    ql.rates,
-		QueryDuration: queryDuration(cfg),
-	})
+	in := plan.Inputs{
+		BenchRoot:         benchRoot,
+		BuiltCommit:       builtCommit,
+		Sha8:              sha8,
+		Stamp:             stamp,
+		QueryRates:        ql.rates,
+		QueryDuration:     queryDuration(cfg),
+		QueryLedgersLimit: ql.ledgersLimit,
+		BenchCLI:          benchCLI,
+		QueryCLI:          queryCLI,
+		BuildTarget:       buildTarget,
+		StaticLibs:        staticLibs,
+		EmptyColdOutDir:   emptyColdOutDir,
+	}
+	if err := plan.Check(cfg, in); err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	p := plan.Build(cfg, in)
 	res := p.ResultsDir
 	if resume != nil && filepath.Clean(res) != filepath.Clean(resume.Dir) {
 		fmt.Fprintf(stderr, "error: --resume: '%s' is not the bundle this config and commit produce (%s)\n",
@@ -240,21 +349,22 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	if cfg.Query {
 		// Which floors the query legs were paced at is the first thing anyone
 		// reading this bundle six months later will want to know.
-		run.Notef(out, "query load: phase %d floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
+		run.Notef(out, "query load: phase %s floors × the targets.json ladder, %s per leg", ql.phase, cfg.QueryDuration)
 	}
 
 	hostname, _ := os.Hostname()
 	meta := bundle.MetadataInput{
-		Cfg:         cfg,
-		ConfigFile:  configFile,
-		RunID:       p.RunID,
-		BuiltCommit: builtCommit,
-		QueryPhase:  ql.phase,
-		Resumed:     resume != nil,
-		Hardware:    bundle.CollectHardware(bundle.DefaultIMDSBase),
-		Hostname:    hostname,
-		StartedAt:   startedAt,
-		Status:      bundle.StatusRunning,
+		Cfg:               cfg,
+		ConfigFile:        configFile,
+		RunID:             p.RunID,
+		BuiltCommit:       builtCommit,
+		QueryPhase:        ql.phase,
+		QueryLedgersLimit: p.QueryLedgersLimit,
+		Resumed:           resume != nil,
+		Hardware:          bundle.CollectHardware(bundle.DefaultIMDSBase),
+		Hostname:          hostname,
+		StartedAt:         startedAt,
+		Status:            bundle.StatusRunning,
 	}
 	if resume != nil && resume.StartedAt == "" {
 		run.Notef(out, "resume: no started_at in %s/%s — recording this session's start", resume.RunID, bundle.MetadataName)

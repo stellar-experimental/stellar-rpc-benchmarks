@@ -94,6 +94,14 @@ func Run(cfg *config.Config, benchRoot, binPath string, d Deps) Result {
 		if _, err := d.LookPath("cargo"); err != nil && !isExecutable(cargoBin()) {
 			res.failf("cargo not found in PATH or %s — building ref '%s' needs the Rust toolchain", cargoBin(), cfg.Ref)
 		}
+		// A warning, not a failure: only a ref that links RocksDB statically
+		// (stellar-rpc#1123 on) needs them, and preflight does not know the ref.
+		for _, tool := range []string{"cmake", "ninja"} {
+			if _, err := d.LookPath(tool); err != nil {
+				res.warnf("%s not found in PATH — a ref that links RocksDB statically builds RocksDB and zstd "+
+					"from source with cmake and ninja, and its install scripts apt-get them with sudo when missing", tool)
+			}
+		}
 	}
 
 	// Each cloud CLI is wanted by the datasets that fetch through it and by a

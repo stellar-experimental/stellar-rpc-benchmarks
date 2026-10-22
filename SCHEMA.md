@@ -41,14 +41,14 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
   "build": { "commit": "<sha>", "branch": "<name>", "go": "…", "rust": "…",
              "version": "v20.3.1-412-g…", "build_timestamp": "…" },
              // commit/branch/go/rust from the machine-metadata `repo:` line; when a
-             // campaign bundle carries invocation.json, its binary.{commitHash,
+             // campaign bundle carries run.json (or the older invocation.json), its binary.{commitHash,
              // branch,version,buildTimestamp} override commit/branch and add
              // version/build_timestamp (the structured binary identity wins).
   "hardware": {                            // optional; verbatim from metadata.json (campaign bundles)
     "instance_type": "m6id.2xlarge", "instance_id": "i-…",  // instance_* omitted off EC2
     "uname": "Linux 6.8.0-1015-aws x86_64", "cpus": 8, "mem_total_kb": 32000000  // mem_total_kb omitted on non-Linux
   },
-  "hostname": "user-dev-063a",             // optional; metadata.json (fallback: invocation.json)
+  "hostname": "user-dev-063a",             // optional; metadata.json (fallback: run.json, else invocation.json)
   "dataset": {
     "kind": "pubnet" | "synthetic",
     "description": "<human sentence>",
@@ -60,7 +60,16 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
       // pubnet extras:    "seq_start": int, "seq_end": int   (chunk*10000+2 … +9999)
       // synthetic extras: "model": "SAC transfer", "tps": 10000, "tx_per_ledger": 6000,
       //                   "pack": "19.5 GiB", "source_chunks": "1"   (from --unit-facts sidecar)
-    } }
+    } },
+    "sets": { "<dataset>": "<set>" | null }  // optional; bundles with a metadata.json only. A bundle
+                                           //   without one predates campaigns and reads legacy_set.
+                                           //   The <set> segment of each manifest dataset's location
+                                           //   (…/synthetic-ledgers/<set>/<profile>/…), null when the
+                                           //   location names none. summary.html reads a profile's
+                                           //   sizes from docs/dataset-sizes.json sets[<set>]; a run
+                                           //   without this key (converted before it existed) reads
+                                           //   that file's legacy_set; a null or unknown set shows
+                                           //   no sizes — never another set's same-name profile.
   },
   "campaign": {
     "reps": 5,
@@ -72,12 +81,13 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
     "close_interval_ns": 2000000000,       // optional; ledger close schedule in ns, 0 = unpaced.
                                            //   From metadata.json campaign.close_interval (a Go
                                            //   duration, e.g. "2s"/"600ms"/"0"), else the hot
-                                           //   invocation.json --close-interval flag. Absent when
+                                           //   run.json/invocation.json --close-interval flag. Absent when
                                            //   no manifest records it (legacy bundles).
     "phase": 1,                            // optional; campaign layout only. The campaign's GOAL
-                                           //   phase: the phase whose block time equals
-                                           //   close_interval_ns exactly (2 s → 1, 1 s → 2,
-                                           //   600 ms → 3), else the manifest's
+                                           //   phase, a label: a number for phases 1-3, a
+                                           //   string after ("3b"). The phase whose block time
+                                           //   equals close_interval_ns exactly (2 s → 1,
+                                           //   1 s → 2, 600 ms → 3, 900 ms → "3b"), else the manifest's
                                            //   campaign.query_phase when it names a phase (an
                                            //   unpaced query campaign has no pace to read it
                                            //   from). Absent when neither says. The pace wins if
@@ -86,7 +96,7 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   `checks` is NOT derived from this: block_keepup
                                            //   comes from close_interval_ns alone, so an unpaced
                                            //   run with a phase still earns no keep-up check.
-    "phase_targets": [ { … }, … ],         // campaign layout only; the full three-phase target
+    "phase_targets": [ { … }, … ],         // campaign layout only; the full phases target
                                            //   table, copied verbatim at convert time — see
                                            //   "Phase 1/2/3 performance targets" below.
     "query_load": { … },                   // campaign layout only, and only when the run carries
@@ -97,6 +107,18 @@ query `events` rows, `n_items` may vary — keep the per-run array as `items_r`,
                                            //   demand floors per profile × phase and its in-RPC
                                            //   budget), and the derivation inputs (aggregate
                                            //   rate and mix) — see "queries" below.
+    "query_cli": "tiered" | "data-dir",    // optional; present when the run has open-loop query
+                                           //   cells: the bench that wrote them. tiered = `bench
+                                           //   query cold|hot` (reads through the read view);
+                                           //   data-dir = `bench query --data-dir`
+                                           //   (stellar-rpc#1070; through the daemon's JSON-RPC
+                                           //   handlers). "mixed" when the legs disagree. Absent
+                                           //   on runs converted before it existed (all tiered).
+    "query_ledgers_limit": 1,              // optional; the --ledgers-limit of the data-dir getLedgers
+                                           //   legs (run.json flags), the page size their cells
+                                           //   measured. The SLA shape is query_load.derivation.
+                                           //   ledgers_span; the site names the page size when the two
+                                           //   differ. Absent on tiered runs.
     "name": "phase1-synthetic-minspec",    // optional; metadata.json campaign.name
     "config_file": "…​.toml",              // optional; metadata.json campaign.config_file
     "config": { … }                        // optional; remaining metadata.json campaign knobs,
@@ -171,13 +193,14 @@ The converter matches a campaign run's phase from `campaign.close_interval_ns`:
 exact. Any other paced value gives a pace-only run with no phase. An unpaced run (0 or
 absent) gets no phase and no keep-up check.
 
-The converter copies the full three-phase table into `campaign.phase_targets` of every
+The converter copies the full phases table into `campaign.phase_targets` of every
 campaign-layout run. That baked copy pins each run to the targets in force when it was
 converted and lets the viewer degrade gracefully offline; the live viewer/model prefer
 `targets.json` and use the baked copy only as a fallback. Each entry has:
 
 ```jsonc
-{ "phase": 1,
+{ "phase": 1,                        // the phase label: a number for 1-3, a string after ("3b");
+                                      //   compare labels as strings, never compute with them
   "block_time_ns": 2000000000,        // the phase block time; also the keep-up budget
   "e2e_budget_ns": 5000000000,        // end-to-end budget (externalized → client);
                                       //   context only — this benchmark does not measure it
@@ -231,13 +254,14 @@ renderers apply; anything unrecognized renders generically.
 ### Peak RSS
 
 `peak_rss_bytes` is the process **peak resident-set size in BYTES** — a memory
-high-water-mark gauge, not a latency distribution. The `driver.csv` carries it as
-a `peak_rss_bytes` row whose gauge value is replicated across the `*_ns` columns;
-the converter reads that value and stores it as a plain `V` (median/min/max/`r`
+high-water-mark gauge, not a latency distribution. A leg dir's `run.json`
+(stellar-rpc#1066) carries it as `peakRssBytes`; older bundles carry it in
+`driver.csv` as a `peak_rss_bytes` row whose gauge value is replicated across the
+`*_ns` columns. The converter reads `run.json` first, else that row, and stores it as a plain `V` (median/min/max/`r`
 across the reps) that is a **sibling of `driver`**, not one of its `StageAgg`
 rows — the ns column names do not apply to a byte gauge, so it is deliberately not
-shoehorned into `StageAgg`. Present iff the `peak_rss_bytes` row appears in every
-rep's `driver.csv`; omitted entirely otherwise (never zero-filled). Compare it
+shoehorned into `StageAgg`. Present iff every rep has a value from one of the
+two sources; omitted entirely otherwise (never zero-filled). Compare it
 against the box RAM (`hardware.mem_total_kb`, or the parsed `machine.mem`) to read
 memory headroom. The viewer surfaces it in the synthetic report's dataset section
 (peak RSS per profile, cold and hot, against the box's RAM ceiling); a run without
@@ -298,7 +322,8 @@ converter warns.
     },
     "verdict_e2e": {                      // txhash ONLY; a DIFFERENT requirement at a DIFFERENT rate
       "rate": "r1000",                    // the cell at this profile and phase's demand-derived floor
-      "target_rps": 1000.0,               // campaign.query_load.e2e_probe.floors_rps.<profile>[phase−1]
+      "target_rps": 1000.0,               // campaign.query_load.e2e_probe.floors_rps.<profile>, at
+                                          //   the phase's position in the phases table
       "achieved_rps_m": 999.998,          // that cell's achieved_rps median (absent if unmeasured)
       "p99_ns": 15000000,                 // that cell's SCHEDULED p99 median — CONTEXT, never judged
       "in_rpc": { "p99_ns": 5000000, "threshold_ns": 10000000, "pass": true },  // the only judged number
@@ -307,7 +332,10 @@ converter warns.
   },
   "setup": { "<stage>": { …V of total_ns, "n_items": int } }   // driver rows belonging to no cell
                                           //   (open, evict, peak_rss_bytes) — i.e. matching neither
-                                          //   *_c<W> nor *_r<rate>{,_millirps,_lag,_shed}
+                                          //   *_c<W> nor *_r<rate>{,_millirps,_lag,_shed}. In an
+                                          //   open-loop cell, open is the first leg's, evict sums
+                                          //   every leg and rate of a rep, and peak_rss_bytes is the
+                                          //   highest leg of a rep (conversions with query_cli).
 }}}
 
 "golden": { "<unit>": { "wall_ns": int } }   // golden-download-<unit>/driver.csv chunk_wall total_ns (single run)
@@ -345,7 +373,7 @@ rather than one number for the run.
 
 `verdict_e2e` is the end-to-end-budget probe, and only `txhash` has one. The judged cell
 is the one paced at the demand-derived floor for this profile and phase
-(`query_load.e2e_probe.floors_rps.<profile>[phase−1]`), and the only judged number is
+(`query_load.e2e_probe.floors_rps.<profile>`, at the phase's position in the phases table), and the only judged number is
 `in_rpc.p99_ns` against the 10 ms slice that getTransaction owns in the transaction
 lifecycle. The object's `p99_ns` is the scheduled p99 of the same cell, carried as
 context: it includes the client's queueing and the assumed network model, neither of
@@ -427,6 +455,15 @@ The converter auto-detects the input bundle layout from its subdirectory names:
   each holding `<qtype>.csv` + its own `driver.csv` — where the closed-loop generation put
   every type's CSV in a single `query-{cold,hot}-<unit>-run<R>` dir. The converter picks
   the path per (tier, unit) from the dir names, so a bundle of either generation converts.
+  A leg of `bench query --data-dir` (stellar-rpc#1070) holds `latency.csv`,
+  `scenarios.csv` and `bench.txt` in place of `<qtype>.csv` and `driver.csv`; the
+  converter maps them, per leg dir, onto the same rows: `latency_from_due`/`all` →
+  `total_r<rate>`, `latency`/`all` → `service_r<rate>`, `start_delay`/`all` → the
+  `_lag` row, and from `scenarios.csv` `elapsed_ns` → the wall row, `achieved_rps` →
+  `_millirps`, `dropped` → `_shed`, and the summed `page_cache_evict_ns` → setup
+  `evict`. Setup `open` is run.json's `setupNs.storeOpen`. It warns when run.json's
+  `settings.tier` disagrees with the dir name, or a cold leg's
+  `settings.pageCacheEviction` is not `requested`.
 
 Every bundle also carries a free-text `*machine-metadata*.txt` at the root (parsed into
 `machine`). A campaign bundle additionally carries **JSON manifests** — all optional and
@@ -455,6 +492,10 @@ additive, so manifest-less bundles convert unchanged:
   to decide what a `--resume` could skip — `invocation.json` is written by the process
   being measured, so a killed process leaves none. Runner-owned and additive; **the
   converter ignores it today**.
+- **`host.csv`** in each timed `--out` dir (Linux runs only) — the runner's host CPU,
+  memory and per-device disk samples, every 5 s while the leg ran (columns in
+  `runner/README.md` § Campaign bundle layout). Runner-owned and additive; **the converter
+  ignores it**, and skips it when it globs a leg dir's `*.csv`.
 - **`invocation.json`** in each per-invocation `--out` dir (`schemaVersion` 1, camelCase
   keys — written by the four bench subcommands; stellar-rpc's `invocation.go` is the
   producer, merged as stellar-rpc#907). Source of truth for binary identity

@@ -240,9 +240,10 @@ func TestSuiteOrdering(t *testing.T) {
 	suites := []string{"dataset", "ingest-cold", "ingest-hot", "query-cold", "query-hot"}
 	var blocks []string
 	for _, id := range stepIDs(p) {
-		label := id
+		// A cell's cold store cleanup closes that cell's cold query legs.
+		label := strings.Replace(id, "cleanup-cold-", "query-cold-", 1)
 		for _, s := range suites {
-			if strings.HasPrefix(id, s+"-") {
+			if strings.HasPrefix(label, s+"-") {
 				label = s
 				break
 			}
@@ -356,6 +357,26 @@ func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
 	p := buildGolden(t)
 	seen, cleaners := 0, 0
 	for _, s := range p.Steps {
+		if strings.HasPrefix(s.ID, "cleanup-cold-") {
+			cleaners++
+			cell := strings.TrimPrefix(s.ID, "cleanup-cold-")
+			i := strings.LastIndex(cell, "-c")
+			if want := []string{"/bench/scratch/" + cell[:i] + "/" + cell[i+2:]}; s.Kind != KindCleanup || !slices.Equal(s.PostClean, want) {
+				t.Errorf("%s kind %q post_clean = %v, want a cleanup of %v", s.ID, s.Kind, s.PostClean, want)
+			}
+			// The store goes only once every leg that reads it, every type of
+			// every rep, has succeeded.
+			var want []string
+			for rep := 1; rep <= 2; rep++ {
+				for _, qt := range queryTypes {
+					want = append(want, fmt.Sprintf("query-cold-%s-%s-run%d", cell, qt, rep))
+				}
+			}
+			if !slices.Equal(s.Needs, want) {
+				t.Errorf("%s needs %v, want %v", s.ID, s.Needs, want)
+			}
+			continue
+		}
 		if strings.HasPrefix(s.ID, "ingest-cold-") {
 			if s.PostClean != nil {
 				t.Errorf("%s post_clean = %v, want none — the cold query suite reads that store", s.ID, s.PostClean)
@@ -368,9 +389,7 @@ func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
 		seen++
 		// runs = 2, so every rep — not just rep 2 — waits on rep 2. The ingest
 		// legs are per cell, not per query type, so the type drops off the id.
-		rest := strings.TrimPrefix(s.ID, "query-cold-")
-		cell, rep, _ := strings.Cut(rest, "-run")
-		qtype := cell[strings.LastIndex(cell, "-")+1:]
+		cell, _, _ := strings.Cut(strings.TrimPrefix(s.ID, "query-cold-"), "-run")
 		cell = cell[:strings.LastIndex(cell, "-")]
 		for _, want := range []string{"build", "ingest-cold-" + cell + "-run2"} {
 			if !slices.Contains(s.Needs, want) {
@@ -387,22 +406,15 @@ func TestColdQueryReadsTheCampaignsColdStore(t *testing.T) {
 		if slices.ContainsFunc(s.Argv[0], func(a string) bool { return strings.HasPrefix(a, "--cold-dir=/bench/golden/") }) {
 			t.Errorf("%s argv = %v, want no --cold-dir under the golden dataset root", s.ID, s.Argv[0])
 		}
-		last := rep == "2" && qtype == queryTypes[len(queryTypes)-1]
-		switch {
-		case last:
-			cleaners++
-			if want := []string{cold}; !slices.Equal(s.PostClean, want) {
-				t.Errorf("%s post_clean = %v, want %v — the last reader frees the store", s.ID, s.PostClean, want)
-			}
-		case s.PostClean != nil:
-			t.Errorf("%s post_clean = %v, want none — later legs still read that store", s.ID, s.PostClean)
+		if s.PostClean != nil {
+			t.Errorf("%s post_clean = %v, want none — the cell's cleanup step frees the store", s.ID, s.PostClean)
 		}
 	}
 	if seen != 32 { // 2 datasets x 2 chunks x 2 reps x 4 query types
 		t.Errorf("found %d query-cold steps, want 32", seen)
 	}
 	if cleaners != 4 { // one per cell: 2 datasets x 2 chunks
-		t.Errorf("%d cold query legs post-clean, want 4 — one per cell", cleaners)
+		t.Errorf("%d cold store cleanups, want 4 — one per cell", cleaners)
 	}
 }
 
@@ -554,6 +566,53 @@ chunks = [4]
 	if !slices.Contains(ds.Argv[0], "--cold-out-dir=/bench/golden/mainnet.partial") {
 		t.Errorf("argv = %v, want it to materialize into the .partial root", ds.Argv[0])
 	}
+	// A resumed campaign re-runs the backfill into the same bundle, and the
+	// bench CLI refuses a non-empty --out, so the chunk's out dir is wiped too.
+	out := "/bench/results/n-deadbeef-20260101T000000Z/golden-mainnet-c4"
+	if !slices.Contains(ds.Argv[0], "--out="+out) || !slices.Contains(ds.PreClean, out) {
+		t.Errorf("argv = %v, pre_clean = %v; want --out=%s in both", ds.Argv[0], ds.PreClean, out)
+	}
+}
+
+// TestBenchCLIShapes checks that every bench leg spells its command in the
+// plan's CLI shape: `bench ingest|query <tier>` by default, and
+// `bench-ingest|bench-query <tier>` for a legacy build.
+func TestBenchCLIShapes(t *testing.T) {
+	cfg, err := config.Load("testdata/campaign.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		cli     BenchCLI
+		want    BenchCLI
+		command func(group, tier string) []string
+	}{
+		{"", BenchCLIRoot, func(g, tr string) []string { return []string{"bench", g, tr} }},
+		{BenchCLIRoot, BenchCLIRoot, func(g, tr string) []string { return []string{"bench", g, tr} }},
+		{BenchCLILegacy, BenchCLILegacy, func(g, tr string) []string { return []string{"bench-" + g, tr} }},
+	} {
+		in := goldenInputs()
+		in.BenchCLI = tc.cli
+		p := Build(cfg, in)
+		if p.BenchCLI != tc.want {
+			t.Errorf("BenchCLI %q: plan records %q, want %q", tc.cli, p.BenchCLI, tc.want)
+		}
+		legs := 0
+		for _, s := range p.Steps {
+			if s.Kind != KindLeg {
+				continue
+			}
+			legs++
+			parts := strings.SplitN(s.ID, "-", 3) // ingest-cold-..., query-hot-...
+			want := tc.command(parts[0], parts[1])
+			if got := s.Argv[0][1 : 1+len(want)]; !slices.Equal(got, want) {
+				t.Errorf("BenchCLI %q: %s argv = %v, want it to start %v", tc.cli, s.ID, s.Argv[0], want)
+			}
+		}
+		if legs == 0 {
+			t.Fatalf("BenchCLI %q: the golden config planned no legs", tc.cli)
+		}
+	}
 }
 
 func TestFixtureStepGeneratesThenFreezes(t *testing.T) {
@@ -609,7 +668,8 @@ kind = "bsb-s3"
 location = "s3://bucket/prefix"
 chunks = [4]
 `), goldenInputs())
-	want = []string{"/bench/golden/mainnet", "/bench/golden/mainnet.partial"}
+	want = []string{"/bench/golden/mainnet", "/bench/golden/mainnet.partial",
+		"/bench/results/n-deadbeef-20260101T000000Z/golden-mainnet-c4"}
 	if got := stepByID(t, bsb, "dataset-mainnet").PreClean; !slices.Equal(got, want) {
 		t.Errorf("bsb-s3 pre_clean = %v, want %v — a cold backfill cannot resume", got, want)
 	}
@@ -696,11 +756,12 @@ chunks = [4]
 	got := out.String()
 	for _, want := range []string{
 		"== note: query = true with ingest = cold leaves no hot DB",
-		"== build\n  $ git -C /bench/src -c advice.detachedHead=false checkout -q --detach deadbeefcafebabefeedface1234567890abcdef\n",
-		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench-ingest cold",
+		"== build\n  $ sh -c for lib in ",
+		"  $ git -C /bench/src -c advice.detachedHead=false checkout -q --detach deadbeefcafebabefeedface1234567890abcdef\n",
+		"  $ env AWS_EC2_METADATA_DISABLED=true /bench/bin/stellar-rpc-deadbeef bench ingest cold",
 		"== ingest-cold-mainnet-c4-run1\n  $ rm -rf /bench/scratch/mainnet/4\n",
 		// The whole pre_clean list on one line, as the executor wipes it.
-		"== dataset-mainnet\n  $ rm -rf /bench/golden/mainnet /bench/golden/mainnet.partial\n",
+		"== dataset-mainnet\n  $ rm -rf /bench/golden/mainnet /bench/golden/mainnet.partial /bench/results/n-deadbeef-20260101T000000Z/golden-mainnet-c4\n",
 		"  $ mv /bench/golden/mainnet.partial /bench/golden/mainnet\n",
 		"  $ campaign publish /bench/results/n-deadbeef-20260101T000000Z gs://bucket/results\n",
 	} {
@@ -751,5 +812,230 @@ func TestPrintDatasetChoreography(t *testing.T) {
 		"  $ mv /bench/golden/packs.partial /bench/golden/packs\n"
 	if !strings.Contains(s3Out.String(), want) {
 		t.Errorf("Print output missing %q, got:\n%s", want, s3Out.String())
+	}
+}
+
+// singleBinaryInputs are the golden inputs for a commit with the data-dir query
+// bench and the one static stellar-rpc binary.
+func singleBinaryInputs() Inputs {
+	in := goldenInputs()
+	in.QueryCLI = QueryCLIDataDir
+	in.BuildTarget = BuildStellarRPC
+	in.StaticLibs = true
+	in.EmptyColdOutDir = true
+	return in
+}
+
+// TestBuildTargets checks the build step of each Makefile shape: the target,
+// the static library homes, the binary the target writes, and the shared
+// library check that a shared build runs before make.
+func TestBuildTargets(t *testing.T) {
+	cfg := load(t, fmt.Sprintf(hotConfig, 0))
+	for _, tc := range []struct {
+		name   string
+		target BuildTarget
+		static bool
+		want   BuildTarget
+		make   []string
+		binary string
+	}{
+		{"default", "", false, BuildRPCV2, []string{"make", "-C", "/bench/src", "build-rpc-v2"}, "/bench/src/stellar-rpc-v2"},
+		{"shared build-stellar-rpc (c48a55c6)", BuildStellarRPC, false, BuildStellarRPC,
+			[]string{"make", "-C", "/bench/src", "build-stellar-rpc"}, "/bench/src/stellar-rpc"},
+		{"static build-stellar-rpc", BuildStellarRPC, true, BuildStellarRPC, []string{"make", "-C", "/bench/src", "build-stellar-rpc",
+			"ZSTD_HOME=$(HOME)/.zstd-static", "ROCKSDB_HOME=$(HOME)/.rocksdb-static"}, "/bench/src/stellar-rpc"},
+	} {
+		in := goldenInputs()
+		in.BuildTarget, in.StaticLibs = tc.target, tc.static
+		p := Build(cfg, in)
+		if p.BuildTarget != tc.want || p.StaticLibs != tc.static {
+			t.Errorf("%s: plan records %q, static %t; want %q, %t", tc.name, p.BuildTarget, p.StaticLibs, tc.want, tc.static)
+		}
+		argv := stepByID(t, p, "build").Argv
+		shared := argv[0][0] == "sh"
+		if shared == tc.static {
+			t.Errorf("%s: first build command = %v, want the shared library check only for a shared build", tc.name, argv[0])
+		}
+		if shared {
+			if !strings.Contains(argv[0][2], "SRC_REF="+in.BuiltCommit) {
+				t.Errorf("%s: shared library check = %q, want it to name SRC_REF=%s", tc.name, argv[0][2], in.BuiltCommit)
+			}
+			argv = argv[1:]
+		}
+		if !slices.Equal(argv[2], tc.make) {
+			t.Errorf("%s: make = %v, want %v", tc.name, argv[2], tc.make)
+		}
+		if want := []string{"mv", tc.binary, p.Bin}; !slices.Equal(argv[3], want) {
+			t.Errorf("%s: mv = %v, want %v", tc.name, argv[3], want)
+		}
+		hasFlag := slices.Contains(stepByID(t, p, "ingest-cold-ds-c7-run1").Argv[0], "--enable-rpcv2")
+		if hasFlag != tc.static {
+			t.Errorf("%s: ingest argv has --enable-rpcv2 = %t, want %t", tc.name, hasFlag, tc.static)
+		}
+	}
+}
+
+// TestSingleBinaryLegsEnableRPCv2 checks that every bench leg of the one
+// stellar-rpc binary selects rpcv2, which that binary runs only on request.
+func TestSingleBinaryLegsEnableRPCv2(t *testing.T) {
+	p := Build(load(t, fmt.Sprintf(hotConfig, 0)), singleBinaryInputs())
+	legs := 0
+	for _, s := range p.Steps {
+		if s.Kind != KindLeg {
+			continue
+		}
+		legs++
+		if want := []string{p.Bin, "--enable-rpcv2", "bench"}; !slices.Equal(s.Argv[0][:3], want) {
+			t.Errorf("%s argv = %v, want it to start %v", s.ID, s.Argv[0], want)
+		}
+	}
+	if legs == 0 {
+		t.Fatal("the config planned no legs")
+	}
+}
+
+// TestDataDirQueryLegs checks the query legs of the data-dir shape: each reads
+// the ingest output of its tier, a cold leg evicts the page cache, a hot leg
+// warms up, and the tiered flags are gone.
+func TestDataDirQueryLegs(t *testing.T) {
+	p := Build(load(t, fmt.Sprintf(hotConfig, 50000)), singleBinaryInputs())
+	if p.QueryCLI != QueryCLIDataDir {
+		t.Errorf("plan records query CLI %q, want %q", p.QueryCLI, QueryCLIDataDir)
+	}
+	cases := []struct {
+		id   string
+		want []string
+		gone []string
+	}{
+		{"query-cold-ds-c7-txhash-run1",
+			[]string{"query", "--data-dir=/bench/scratch/ds/7", "--types=txhash", "--evict-page-cache=true"},
+			[]string{"cold", "--cold-dir=", "--start-chunk=", "--num-chunks=", "--warmup="}},
+		{"query-hot-ds-c7-events-run1",
+			[]string{"query", "--data-dir=/bench/hot/ds/7", "--types=events", "--warmup=20"},
+			[]string{"hot", "--hot-dir=", "--chunk=", "--sample-ledgers=", "--evict-page-cache"}},
+	}
+	for _, tc := range cases {
+		argv := stepByID(t, p, tc.id).Argv[0]
+		for _, want := range tc.want {
+			if !slices.Contains(argv, want) {
+				t.Errorf("%s argv = %v, want it to contain %q", tc.id, argv, want)
+			}
+		}
+		for _, gone := range tc.gone {
+			// A flag is gone in any spelling; a subcommand word only as itself.
+			if slices.ContainsFunc(argv, func(a string) bool {
+				return a == gone || strings.HasPrefix(gone, "--") && strings.HasPrefix(a, gone)
+			}) {
+				t.Errorf("%s argv = %v, want no %q", tc.id, argv, gone)
+			}
+		}
+		if last := argv[len(argv)-1]; !strings.HasPrefix(last, "--out=") {
+			t.Errorf("%s last arg = %q, want an --out flag", tc.id, last)
+		}
+	}
+}
+
+// TestCheckRefusesMultiChunkBSB checks that a bsb-s3 dataset with several
+// chunks is refused exactly where bench ingest cold needs an empty
+// --cold-out-dir per run, with or without query legs.
+func TestCheckRefusesMultiChunkBSB(t *testing.T) {
+	src := `
+name = "n"
+ingest = "cold"
+query = false
+runs = 1
+
+[[dataset]]
+name = "mainnet"
+kind = "bsb-s3"
+location = "s3://bucket/prefix"
+chunks = %s
+`
+	multi, single := load(t, fmt.Sprintf(src, "[4, 5]")), load(t, fmt.Sprintf(src, "[4]"))
+	ingestOnly := singleBinaryInputs()
+	ingestOnly.QueryCLI = ""
+	if err := Check(multi, ingestOnly); err == nil || !strings.Contains(err.Error(), "mainnet") {
+		t.Errorf("Check(ingest-only, two bsb-s3 chunks, empty --cold-out-dir) = %v, want an error naming the dataset", err)
+	}
+	if err := Check(single, ingestOnly); err != nil {
+		t.Errorf("Check(one bsb-s3 chunk, empty --cold-out-dir) = %v, want nil", err)
+	}
+	if err := Check(multi, goldenInputs()); err != nil {
+		t.Errorf("Check(two bsb-s3 chunks, reusable --cold-out-dir) = %v, want nil", err)
+	}
+}
+
+// TestLedgersLimit checks that only a data-dir ledgers leg passes the
+// campaign's getLedgers page size, and that plan.json records it.
+func TestLedgersLimit(t *testing.T) {
+	cfg := load(t, fmt.Sprintf(hotConfig, 0))
+	for _, tc := range []struct {
+		name string
+		in   Inputs
+		want int
+	}{
+		{"data-dir", singleBinaryInputs(), 1},
+		{"tiered", goldenInputs(), 0},
+	} {
+		tc.in.QueryLedgersLimit = 1
+		p := Build(cfg, tc.in)
+		if p.QueryLedgersLimit != tc.want {
+			t.Errorf("%s: plan records query_ledgers_limit %d, want %d", tc.name, p.QueryLedgersLimit, tc.want)
+		}
+		for _, id := range []string{"query-cold-ds-c7-ledgers-run1", "query-hot-ds-c7-ledgers-run1", "query-cold-ds-c7-txhash-run1"} {
+			argv := stepByID(t, p, id).Argv[0]
+			want := tc.want == 1 && strings.Contains(id, "-ledgers-")
+			if got := slices.Contains(argv, "--ledgers-limit=1"); got != want {
+				t.Errorf("%s: %s argv has --ledgers-limit=1 = %t, want %t: %v", tc.name, id, got, want, argv)
+			}
+			if last := argv[len(argv)-1]; !strings.HasPrefix(last, "--out=") {
+				t.Errorf("%s: %s last arg = %q, want an --out flag", tc.name, id, last)
+			}
+		}
+	}
+}
+
+// TestProfileFlags checks, for each CLI generation, that a profiled plan adds
+// --cpuprofile and --memprofile into the leg dir just before every timed leg's
+// --out and changes nothing else, and that an unprofiled plan passes neither.
+func TestProfileFlags(t *testing.T) {
+	legacy := goldenInputs()
+	legacy.BenchCLI = BenchCLILegacy
+	for name, in := range map[string]Inputs{
+		"legacy": legacy, "tiered": goldenInputs(), "data-dir": singleBinaryInputs(),
+	} {
+		cfg, err := config.Load("testdata/campaign.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.Profile {
+			t.Fatal("config default profile = false, want true")
+		}
+		on := Build(cfg, in)
+		cfg.Profile = false
+		off := Build(cfg, in)
+		if !on.Profile || off.Profile {
+			t.Errorf("%s: plan profile = %t/%t, want true/false", name, on.Profile, off.Profile)
+		}
+		for i, s := range off.Steps {
+			for j, argv := range s.Argv {
+				for _, a := range argv {
+					if strings.HasPrefix(a, "--cpuprofile") || strings.HasPrefix(a, "--memprofile") {
+						t.Errorf("%s: unprofiled %s passes %s", name, s.ID, a)
+					}
+				}
+				want := argv
+				if s.Kind == KindLeg {
+					n := len(argv) - 1
+					want = append(slices.Clone(argv[:n]),
+						"--cpuprofile="+filepath.Join(s.OutDir, "cpu.pprof"),
+						"--memprofile="+filepath.Join(s.OutDir, "mem.pprof"),
+						argv[n])
+				}
+				if got := on.Steps[i].Argv[j]; !slices.Equal(got, want) {
+					t.Errorf("%s: profiled %s argv = %v, want %v", name, s.ID, got, want)
+				}
+			}
+		}
 	}
 }

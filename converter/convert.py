@@ -113,6 +113,10 @@ def stage_agg(runs_rows, stage, warn_nitems=True):
     return out
 
 
+# The runner's host sampler CSV in each timed leg dir; not a benchmark CSV.
+HOST_SAMPLES = "host.csv"
+
+
 # ----------------------------------------------------------------- discovery
 def subdirs(results_dir):
     return sorted(n for n in os.listdir(results_dir)
@@ -295,23 +299,57 @@ def load_campaign_manifest(results_dir):
         return None
 
 
+RUN_RECORD = "run.json"
+INVOCATION = "invocation.json"
+
+
+def run_manifest_path(d):
+    """The bench subcommand's manifest in leg dir d: run.json (stellar-rpc#1066)
+    when present, else the older invocation.json, else None."""
+    for name in (RUN_RECORD, INVOCATION):
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+# Leg dir (absolute) -> its manifest, as load_invocations read it, so later
+# readers of a leg's manifest do not parse it again.
+_manifests = {}
+
+
+def manifest_of(d):
+    """The manifest load_invocations read from leg dir d, or {}."""
+    return _manifests.get(os.path.abspath(d), {})
+
+
 def load_invocations(results_dir):
-    """[(dirname, invocation.json dict)] for every per-invocation dir that has one.
-    A failed run also writes invocation.json, with an `error` field (stellar-rpc#907):
-    its CSVs are partial, so a bundle carrying one is loudly suspect."""
+    """[(dirname, manifest dict)] for every per-invocation dir that has a
+    run.json or an invocation.json. A failed run records an `error` field
+    (stellar-rpc#907), and a run.json still at status `running` is a process
+    that died mid-run: either way its CSVs are partial, so a bundle carrying
+    one is loudly suspect."""
     out = []
-    for p in sorted(glob.glob(os.path.join(results_dir, "*", "invocation.json"))):
+    _manifests.clear()
+    for d in sorted(glob.glob(os.path.join(results_dir, "*"))):
+        p = run_manifest_path(d) if os.path.isdir(d) else None
+        if p is None:
+            continue
         try:
             with open(p) as f:
                 inv = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             warn(f"could not read {os.path.relpath(p, results_dir)} ({e}); ignoring")
             continue
-        d = os.path.basename(os.path.dirname(p))
+        name = os.path.basename(d)
         if inv.get("error"):
-            warn(f"{d} is a FAILED run ({inv['error']!r}); its CSVs are partial "
+            warn(f"{name} is a FAILED run ({inv['error']!r}); its CSVs are partial "
                  "— re-run or drop that leg before publishing this conversion")
-        out.append((d, inv))
+        elif inv.get("status") == "running":
+            warn(f"{name} never finished (run.json status running); its CSVs are partial "
+                 "— re-run or drop that leg before publishing this conversion")
+        out.append((name, inv))
+        _manifests[os.path.abspath(d)] = inv
     return out
 
 
@@ -333,7 +371,7 @@ def hardware_into_machine(machine, hw):
 
 
 def _normalize_binary(b):
-    """invocation.json binary identity keyed snake_case regardless of producer:
+    """run.json / invocation.json binary identity keyed snake_case regardless of producer:
     stellar-rpc#907 writes camelCase (commitHash, buildTimestamp); earlier
     drafts of the schema used snake_case. Accept both spellings."""
     renames = {"commitHash": "commit_hash", "buildTimestamp": "build_timestamp"}
@@ -341,7 +379,7 @@ def _normalize_binary(b):
 
 
 def resolve_binary(build, metadata, invocations):
-    """Merge invocation.json binary identity into build (authoritative over the
+    """Merge the leg manifests' binary identity into build (authoritative over the
     machine-metadata `repo:` parse) and warn on any commit mismatch."""
     binaries = [_normalize_binary(inv["binary"]) for _, inv in invocations if inv.get("binary")]
     commits = {b["commit_hash"] for b in binaries if b.get("commit_hash")}
@@ -399,7 +437,7 @@ def resolve_close_interval_ns(metadata, invocations):
 # trip (rtt): half a round trip carries the submission request (the response is
 # off the critical path), and a full round trip carries the getTransaction
 # call. The formula counts block time once per ledger close on the path
-# (block_count, a per-phase consensus plan: 2 for phases 1-2, 3 for phase 3).
+# (block_count, a per-phase consensus plan: 3 for phase 3, 2 for the others).
 # The in-RPC handler latencies (sendTransaction, getTransaction) are fixed
 # across phases. This leaves ingest_p99 as the only unknown.
 TARGETS_PATH = os.path.join(
@@ -437,7 +475,7 @@ SLA_FLOORS_RPS = QUERY_LOAD["sla"]["floors_rps"]
 SLA_P99_NS = QUERY_LOAD["sla"]["p99_ns"]
 
 # Family 2 — the E2E-budget probe: getTransaction alone, at the demand-derived
-# floors of work item 856 (per profile, indexed by phase), answering only for
+# floors of work item 856 (per profile, in phases-table order), answering only for
 # its in-RPC p99, which is its slice of the end-to-end lifecycle budget. The
 # scheduled p99 of that cell is reported and never judged.
 E2E_IN_RPC_P99_NS = QUERY_LOAD["e2e_probe"]["in_rpc_p99_ns"]
@@ -470,10 +508,14 @@ def match_phase(close_interval_ns):
 
 
 def phase_by_number(n):
-    """The phase table entry numbered n, or None for anything else (including
-    None and a number no phase carries)."""
+    """The phase table entry labelled n, or None for anything else (including
+    None and a label no phase carries). Labels compare as strings: phases 1-3
+    are numbers in targets.json and in older manifests, later ones strings
+    ("3b")."""
+    if n is None:
+        return None
     for p in PHASE_TARGETS:
-        if p["phase"] == n:
+        if str(p["phase"]) == str(n):
             return p
     return None
 
@@ -522,6 +564,22 @@ def order_units(units, kind, facts):
     return ordered
 
 
+_SYNTH_SET = re.compile(r"/synthetic-ledgers/([^/]+)/")
+
+
+def dataset_sets(metadata):
+    """{dataset name: synthetic set or None} from the manifest's dataset
+    locations (`…/synthetic-ledgers/<set>/<profile>/…`). The set picks the
+    docs/dataset-sizes.json entry the viewer reads a profile's sizes from;
+    None means the location names no set, and the viewer then shows no sizes."""
+    out = {}
+    for d in (metadata or {}).get("datasets", []):
+        if d.get("name"):
+            m = _SYNTH_SET.search(str(d.get("location") or ""))
+            out[d["name"]] = m.group(1) if m else None
+    return out
+
+
 def order_units_campaign(units, metadata):
     """Campaign display order: datasets in manifest order (then alpha), chunk ascending."""
     ds_order = {}
@@ -551,7 +609,7 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
     files_out = {}
     for csv_path in sorted(glob.glob(os.path.join(dirs[0], "*.csv"))):
         stem = os.path.splitext(os.path.basename(csv_path))[0]
-        if stem == "driver":
+        if stem == "driver" or os.path.basename(csv_path) == HOST_SAMPLES:
             continue
         rows = read_all(dirs, f"{stem}.csv")
         if rows:
@@ -565,7 +623,7 @@ def build_ingest_cold(results_dir, layout, unit, reps, vocab, counts):
         "tp_events": stat([counts["events"] / (d["events_total"]["total_ns"] / NS) for d in drivers]),
     }
     out = {"driver": driver_out, "files": files_out, "derived": derived}
-    peak = _peak_rss_bytes(drivers)
+    peak = _peak_rss_bytes(_with_file(dirs, "driver.csv"), drivers)
     if peak is not None:
         out["peak_rss_bytes"] = peak
     return out
@@ -575,18 +633,44 @@ PACE_LAG = "pace_lag"
 PEAK_RSS = "peak_rss_bytes"
 
 
-def _peak_rss_bytes(drivers):
+def _peak_rss_bytes(dirs, drivers):
     """Peak resident-set-size gauge (bytes), aggregated across runs, or None.
 
-    The driver.csv `peak_rss_bytes` row is a single gauge the harness replicates
-    across the duration columns — read `total_ns` as the byte value. Stored as a
-    plain V (bytes), a sibling of `driver`, not a StageAgg: it is a memory
-    high-water mark, not a latency distribution, and the ns column names do not
-    apply to it. Present in every run or omitted entirely (never zero-filled).
+    drivers holds one driver per dir, in dirs order. Each run's value is run.json's
+    peakRssBytes (stellar-rpc#1066) when its dir has one, else the older
+    driver.csv `peak_rss_bytes` row, a single gauge replicated across the
+    duration columns whose `total_ns` is the byte value. Stored as a plain V
+    (bytes), a sibling of `driver`, not a StageAgg: it is a memory high-water
+    mark, not a latency distribution. Present in every run or omitted entirely
+    (never zero-filled).
     """
-    if not all(PEAK_RSS in d for d in drivers):
+    values = []
+    for d, drv in zip(dirs, drivers):
+        v = _run_record_peak_rss(d)
+        if v is None and PEAK_RSS in drv:
+            v = drv[PEAK_RSS]["total_ns"]
+        values.append(v)
+    found = [v for v in values if v is not None]
+    if not found:
         return None
-    return stat([d[PEAK_RSS]["total_ns"] for d in drivers])
+    if len(found) < len(values):
+        missing = [os.path.basename(d) for d, v in zip(dirs, values) if v is None]
+        warn(f"peak RSS present in {len(found)}/{len(values)} runs; omitting it "
+             f"(missing in {', '.join(missing)})")
+        return None
+    return stat(values)
+
+
+def _run_record_peak_rss(d):
+    """peakRssBytes from d's run.json, or None when there is no run.json or it
+    records no peak (the field is omitted where /proc is unreadable)."""
+    v = manifest_of(d).get("peakRssBytes")
+    return v if isinstance(v, int) and v > 0 else None
+
+
+def _with_file(dirs, filename):
+    """The dirs that hold filename, in order: the dirs read_all read it from."""
+    return [d for d in dirs if os.path.isfile(os.path.join(d, filename))]
 
 
 def _pace_lag_agg(drivers, unit):
@@ -635,7 +719,7 @@ def build_ingest_hot(results_dir, layout, unit, reps, vocab, counts):
     wall = "chunk_wall" if vocab == "old" else "run_wall"
     derived = {"ledgers_per_s": stat([counts["ledgers"] / (d[wall]["total_ns"] / NS) for d in drivers])}
     out = {"driver": driver_out, "phases": phases_out, "derived": derived}
-    peak = _peak_rss_bytes(drivers)
+    peak = _peak_rss_bytes(_with_file(dirs, "driver.csv"), drivers)
     if peak is not None:
         out["peak_rss_bytes"] = peak
     return out
@@ -696,6 +780,100 @@ def _opt_driver_v(drivers, row, label, col="total_ns", f=None):
     return stat([f(v) for v in vals] if f else vals)
 
 
+# A data-dir query leg (stellar-rpc#1070, `bench query --data-dir`) writes
+# latency.csv and scenarios.csv, with the store open time in run.json, instead
+# of the tiered bench's per-type CSV and driver.csv. read_query_leg maps one
+# into the other, so every later step reads one row shape.
+QUERY_LATENCY = "latency.csv"
+QUERY_SCENARIOS = "scenarios.csv"
+QUERY_CLI_TIERED = "tiered"
+QUERY_CLI_DATA_DIR = "data-dir"
+# latency.csv (metric, outcome) -> the tiered per-type CSV row prefix. The
+# tiered bench's scheduled latency (due -> done) is latency_from_due, and its
+# service time is latency: the bridge's parse, the wait for a handler, the
+# handler and the response write, which is the time inside the RPC.
+_LATENCY_ROWS = {("latency_from_due", "all"): "total_r", ("latency", "all"): "service_r"}
+# Query shapes the legs of this conversion used; convert() records them.
+_query_clis = set()
+# getLedgers page sizes (--ledgers-limit) the data-dir ledgers legs ran with.
+_ledgers_limits = set()
+
+
+def _scenario_row(n, n_items, rec=None, total=0):
+    """A row in read_csv's shape: n, n_items, then every duration column, from
+    a latency.csv record or, without one, total in each duration column."""
+    row = {"n": n, "n_items": n_items}
+    for col, _ in PCT_MAP:
+        row[col] = int(rec[col]) if rec else total
+    return row
+
+
+def read_query_leg(d, qt):
+    """(rows, driver) of one query leg dir, each in read_csv's shape, or None
+    when the leg left no report. A tiered leg's are its <qt>.csv and its
+    driver.csv. A data-dir leg's are derived from latency.csv, scenarios.csv
+    and run.json under the tiered bench's row names."""
+    if not os.path.isfile(os.path.join(d, QUERY_LATENCY)):
+        qpath, dpath = os.path.join(d, f"{qt}.csv"), os.path.join(d, "driver.csv")
+        if not (os.path.isfile(qpath) and os.path.isfile(dpath)):
+            return None
+        _query_clis.add(QUERY_CLI_TIERED)
+        return read_csv(qpath), read_csv(dpath)
+    _query_clis.add(QUERY_CLI_DATA_DIR)
+    if qt == "ledgers":
+        limit = manifest_of(d).get("flags", {}).get("ledgers-limit")
+        if limit is not None:
+            _ledgers_limits.add(int(limit))
+    rows, driver = {}, {}
+    with open(os.path.join(d, QUERY_LATENCY)) as f:
+        for rec in csv.DictReader(f):
+            if rec["query_type"] != qt:
+                continue
+            tok = rec["target_rps"]
+            key = (rec["metric"], rec["outcome"])
+            if key in _LATENCY_ROWS:
+                rows[_LATENCY_ROWS[key] + tok] = _scenario_row(int(rec["count"]), int(rec["items"]), rec)
+            elif key == ("start_delay", "all"):
+                driver[f"{qt}_r{tok}_lag"] = _scenario_row(int(rec["count"]), int(rec["count"]), rec)
+    open_ns = manifest_of(d).get("setupNs", {}).get("storeOpen")
+    if open_ns is not None:
+        driver["open"] = _scenario_row(1, 0, total=int(open_ns))
+    evictions = []
+    spath = os.path.join(d, QUERY_SCENARIOS)
+    if os.path.isfile(spath):
+        with open(spath) as f:
+            for rec in csv.DictReader(f):
+                if rec["query_type"] != qt:
+                    continue
+                tok = rec["target_rps"]
+                driver[f"{qt}_r{tok}"] = _scenario_row(1, int(rec["succeeded"]), total=int(rec["elapsed_ns"]))
+                # The achieved rate rides x1000 in the duration columns, as the
+                # tiered driver.csv carries it.
+                millirps = round(float(rec["achieved_rps"]) * 1000)
+                driver[f"{qt}_r{tok}_millirps"] = _scenario_row(1, 0, total=millirps)
+                dropped = int(rec["dropped"])
+                driver[f"{qt}_r{tok}_shed"] = _scenario_row(dropped, dropped)
+                if rec.get("page_cache_evict_ns"):
+                    evictions.append(int(rec["page_cache_evict_ns"]))
+    if evictions:
+        driver["evict"] = _scenario_row(len(evictions), len(evictions), total=sum(evictions))
+    return rows, driver
+
+
+def _check_data_dir_leg(d, tier):
+    """Warn when a data-dir leg's run.json says it measured something other than
+    its dir name's tier, or a cold leg ran without page-cache eviction."""
+    settings = manifest_of(d).get("settings")
+    if not settings:
+        return
+    name = os.path.basename(d)
+    if settings.get("tier") not in (None, tier):
+        warn(f"{name}: run.json tier {settings['tier']!r} but the leg dir names {tier!r}")
+    if tier == "cold" and settings.get("pageCacheEviction") not in (None, "requested"):
+        warn(f"{name}: page-cache eviction was {settings['pageCacheEviction']!r}; "
+             f"its cold latencies are warm-cache")
+
+
 def build_queries_rps(results_dir, tier, unit, reps, qtypes):
     """Open-loop (paced-RPS) query legs: one dir per query type, one cell per
     target rate.
@@ -706,16 +884,25 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
     along as a secondary column. txhash also splits found/miss sub-stages; like
     the closed-loop found_c<W> rows, they are ignored here.
     """
-    entry, setup_drivers = {}, None
+    entry, setup_drivers, cell_legs = {}, None, []
     for qt in qtypes:
-        dirs = rps_run_dirs(results_dir, tier, unit, qt, reps)
-        rows = read_all(dirs, f"{qt}.csv")
-        drivers = read_all(dirs, "driver.csv")
-        if not rows or not drivers:
+        legs = []
+        for d in rps_run_dirs(results_dir, tier, unit, qt, reps):
+            leg = read_query_leg(d, qt)
+            if leg is None:
+                warn(f"missing query outputs in {os.path.basename(d)}")
+                continue
+            if os.path.isfile(os.path.join(d, QUERY_LATENCY)):
+                _check_data_dir_leg(d, tier)
+            legs.append((d, *leg))
+        if not legs:
             warn(f"query-{tier}-{unit} {qt}: no CSVs; skipping")
             continue
-        # Every leg's driver repeats the same setup rows (they measure the same
-        # open/evict prep), so the first type's leg stands for the whole cell.
+        rows = [r for _, r, _ in legs]
+        drivers = [drv for _, _, drv in legs]
+        cell_legs += [(d, drv) for d, _, drv in legs]
+        # Every leg opens the same store, so the first type's leg stands for
+        # the whole cell's open; evict and peak RSS are the cell's own below.
         if setup_drivers is None:
             setup_drivers = drivers
         tokens = sorted({m.group(1) for st in rows[0]
@@ -762,13 +949,71 @@ def build_queries_rps(results_dir, tier, unit, reps, qtypes):
         return None
     setup = {}
     for st in setup_drivers[0]:
-        if _is_leg_row(st):
+        if _is_leg_row(st) or st in (QUERY_EVICT, PEAK_RSS):
             continue
         v = stat([d[st]["total_ns"] for d in setup_drivers])
         v["n_items"] = setup_drivers[0][st]["n_items"]
         setup[st] = v
+    evict = _cell_evict(cell_legs)
+    if evict is not None:
+        setup[QUERY_EVICT] = evict
+    peak = _cell_peak_rss(cell_legs, f"query-{tier}-{unit}")
+    if peak is not None:
+        setup[PEAK_RSS] = peak
     entry["setup"] = setup
     return entry
+
+
+QUERY_EVICT = "evict"
+_LEG_REP = re.compile(r"-run(\d+)$")
+
+
+def _legs_by_rep(cell_legs):
+    """{rep: [(dir, driver), ...]} of a cell's query legs, by rep number."""
+    out = {}
+    for d, drv in cell_legs:
+        m = _LEG_REP.search(os.path.basename(d))
+        out.setdefault(int(m.group(1)) if m else 0, []).append((d, drv))
+    return dict(sorted(out.items()))
+
+
+def _cell_evict(cell_legs):
+    """Setup evict row of a cell: per rep, every eviction of every leg and rung
+    summed, then V across reps; n_items counts the evictions of a rep. None
+    when no leg evicted."""
+    totals, count = [], None
+    for legs in _legs_by_rep(cell_legs).values():
+        rows = [drv[QUERY_EVICT] for _, drv in legs if QUERY_EVICT in drv]
+        if rows:
+            totals.append(sum(r["total_ns"] for r in rows))
+            count = sum(r["n"] for r in rows) if count is None else count
+    if not totals:
+        return None
+    v = stat(totals)
+    v["n_items"] = count
+    return v
+
+
+def _cell_peak_rss(cell_legs, label):
+    """Peak RSS of a cell: per rep, the highest peak of its legs (run.json, else
+    the driver.csv row), then V across reps. Omitted, with a warning, unless
+    every rep has one."""
+    values, missing = [], []
+    for rep, legs in _legs_by_rep(cell_legs).items():
+        peaks = [v for d, drv in legs
+                 for v in [_run_record_peak_rss(d) or drv.get(PEAK_RSS, {}).get("total_ns")] if v]
+        if peaks:
+            values.append(max(peaks))
+        else:
+            missing.append(rep)
+    if not values:
+        return None
+    if missing:
+        warn(f"{label}: peak RSS missing in rep(s) {missing}; omitting it")
+        return None
+    v = stat(values)
+    v["n_items"] = 0
+    return v
 
 
 def build_queries(results_dir, layout, unit, reps, tier):
@@ -782,7 +1027,7 @@ def build_queries(results_dir, layout, unit, reps, tier):
     entry = {}
     qtypes = sorted(os.path.splitext(os.path.basename(p))[0]
                     for p in glob.glob(os.path.join(dirs[0], "*.csv"))
-                    if os.path.basename(p) != "driver.csv")
+                    if os.path.basename(p) not in ("driver.csv", HOST_SAMPLES))
     for qt in qtypes:
         rows = read_all(dirs, f"{qt}.csv")
         if not rows:
@@ -908,7 +1153,8 @@ def attach_query_verdicts(queries, phase):
     at the demand-derived floor for this profile and phase. Where the two floors
     coincide the one cell carries both.
     """
-    idx = phase["phase"] - 1
+    # The e2e floors follow the phases table order; the label is not an index.
+    idx = PHASE_TARGETS.index(phase)
     for tier, units in queries.items():
         for unit, entry in units.items():
             profile = query_profile(unit)
@@ -1138,6 +1384,8 @@ def convert(args):
     machine, build = load_metadata(results_dir)
     metadata = load_campaign_manifest(results_dir)
     invocations = load_invocations(results_dir)
+    _query_clis.clear()
+    _ledgers_limits.clear()
     hardware = (metadata or {}).get("hardware") or {}
     hostname = ((metadata or {}).get("hostname")
                 or (invocations[0][1].get("hostname") if invocations else None))
@@ -1219,6 +1467,21 @@ def convert(args):
                        f"{len(unit_order)} profile(s): {', '.join(labels)}.")
 
     campaign = {"reps": len(reps), "vocabulary": vocab}
+    # Which query bench produced the paced query cells: tiered `query cold|hot`
+    # or `query --data-dir`. The two measure at different points (the read
+    # view; the daemon's JSON-RPC handlers), so cells of the two never compare.
+    if len(_query_clis) > 1:
+        warn(f"query legs mix bench shapes {sorted(_query_clis)}; recording query_cli as mixed")
+        campaign["query_cli"] = "mixed"
+    elif _query_clis:
+        campaign["query_cli"] = next(iter(_query_clis))
+    # The getLedgers page size the campaign ran, which can be smaller than the
+    # SLA's request shape (query_load.derivation.ledgers_span).
+    if len(_ledgers_limits) > 1:
+        warn(f"ledgers legs ran with different --ledgers-limit values {sorted(_ledgers_limits)}; "
+             f"recording the largest")
+    if _ledgers_limits:
+        campaign["query_ledgers_limit"] = max(_ledgers_limits)
     if args.source_gcs:
         campaign["source_gcs"] = args.source_gcs
     if args.source_uri:
@@ -1280,6 +1543,11 @@ def convert(args):
         },
         "campaign": campaign,
     }
+    # Only a campaign bundle has a metadata.json to read locations from. A
+    # bundle without one predates campaigns, so it gets no sets key and the
+    # viewer reads its sizes from dataset-sizes.json's legacy_set.
+    if metadata:
+        data["dataset"]["sets"] = dataset_sets(metadata)
     if hardware:
         data["hardware"] = hardware
     if hostname:

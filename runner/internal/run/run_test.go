@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -248,6 +249,41 @@ func TestClassifyLegDir(t *testing.T) {
 			want: legPartial,
 		},
 		{
+			name: "run.json ok and driver.csv",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"ok"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want: legComplete,
+		},
+		{
+			name: "run.json records an error",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"failed","error":"boom"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want:       legFailedEarlier,
+			wantReason: "boom",
+		},
+		{
+			name: "run.json still running",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"running"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want:       legPartial,
+			wantReason: "run.json records a run that never finished",
+		},
+		{
+			name: "run.json wins over invocation.json",
+			setup: func(t *testing.T, dir string) {
+				mustWrite(t, filepath.Join(dir, "run.json"), `{"schemaVersion":2,"status":"ok"}`)
+				mustWrite(t, filepath.Join(dir, "invocation.json"), `{"schemaVersion":1,"error":"stale"}`)
+				mustWrite(t, filepath.Join(dir, "driver.csv"), "stage,wall\n")
+			},
+			want: legComplete,
+		},
+		{
 			name: "unreadable invocation.json",
 			setup: func(t *testing.T, dir string) {
 				mustWrite(t, filepath.Join(dir, "invocation.json"), `{"schemaVersion":`)
@@ -315,6 +351,33 @@ func TestExecuteHappyPath(t *testing.T) {
 	// PostClean runs only on success, and it ran: the hot DB is gone.
 	assertGone(t, post)
 	got.assertLogHas(t, "  $ rm -rf "+scratch)
+}
+
+// TestLegHostSamples checks that a leg's --out is empty while its command
+// runs and that the host samples land in it afterwards, on Linux only, for a
+// passing and a failing leg alike.
+func TestLegHostSamples(t *testing.T) {
+	tmp := t.TempDir()
+	outA := filepath.Join(tmp, "res", "a")
+	outB := filepath.Join(tmp, "res", "b")
+	empty := `[ -z "$(ls -A "$1")" ] || exit 9`
+	p := &plan.Plan{Steps: []plan.Step{
+		shLeg("a", outA, empty+` && : > "$1/driver.csv"`),
+		shLeg("b", outB, empty+` && exit 3`),
+	}}
+	got := walk(t, p, Options{})
+	got.assertStatuses(t, StatusOK, StatusFailed)
+	if code := readSentinel(t, outB).ExitCode; code != 3 {
+		t.Errorf("b exit code = %d, want 3 (9 means its --out was not empty)", code)
+	}
+	for _, out := range []string{outA, outB} {
+		assertGone(t, out+"."+hostSamplesName)
+		if runtime.GOOS == "linux" {
+			assertExists(t, filepath.Join(out, hostSamplesName))
+		} else {
+			assertGone(t, filepath.Join(out, hostSamplesName))
+		}
+	}
 }
 
 func TestExecuteKeepGoing(t *testing.T) {

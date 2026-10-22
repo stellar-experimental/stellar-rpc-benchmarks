@@ -151,23 +151,50 @@ git -C "$SRC" fetch --quiet origin "$SRC_REF"
 git -C "$SRC" checkout --quiet FETCH_HEAD
 
 # --- native libs, mirroring CI's setup-go action ------------------------------
-[ -e "$HOME/.zstd/lib/libzstd.so" ] ||
-  (cd "$SRC" && PREFIX="$HOME/.zstd" ./scripts/install-zstd.sh)
-[ -e "$HOME/.rocksdb/lib/librocksdb.so" ] ||
-  (cd "$SRC" && PREFIX="$HOME/.rocksdb" ZSTD_HOME="$HOME/.zstd" ./scripts/install-rocksdb.sh)
+# Two generations of stellar-rpc build differently. A ref before
+# stellar-rpc#1123 links shared zstd and RocksDB from ~/.zstd and ~/.rocksdb.
+# From #1123 on (a Makefile with build-native-libs), `make build-stellar-rpc`
+# links static archives, and the campaign's build step points it at
+# ~/.zstd-static and ~/.rocksdb-static (staticLibHomes in
+# runner/internal/plan), because the static install scripts refuse a prefix
+# that holds a shared library. Install what SRC_REF's scripts build; run this
+# again with an older SRC_REF to add the shared set, which a shared build
+# checks for before it runs make. A static build also builds missing archives
+# itself, at the cost of a slower first build. The scripts apt-get cmake and
+# ninja through sudo (or directly as root) only when they are missing, and the
+# apt step above installs both.
+if grep -q '^build-native-libs:' "$SRC/Makefile"; then
+  [ -e "$HOME/.zstd-static/lib/libzstd.a" ] ||
+    (cd "$SRC" && PREFIX="$HOME/.zstd-static" ./scripts/install-zstd.sh)
+  [ -e "$HOME/.rocksdb-static/lib/librocksdb.a" ] ||
+    (cd "$SRC" && PREFIX="$HOME/.rocksdb-static" ZSTD_HOME="$HOME/.zstd-static" ./scripts/install-rocksdb.sh)
+else
+  [ -e "$HOME/.zstd/lib/libzstd.so" ] ||
+    (cd "$SRC" && PREFIX="$HOME/.zstd" ./scripts/install-zstd.sh)
+  [ -e "$HOME/.rocksdb/lib/librocksdb.so" ] ||
+    (cd "$SRC" && PREFIX="$HOME/.rocksdb" ZSTD_HOME="$HOME/.zstd" ./scripts/install-rocksdb.sh)
+fi
 
 # --- environment: persist for future shells, set for this run ----------------
+# The include paths go in CGO_CPPFLAGS, not CGO_CFLAGS: setting CGO_CFLAGS
+# replaces Go's default "-O2 -g", and go-sqlite3's bundled SQLite sets no -O of
+# its own. A .bashrc an older bootstrap wrote gets its line rewritten.
+# shellcheck disable=SC2016 # the $HOME in .bashrc is literal text
+if grep -q '^export CGO_CFLAGS="-I\$HOME/.zstd/include' "$HOME/.bashrc" 2>/dev/null; then
+  # shellcheck disable=SC2016 # the $HOME in .bashrc is literal text
+  sed -i 's|^export CGO_CFLAGS="-I\$HOME/.zstd/include|export CGO_CPPFLAGS="-I$HOME/.zstd/include|' "$HOME/.bashrc"
+fi
 if ! grep -q '# bench-campaigns env' "$HOME/.bashrc"; then
   cat >> "$HOME/.bashrc" <<'EOF'
 # bench-campaigns env
 export PATH=/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$PATH
-export CGO_CFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
+export CGO_CPPFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
 export CGO_LDFLAGS="-L$HOME/.zstd/lib -L$HOME/.rocksdb/lib"
 export LD_LIBRARY_PATH="$HOME/.zstd/lib:$HOME/.rocksdb/lib"
 EOF
 fi
 export PATH=/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$PATH
-export CGO_CFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
+export CGO_CPPFLAGS="-I$HOME/.zstd/include -I$HOME/.rocksdb/include"
 export CGO_LDFLAGS="-L$HOME/.zstd/lib -L$HOME/.rocksdb/lib"
 export LD_LIBRARY_PATH="$HOME/.zstd/lib:$HOME/.rocksdb/lib"
 

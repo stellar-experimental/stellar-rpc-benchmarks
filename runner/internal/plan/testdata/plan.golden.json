@@ -4,6 +4,11 @@
   "bench_root": "/bench",
   "src": "/bench/src",
   "bin": "/bench/bin/stellar-rpc-deadbeef",
+  "bench_cli": "bench",
+  "query_cli": "tiered",
+  "build_target": "build-rpc-v2",
+  "static_libs": false,
+  "profile": true,
   "results_dir": "/bench/results/golden-deadbeef-20260101T000000Z",
   "tarball": "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",
   "steps": [
@@ -12,6 +17,11 @@
       "kind": "build",
       "timed": false,
       "argv": [
+        [
+          "sh",
+          "-c",
+          "for lib in \"$HOME/.zstd/lib/libzstd\" \"$HOME/.rocksdb/lib/librocksdb\"; do [ -e \"$lib.so\" ] || [ -e \"$lib.dylib\" ] || { echo \"error: $lib.so is missing: this ref links the shared native libs; run bootstrap.sh with SRC_REF=deadbeefcafebabefeedface1234567890abcdef first\" \u003e\u00262; exit 1; }; done"
+        ],
         [
           "git",
           "-C",
@@ -135,7 +145,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -143,6 +154,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/sac-6000/1",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run1"
         ]
       ],
@@ -162,7 +175,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -170,6 +184,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/sac-6000/1",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c1-run2"
         ]
       ],
@@ -189,7 +205,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -197,6 +214,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/sac-6000/2",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run1"
         ]
       ],
@@ -216,7 +235,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -224,6 +244,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/sac-6000/2",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-sac-6000-c2-run2"
         ]
       ],
@@ -243,7 +265,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -251,6 +274,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/soroswap-1500/1",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run1"
         ]
       ],
@@ -270,7 +295,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -278,6 +304,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/soroswap-1500/1",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c1-run2"
         ]
       ],
@@ -297,7 +325,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -305,6 +334,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/soroswap-1500/2",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run1"
         ]
       ],
@@ -324,7 +355,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "cold",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -332,6 +364,8 @@
           "--num-chunks=1",
           "--workers=1",
           "--cold-out-dir=/bench/scratch/soroswap-1500/2",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-cold-soroswap-1500-c2-run2"
         ]
       ],
@@ -351,7 +385,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -359,6 +394,8 @@
           "--hot-dir=/bench/hot/sac-6000/1",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c1-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c1-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c1-run1"
         ]
       ],
@@ -378,7 +415,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -386,6 +424,8 @@
           "--hot-dir=/bench/hot/sac-6000/1",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c1-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c1-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c1-run2"
         ]
       ],
@@ -405,7 +445,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -413,6 +454,8 @@
           "--hot-dir=/bench/hot/sac-6000/2",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c2-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c2-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c2-run1"
         ]
       ],
@@ -432,7 +475,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/sac-6000/ledgers",
@@ -440,6 +484,8 @@
           "--hot-dir=/bench/hot/sac-6000/2",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c2-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c2-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-sac-6000-c2-run2"
         ]
       ],
@@ -459,7 +505,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -467,6 +514,8 @@
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c1-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c1-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c1-run1"
         ]
       ],
@@ -486,7 +535,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -494,6 +544,8 @@
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c1-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c1-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c1-run2"
         ]
       ],
@@ -513,7 +565,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -521,6 +574,8 @@
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c2-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c2-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c2-run1"
         ]
       ],
@@ -540,7 +595,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-ingest",
+          "bench",
+          "ingest",
           "hot",
           "--source=pack",
           "--pack-dir=/bench/golden/soroswap-1500/ledgers",
@@ -548,6 +604,8 @@
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--close-interval=2s",
           "--num-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c2-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c2-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/ingest-hot-soroswap-1500-c2-run2"
         ]
       ],
@@ -567,7 +625,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -575,6 +634,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run1"
         ]
       ],
@@ -592,7 +653,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -600,6 +662,8 @@
           "--types=txpage",
           "--target-rps=7.5,15,30",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run1"
         ]
       ],
@@ -617,7 +681,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -625,6 +690,8 @@
           "--types=txhash",
           "--target-rps=150,300,600",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run1"
         ]
       ],
@@ -642,7 +709,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -650,6 +718,8 @@
           "--types=events",
           "--target-rps=1.5,3,6",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run1"
         ]
       ],
@@ -667,7 +737,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -675,6 +746,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-ledgers-run2"
         ]
       ],
@@ -692,7 +765,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -700,6 +774,8 @@
           "--types=txpage",
           "--target-rps=7.5,15,30",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txpage-run2"
         ]
       ],
@@ -717,7 +793,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -725,6 +802,8 @@
           "--types=txhash",
           "--target-rps=150,300,600",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-txhash-run2"
         ]
       ],
@@ -742,7 +821,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/1",
           "--start-chunk=1",
@@ -750,17 +830,35 @@
           "--types=events",
           "--target-rps=1.5,3,6",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run2"
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c1-events-run2",
-      "post_clean": [
-        "/bench/scratch/sac-6000/1"
-      ],
       "needs": [
         "build",
         "dataset-sac-6000",
         "ingest-cold-sac-6000-c1-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-sac-6000-c1",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/sac-6000/1"
+      ],
+      "needs": [
+        "query-cold-sac-6000-c1-ledgers-run1",
+        "query-cold-sac-6000-c1-txpage-run1",
+        "query-cold-sac-6000-c1-txhash-run1",
+        "query-cold-sac-6000-c1-events-run1",
+        "query-cold-sac-6000-c1-ledgers-run2",
+        "query-cold-sac-6000-c1-txpage-run2",
+        "query-cold-sac-6000-c1-txhash-run2",
+        "query-cold-sac-6000-c1-events-run2"
       ]
     },
     {
@@ -770,7 +868,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -778,6 +877,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run1"
         ]
       ],
@@ -795,7 +896,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -803,6 +905,8 @@
           "--types=txpage",
           "--target-rps=7.5,15,30",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run1"
         ]
       ],
@@ -820,7 +924,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -828,6 +933,8 @@
           "--types=txhash",
           "--target-rps=150,300,600",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run1"
         ]
       ],
@@ -845,7 +952,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -853,6 +961,8 @@
           "--types=events",
           "--target-rps=1.5,3,6",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run1"
         ]
       ],
@@ -870,7 +980,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -878,6 +989,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-ledgers-run2"
         ]
       ],
@@ -895,7 +1008,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -903,6 +1017,8 @@
           "--types=txpage",
           "--target-rps=7.5,15,30",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txpage-run2"
         ]
       ],
@@ -920,7 +1036,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -928,6 +1045,8 @@
           "--types=txhash",
           "--target-rps=150,300,600",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-txhash-run2"
         ]
       ],
@@ -945,7 +1064,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/sac-6000/2",
           "--start-chunk=2",
@@ -953,17 +1073,35 @@
           "--types=events",
           "--target-rps=1.5,3,6",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run2"
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-sac-6000-c2-events-run2",
-      "post_clean": [
-        "/bench/scratch/sac-6000/2"
-      ],
       "needs": [
         "build",
         "dataset-sac-6000",
         "ingest-cold-sac-6000-c2-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-sac-6000-c2",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/sac-6000/2"
+      ],
+      "needs": [
+        "query-cold-sac-6000-c2-ledgers-run1",
+        "query-cold-sac-6000-c2-txpage-run1",
+        "query-cold-sac-6000-c2-txhash-run1",
+        "query-cold-sac-6000-c2-events-run1",
+        "query-cold-sac-6000-c2-ledgers-run2",
+        "query-cold-sac-6000-c2-txpage-run2",
+        "query-cold-sac-6000-c2-txhash-run2",
+        "query-cold-sac-6000-c2-events-run2"
       ]
     },
     {
@@ -973,7 +1111,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -981,6 +1120,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run1"
         ]
       ],
@@ -998,7 +1139,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1006,6 +1148,8 @@
           "--types=txpage",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run1"
         ]
       ],
@@ -1023,7 +1167,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1031,6 +1176,8 @@
           "--types=txhash",
           "--target-rps=37.5,75,150",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run1"
         ]
       ],
@@ -1048,7 +1195,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1056,6 +1204,8 @@
           "--types=events",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run1"
         ]
       ],
@@ -1073,7 +1223,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1081,6 +1232,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-ledgers-run2"
         ]
       ],
@@ -1098,7 +1251,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1106,6 +1260,8 @@
           "--types=txpage",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txpage-run2"
         ]
       ],
@@ -1123,7 +1279,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1131,6 +1288,8 @@
           "--types=txhash",
           "--target-rps=37.5,75,150",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-txhash-run2"
         ]
       ],
@@ -1148,7 +1307,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/1",
           "--start-chunk=1",
@@ -1156,17 +1316,35 @@
           "--types=events",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run2"
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c1-events-run2",
-      "post_clean": [
-        "/bench/scratch/soroswap-1500/1"
-      ],
       "needs": [
         "build",
         "dataset-soroswap-1500",
         "ingest-cold-soroswap-1500-c1-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-soroswap-1500-c1",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/soroswap-1500/1"
+      ],
+      "needs": [
+        "query-cold-soroswap-1500-c1-ledgers-run1",
+        "query-cold-soroswap-1500-c1-txpage-run1",
+        "query-cold-soroswap-1500-c1-txhash-run1",
+        "query-cold-soroswap-1500-c1-events-run1",
+        "query-cold-soroswap-1500-c1-ledgers-run2",
+        "query-cold-soroswap-1500-c1-txpage-run2",
+        "query-cold-soroswap-1500-c1-txhash-run2",
+        "query-cold-soroswap-1500-c1-events-run2"
       ]
     },
     {
@@ -1176,7 +1354,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1184,6 +1363,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run1"
         ]
       ],
@@ -1201,7 +1382,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1209,6 +1391,8 @@
           "--types=txpage",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run1"
         ]
       ],
@@ -1226,7 +1410,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1234,6 +1419,8 @@
           "--types=txhash",
           "--target-rps=37.5,75,150",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run1"
         ]
       ],
@@ -1251,7 +1438,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1259,6 +1447,8 @@
           "--types=events",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run1"
         ]
       ],
@@ -1276,7 +1466,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1284,6 +1475,8 @@
           "--types=ledgers",
           "--target-rps=0.25,0.5,1",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-ledgers-run2"
         ]
       ],
@@ -1301,7 +1494,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1309,6 +1503,8 @@
           "--types=txpage",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txpage-run2"
         ]
       ],
@@ -1326,7 +1522,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1334,6 +1531,8 @@
           "--types=txhash",
           "--target-rps=37.5,75,150",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-txhash-run2"
         ]
       ],
@@ -1351,7 +1550,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "cold",
           "--cold-dir=/bench/scratch/soroswap-1500/2",
           "--start-chunk=2",
@@ -1359,17 +1559,35 @@
           "--types=events",
           "--target-rps=1.875,3.75,7.5",
           "--duration=60s",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run2"
         ]
       ],
       "out_dir": "/bench/results/golden-deadbeef-20260101T000000Z/query-cold-soroswap-1500-c2-events-run2",
-      "post_clean": [
-        "/bench/scratch/soroswap-1500/2"
-      ],
       "needs": [
         "build",
         "dataset-soroswap-1500",
         "ingest-cold-soroswap-1500-c2-run2"
+      ]
+    },
+    {
+      "id": "cleanup-cold-soroswap-1500-c2",
+      "kind": "cleanup",
+      "timed": false,
+      "argv": [],
+      "post_clean": [
+        "/bench/scratch/soroswap-1500/2"
+      ],
+      "needs": [
+        "query-cold-soroswap-1500-c2-ledgers-run1",
+        "query-cold-soroswap-1500-c2-txpage-run1",
+        "query-cold-soroswap-1500-c2-txhash-run1",
+        "query-cold-soroswap-1500-c2-events-run1",
+        "query-cold-soroswap-1500-c2-ledgers-run2",
+        "query-cold-soroswap-1500-c2-txpage-run2",
+        "query-cold-soroswap-1500-c2-txhash-run2",
+        "query-cold-soroswap-1500-c2-events-run2"
       ]
     },
     {
@@ -1379,7 +1597,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1388,6 +1607,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-ledgers-run1"
         ]
       ],
@@ -1405,7 +1626,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1414,6 +1636,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txpage-run1"
         ]
       ],
@@ -1431,7 +1655,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1440,6 +1665,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txhash-run1"
         ]
       ],
@@ -1457,7 +1684,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1466,6 +1694,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-events-run1"
         ]
       ],
@@ -1483,7 +1713,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1492,6 +1723,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-ledgers-run2"
         ]
       ],
@@ -1509,7 +1742,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1518,6 +1752,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txpage-run2"
         ]
       ],
@@ -1535,7 +1771,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1544,6 +1781,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-txhash-run2"
         ]
       ],
@@ -1561,7 +1800,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/1",
           "--chunk=1",
@@ -1570,6 +1810,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c1-events-run2"
         ]
       ],
@@ -1587,7 +1829,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1596,6 +1839,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-ledgers-run1"
         ]
       ],
@@ -1613,7 +1858,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1622,6 +1868,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txpage-run1"
         ]
       ],
@@ -1639,7 +1887,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1648,6 +1897,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txhash-run1"
         ]
       ],
@@ -1665,7 +1916,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1674,6 +1926,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-events-run1"
         ]
       ],
@@ -1691,7 +1945,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1700,6 +1955,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-ledgers-run2"
         ]
       ],
@@ -1717,7 +1974,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1726,6 +1984,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txpage-run2"
         ]
       ],
@@ -1743,7 +2003,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1752,6 +2013,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-txhash-run2"
         ]
       ],
@@ -1769,7 +2032,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/sac-6000/2",
           "--chunk=2",
@@ -1778,6 +2042,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-sac-6000-c2-events-run2"
         ]
       ],
@@ -1795,7 +2061,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1804,6 +2071,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-ledgers-run1"
         ]
       ],
@@ -1821,7 +2090,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1830,6 +2100,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txpage-run1"
         ]
       ],
@@ -1847,7 +2119,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1856,6 +2129,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txhash-run1"
         ]
       ],
@@ -1873,7 +2148,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1882,6 +2158,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-events-run1"
         ]
       ],
@@ -1899,7 +2177,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1908,6 +2187,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-ledgers-run2"
         ]
       ],
@@ -1925,7 +2206,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1934,6 +2216,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txpage-run2"
         ]
       ],
@@ -1951,7 +2235,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1960,6 +2245,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-txhash-run2"
         ]
       ],
@@ -1977,7 +2264,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/1",
           "--chunk=1",
@@ -1986,6 +2274,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c1-events-run2"
         ]
       ],
@@ -2003,7 +2293,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2012,6 +2303,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-ledgers-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-ledgers-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-ledgers-run1"
         ]
       ],
@@ -2029,7 +2322,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2038,6 +2332,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txpage-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txpage-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txpage-run1"
         ]
       ],
@@ -2055,7 +2351,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2064,6 +2361,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txhash-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txhash-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txhash-run1"
         ]
       ],
@@ -2081,7 +2380,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2090,6 +2390,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-events-run1/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-events-run1/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-events-run1"
         ]
       ],
@@ -2107,7 +2409,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2116,6 +2419,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-ledgers-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-ledgers-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-ledgers-run2"
         ]
       ],
@@ -2133,7 +2438,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2142,6 +2448,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txpage-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txpage-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txpage-run2"
         ]
       ],
@@ -2159,7 +2467,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2168,6 +2477,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txhash-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txhash-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-txhash-run2"
         ]
       ],
@@ -2185,7 +2496,8 @@
       "argv": [
         [
           "/bench/bin/stellar-rpc-deadbeef",
-          "bench-query",
+          "bench",
+          "query",
           "hot",
           "--hot-dir=/bench/hot/soroswap-1500/2",
           "--chunk=2",
@@ -2194,6 +2506,8 @@
           "--duration=60s",
           "--warmup=20",
           "--sample-ledgers=50000",
+          "--cpuprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-events-run2/cpu.pprof",
+          "--memprofile=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-events-run2/mem.pprof",
           "--out=/bench/results/golden-deadbeef-20260101T000000Z/query-hot-soroswap-1500-c2-events-run2"
         ]
       ],

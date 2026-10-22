@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
 // git runs a git command in dir and fails the test if it does not succeed.
@@ -208,4 +210,139 @@ func TestResolveRef(t *testing.T) {
 			t.Errorf("ResolveRef = %s, want an error naming the missing clone", got)
 		}
 	})
+}
+
+// TestDetectBenchCLI checks that a commit whose bench package declares the
+// bench-ingest command reads as the legacy CLI and a later one as the bench
+// root CLI, per commit rather than per checkout.
+func TestDetectBenchCLI(t *testing.T) {
+	repo, _ := originRepo(t)
+	pkg := filepath.Join(repo, "cmd", "stellar-rpc", "internal", "rpcv2", "bench")
+	mustMkdir(t, pkg)
+	legacy := commit(t, repo, "cmd/stellar-rpc/internal/rpcv2/bench/command.go",
+		"package bench\n\nvar c = cobra.Command{\n\tUse:   \"bench-ingest\",\n}\n")
+	root := commit(t, repo, "cmd/stellar-rpc/internal/rpcv2/bench/command.go",
+		"package bench\n\nvar c = cobra.Command{\n\tUse:   \"bench\",\n}\n")
+
+	for _, tc := range []struct {
+		commit string
+		want   plan.BenchCLI
+	}{
+		{legacy, plan.BenchCLILegacy},
+		{root, plan.BenchCLIRoot},
+	} {
+		got, err := DetectBenchCLI(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("DetectBenchCLI(%s): %v", tc.commit[:8], err)
+		}
+		if got != tc.want {
+			t.Errorf("DetectBenchCLI(%s) = %q, want %q", tc.commit[:8], got, tc.want)
+		}
+	}
+
+	if _, err := DetectBenchCLI(repo, "0000000000000000000000000000000000000000"); err == nil {
+		t.Error("DetectBenchCLI of a commit the clone lacks succeeded, want an error")
+	}
+}
+
+// TestDetectQueryCLI checks the query bench probe in its three shapes, and
+// that a command declared only in a test file does not count.
+func TestDetectQueryCLI(t *testing.T) {
+	repo, _ := originRepo(t)
+	mustMkdir(t, filepath.Join(repo, "cmd"))
+	path := "cmd/command.go"
+	ingestOnly := commit(t, repo, path, "var c = cobra.Command{Use: \"bench-ingest\"}\n")
+	legacy := commit(t, repo, path, "var c = cobra.Command{Use: \"bench-ingest\"}\nvar q = cobra.Command{Use: \"bench-query\"}\n")
+	rootOnly := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\n")
+	testOnly := commit(t, repo, "cmd/command_test.go", "var q = cobra.Command{Use: \"query\"}\n"+
+		"var d = newBenchCommand(\"query\", \"\")\n")
+	tiered := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\nvar q = cobra.Command{Use:   \"query\"}\n")
+	dataDir := commit(t, repo, path, "var c = cobra.Command{Use: \"bench\"}\nfunc q() { cmd = newBenchCommand(\"query\",\n\t\"Benchmark reads\") }\n")
+
+	for _, tc := range []struct {
+		name   string
+		commit string
+		cli    plan.BenchCLI
+		want   plan.QueryCLI
+		ok     bool
+	}{
+		{"legacy without bench-query", ingestOnly, plan.BenchCLILegacy, plan.QueryCLITiered, false},
+		{"legacy with bench-query", legacy, plan.BenchCLILegacy, plan.QueryCLITiered, true},
+		{"root without query", rootOnly, plan.BenchCLIRoot, plan.QueryCLITiered, false},
+		{"a query command in a test file only", testOnly, plan.BenchCLIRoot, plan.QueryCLITiered, false},
+		{"root with query cold|hot", tiered, plan.BenchCLIRoot, plan.QueryCLITiered, true},
+		{"root with query --data-dir", dataDir, plan.BenchCLIRoot, plan.QueryCLIDataDir, true},
+		{"a legacy bench-query is not the root query", legacy, plan.BenchCLIRoot, plan.QueryCLITiered, false},
+	} {
+		got, ok, err := DetectQueryCLI(repo, tc.commit, tc.cli)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("%s: DetectQueryCLI = %q, %t; want %q, %t", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestDetectBuildTarget checks each Makefile generation: build-rpc-v2 wins
+// over the rpcv1 alias that its Makefiles also call build-stellar-rpc, a
+// Makefile with build-stellar-rpc alone (c48a55c6) builds shared, only
+// build-native-libs makes the build static, and a Makefile with no build
+// target is an error.
+func TestDetectBuildTarget(t *testing.T) {
+	repo, _ := originRepo(t)
+	shared := commit(t, repo, "Makefile", "build-stellar-rpc: build-rpc-v1\n\nbuild-rpc-v2: build-libs\n")
+	onlyStellarRPC := commit(t, repo, "Makefile", "build-stellar-rpc: build-libs\n")
+	static := commit(t, repo, "Makefile",
+		"build-native-libs: $(ZSTD_HOME)/lib/libzstd.a\n\nbuild-stellar-rpc: build-libs build-native-libs\n")
+	neither := commit(t, repo, "Makefile", "build: build-libs\n")
+
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   plan.BuildTarget
+		static bool
+	}{
+		{"build-rpc-v2 and its shared libraries", shared, plan.BuildRPCV2, false},
+		{"build-stellar-rpc alone, shared (c48a55c6)", onlyStellarRPC, plan.BuildStellarRPC, false},
+		{"build-native-libs, one static binary", static, plan.BuildStellarRPC, true},
+	} {
+		got, gotStatic, err := DetectBuildTarget(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want || gotStatic != tc.static {
+			t.Errorf("%s: DetectBuildTarget = %q, %t; want %q, %t", tc.name, got, gotStatic, tc.want, tc.static)
+		}
+	}
+	if got, _, err := DetectBuildTarget(repo, neither); err == nil {
+		t.Errorf("DetectBuildTarget of a Makefile with neither target = %q, want an error", got)
+	}
+}
+
+// TestDetectEmptyColdOutDir checks the probe for bench ingest cold's empty
+// --cold-out-dir rule, which a test file alone does not satisfy.
+func TestDetectEmptyColdOutDir(t *testing.T) {
+	repo, _ := originRepo(t)
+	mustMkdir(t, filepath.Join(repo, "cmd"))
+	before := commit(t, repo, "cmd/cold.go", "func validate() error { return nil }\n")
+	testOnly := commit(t, repo, "cmd/cold_test.go", "var _ = requireEmptyDir(\"cold-out-dir\", root)\n")
+	after := commit(t, repo, "cmd/cold.go", "func validate() error { return requireEmptyDir(\"cold-out-dir\", o.ColdRoot) }\n")
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   bool
+	}{
+		{"before #1070", before, false},
+		{"the rule in a test file only", testOnly, false},
+		{"from #1070 on", after, true},
+	} {
+		got, err := DetectEmptyColdOutDir(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: DetectEmptyColdOutDir = %t, want %t", tc.name, got, tc.want)
+		}
+	}
 }

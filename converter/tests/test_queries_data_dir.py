@@ -1,0 +1,152 @@
+"""Query legs of `bench query --data-dir` (stellar-rpc#1070): latency.csv and
+scenarios.csv convert to the cells and verdicts the tiered legs give."""
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import convert   # noqa: E402
+import fixtures  # noqa: E402
+from test_queries_rps import UNIT, run_convert   # noqa: E402
+
+
+def build(data_dir, eviction="requested", ledgers_limit=None):
+    root = os.path.join(tempfile.mkdtemp(), "b")
+    fixtures.build_rps_bundle(root)
+    fixtures.to_run_records(root)
+    if data_dir:
+        fixtures.to_data_dir_legs(root, eviction=eviction, ledgers_limit=ledgers_limit)
+    return root
+
+
+class DataDirCellTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tiered, cls.tiered_warnings, _ = run_convert(build(data_dir=False))
+        cls.data, cls.warnings, _ = run_convert(build(data_dir=True))
+
+    def test_clean_and_structurally_valid(self):
+        self.assertEqual(self.warnings, [])
+        self.assertEqual(convert.validate_run(self.data, reps=2), [])
+
+    def test_generation_marker(self):
+        self.assertEqual(self.data["campaign"]["query_cli"], "data-dir")
+        self.assertEqual(self.tiered["campaign"]["query_cli"], "tiered")
+
+    def test_cells_and_verdicts_match_the_tiered_legs(self):
+        for tier in ("cold", "hot"):
+            got, want = self.data["queries"][tier][UNIT], self.tiered["queries"][tier][UNIT]
+            for qt in ("ledgers", "txpage", "txhash", "events"):
+                self.assertEqual(got[qt], want[qt], f"{tier} {qt}")
+
+    def test_verdicts_present(self):
+        txhash = self.data["queries"]["cold"][UNIT]["txhash"]
+        self.assertTrue(txhash["verdict_sla"]["pass"])
+        self.assertTrue(txhash["verdict_e2e"]["pass"])
+
+    def test_setup_carries_open_evict_and_peak(self):
+        cold = self.data["queries"]["cold"][UNIT]["setup"]
+        want = self.tiered["queries"]["cold"][UNIT]["setup"]
+        self.assertEqual(list(cold), ["open", "evict", "peak_rss_bytes"])
+        for row in cold:
+            self.assertEqual(cold[row]["r"], want[row]["r"], row)
+        self.assertEqual(list(self.data["queries"]["hot"][UNIT]["setup"]),
+                         ["open", "peak_rss_bytes"])
+
+
+class DataDirWarningTests(unittest.TestCase):
+    def test_cold_leg_without_eviction_warns(self):
+        data, warnings, _ = run_convert(build(data_dir=True, eviction="unsupported-on-this-platform"))
+        self.assertTrue(any("query-cold-" in w and "warm-cache" in w for w in warnings), warnings)
+        self.assertFalse(any("query-hot-" in w for w in warnings), warnings)
+        self.assertNotIn("evict", data["queries"]["cold"][UNIT]["setup"])
+
+    def test_tier_mismatch_warns(self):
+        root = build(data_dir=True)
+        leg = os.path.join(root, f"query-hot-{UNIT}-txhash-run1")
+        path = os.path.join(leg, "run.json")
+        with open(path) as f:
+            text = f.read()
+        with open(path, "w") as f:
+            f.write(text.replace('"tier": "hot"', '"tier": "cold"'))
+        _, warnings, _ = run_convert(root)
+        self.assertTrue(any("run.json tier 'cold'" in w for w in warnings), warnings)
+
+    def test_leg_with_no_report_is_skipped(self):
+        root = build(data_dir=True)
+        for r in (1, 2):
+            leg = os.path.join(root, f"query-hot-{UNIT}-events-run{r}")
+            for name in ("latency.csv", "scenarios.csv"):
+                os.remove(os.path.join(leg, name))
+        data, warnings, _ = run_convert(root)
+        self.assertNotIn("events", data["queries"]["hot"][UNIT])
+        self.assertTrue(any("events: no CSVs" in w for w in warnings), warnings)
+        self.assertIn(f"missing query outputs in query-hot-{UNIT}-events-run1", warnings)
+
+
+class CellSetupTests(unittest.TestCase):
+    """A cell's setup rows cover every leg of the cell, not only its first."""
+
+    def test_evict_sums_every_leg_and_rate(self):
+        data, _, _ = run_convert(build(data_dir=True))
+        evict = data["queries"]["cold"][UNIT]["setup"]["evict"]
+        # Each of the four legs evicts once in the fixture, 4000 ns each.
+        self.assertEqual(evict["r"], [16000, 16000])
+        self.assertEqual(evict["n_items"], 4)
+
+    def test_peak_rss_is_the_highest_leg(self):
+        root = build(data_dir=True)
+        for r in (1, 2):
+            path = os.path.join(root, f"query-hot-{UNIT}-txhash-run{r}", "run.json")
+            with open(path) as f:
+                rec = json.load(f)
+            rec["peakRssBytes"] = 4_500_000_000 + r
+            with open(path, "w") as f:
+                json.dump(rec, f)
+        data, warnings, _ = run_convert(root)
+        self.assertEqual(warnings, [])
+        peak = data["queries"]["hot"][UNIT]["setup"]["peak_rss_bytes"]
+        self.assertEqual(peak["r"], [4_500_000_001, 4_500_000_002])
+
+
+class LedgersPageTests(unittest.TestCase):
+    def test_ledgers_limit_is_recorded(self):
+        data, warnings, _ = run_convert(build(data_dir=True, ledgers_limit=1))
+        self.assertEqual(warnings, [])
+        self.assertEqual(data["campaign"]["query_ledgers_limit"], 1)
+        # The SLA's request shape stays what targets.json states.
+        self.assertEqual(data["campaign"]["query_load"]["derivation"]["ledgers_span"], 10)
+
+    def test_no_limit_flag_records_nothing(self):
+        data, _, _ = run_convert(build(data_dir=False))
+        self.assertNotIn("query_ledgers_limit", data["campaign"])
+
+
+class MissingOutputTests(unittest.TestCase):
+    def test_leg_dir_without_outputs_warns(self):
+        root = build(data_dir=True)
+        leg = os.path.join(root, f"query-cold-{UNIT}-txpage-run2")
+        for name in ("latency.csv", "scenarios.csv"):
+            os.remove(os.path.join(leg, name))
+        data, warnings, _ = run_convert(root)
+        self.assertIn(f"missing query outputs in query-cold-{UNIT}-txpage-run2", warnings)
+        self.assertIn("txpage", data["queries"]["cold"][UNIT])   # run 1 still counts
+
+
+class TieredRunRecordTests(unittest.TestCase):
+    """A tiered `bench query cold|hot` bundle with run.json legs, as
+    bench-campaign 2ff814a6 writes it, still converts."""
+    def test_tiered_run_json_bundle_converts(self):
+        data, warnings, _ = run_convert(build(data_dir=False))
+        self.assertEqual(warnings, [])
+        self.assertEqual(convert.validate_run(data, reps=2), [])
+        self.assertEqual(data["campaign"]["query_cli"], "tiered")
+        self.assertIn("verdict_sla", data["queries"]["cold"][UNIT]["txhash"])
+
+
+if __name__ == "__main__":
+    unittest.main()

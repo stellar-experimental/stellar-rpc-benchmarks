@@ -26,8 +26,8 @@ type legState struct {
 }
 
 // legSentinelName is the runner-owned completion marker. The bench subcommands
-// own invocation.json; nothing but this runner writes leg.json, which is why it
-// is the sentinel resume trusts first.
+// own run.json (invocation.json before stellar-rpc#1066); nothing but this
+// runner writes leg.json, which is why it is the sentinel resume trusts first.
 const legSentinelName = "leg.json"
 
 // LegComplete reports whether a leg's --out directory already holds a leg an
@@ -79,10 +79,11 @@ func classifyLegDir(dir, wantID string) legState {
 
 	// No leg.json: this may be a bundle the bash runner produced, which had no
 	// sentinel of its own and inferred completion from the manifests the bench
-	// subcommand writes. A failed run also writes invocation.json — with an
-	// `error` field (stellar-rpc#907) — so completion means both files present
-	// AND no error recorded.
-	inv, err := readInvocation(filepath.Join(dir, "invocation.json"))
+	// subcommand writes. A failed run also writes its manifest — with an
+	// `error` field (stellar-rpc#907) — so completion means a manifest and
+	// driver.csv present AND no error recorded. run.json also says when the
+	// process died mid-run: its status stays running.
+	inv, err := readRunManifest(dir)
 	if err != nil {
 		return legState{kind: legPartial}
 	}
@@ -91,6 +92,9 @@ func classifyLegDir(dir, wantID string) legState {
 	}
 	if inv.Error != "" {
 		return legState{kind: legFailedEarlier, reason: inv.Error}
+	}
+	if inv.Status == runStatusRunning {
+		return legState{kind: legPartial, reason: "run.json records a run that never finished"}
 	}
 	return legState{kind: legComplete}
 }
@@ -120,11 +124,27 @@ func readLegSentinel(path string) (legSentinelView, error) {
 	return s, nil
 }
 
-// invocationManifest is the sliver of stellar-rpc's invocation.json this runner
-// reads: whether the run recorded a failure. The file is camelCase and owned by
-// the other repo; the runner never writes it.
+// invocationManifest is the sliver of stellar-rpc's run.json or invocation.json
+// this runner reads: whether the run recorded a failure, and (run.json only)
+// whether it finished. The files are camelCase and owned by the other repo;
+// the runner never writes them.
 type invocationManifest struct {
-	Error string `json:"error"`
+	Error  string `json:"error"`
+	Status string `json:"status"`
+}
+
+// runStatusRunning is run.json's status while the run is in progress, and
+// after a process that died before it finished.
+const runStatusRunning = "running"
+
+// readRunManifest reads dir's run.json, or its invocation.json when there is
+// no run.json.
+func readRunManifest(dir string) (invocationManifest, error) {
+	m, err := readInvocation(filepath.Join(dir, "run.json"))
+	if os.IsNotExist(err) {
+		return readInvocation(filepath.Join(dir, "invocation.json"))
+	}
+	return m, err
 }
 
 func readInvocation(path string) (invocationManifest, error) {

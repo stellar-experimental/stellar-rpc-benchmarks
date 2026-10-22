@@ -647,7 +647,68 @@ function summaryHasBudget(D) {
 /* The summary's own section assertions, shared by the manifest runs and the
    generated fixtures. `text` is the rendered page with #queries cut out — the
    only place the tier words are allowed to appear. */
+// The dataset-sizes file the summary reads, and the summary's own lookup of a
+// unit's sizes: by the run's set (dataset.sets, else legacy_set for a run
+// converted before that field) and profile, never by profile alone.
+const DATASET_SIZES = JSON.parse(fs.readFileSync(path.join(DOCS, "dataset-sizes.json"), "utf8"));
+function runSetOf(D, unit) {
+  const sets = (D.dataset || {}).sets;
+  if (sets === undefined) return DATASET_SIZES.legacy_set || null;
+  return (sets && sets[String(unit).replace(/-c\d+$/, "")]) || null;
+}
+// summaryDatasetUnits are the units summary.js lists in its dataset table.
+function summaryDatasetUnits(D) {
+  const ds = D.dataset || {}, um = ds.unit_meta || {}, ING = D.ingest_hot || {};
+  return (ds.unit_order || Object.keys(um))
+    .filter((u) => ING[u] && ING[u].driver && ING[u].driver.ingest_total)
+    .filter((u) => { const k = um[u] || {}; return k.ledgers > 0 && k.txs > 0; });
+}
+// checkDatasetWorkloads checks that the dataset table names each unit's own
+// workload, mapped by model the way summary.js workloadFor maps it, or the unit
+// id itself when the run has no goal phase to take workload names from.
+function checkDatasetWorkloads(doc, group, D) {
+  const names = [...doc.querySelectorAll("#dataset-table td.ds-name")].map((td) => txt(td));
+  const want = summaryDatasetUnits(D).map((u) => {
+    if ((D.campaign || {}).phase == null) return u;
+    const id = u.toLowerCase();
+    return id.startsWith("sac") ? "SAC transfers" : id.includes("token") ? "OZ token transfers"
+      : id.includes("soroswap") ? "Soroswap swaps" : u;
+  });
+  check(group, "dataset table names each unit's own workload",
+    want.length > 0 && names.length === want.length && want.every((w, i) => names[i] === w),
+    `${names.join(", ")} vs ${want.join(", ")}`);
+}
+// summaryShowsSizes mirrors summary.js allSized: the size column renders only
+// when every dataset-table unit has a raw size in its own set.
+function summaryShowsSizes(D, sizes = DATASET_SIZES) {
+  const units = summaryDatasetUnits(D);
+  const sized = (u) => {
+    const set = runSetOf(D, u);
+    const p = set && sizes.sets[set] && sizes.sets[set].profiles[String(u).replace(/-c\d+$/, "")];
+    return !!(p && p.raw_meta_gib > 0 && p.raw_meta_ledgers > 0);
+  };
+  return units.length > 0 && units.every(sized);
+}
+// summaryShowsSource is when the summary links the test data: every unit on one
+// set the file knows.
+function summaryShowsSource(D) {
+  const ds = D.dataset || {}, um = ds.unit_meta || {};
+  const sets = [...new Set((ds.unit_order || Object.keys(um)).map((u) => runSetOf(D, u)))];
+  return sets.length === 1 && !!sets[0] && !!(DATASET_SIZES.sets[sets[0]] || {}).source;
+}
+
 function checkSummarySections(sdoc, group, D) {
+  // The E2E figure names the getTransaction probe rate, and says when the box fell short of it.
+  const probes = Object.values((D.queries || {}).hot || {}).map(u => u.txhash && u.txhash.verdict_e2e).filter(Boolean);
+  const budgetEl = sdoc.getElementById("budget");
+  if (probes.length && budgetEl && summaryHasBudget(D)) {
+    const bTxt = txt(budgetEl);
+    check(group, "summary: the E2E figure names the getTransaction probe rate",
+      /getTransaction is measured at [\d,]+ rps/.test(bTxt), bTxt.slice(0, 200));
+    const short = probes.some(v => v.achieved_rps_m != null && v.achieved_rps_m < 0.95 * v.target_rps);
+    if (short) check(group, "summary: the E2E figure says the box fell short of the probe rate",
+      /served only [\d,]+ rps/.test(bTxt), bTxt.slice(0, 200));
+  }
   const sreport = sdoc.getElementById("report");
   const wantBudget = summaryHasBudget(D);
   const QR = summaryQueryRows(D);
@@ -757,7 +818,9 @@ function checkSummarySections(sdoc, group, D) {
     const cells = new Map(QR[tier].map((r) => [`${r.qt}\0${r.unit}`, r.v]));
     for (const [ri, qt] of SUMMARY_QT_ORDER.entries()) {
       const row = rows[ri];
-      const rowHead = txt(row && row.querySelector("th[scope=row]"));
+      // The endpoint name is the header's own text; a page-size note may follow it.
+      const th = row && row.querySelector("th[scope=row]");
+      const rowHead = th && th.firstChild ? th.firstChild.textContent.trim() : "";
       check(group, `${tier} matrix row ${ri + 1} is ${QT_ENDPOINT[qt]}`,
         rowHead === QT_ENDPOINT[qt], rowHead);
       const data = row ? [...row.querySelectorAll("td")] : [];
@@ -877,6 +940,47 @@ const FIXTURE_CHECKS = {
     check(group, "the run names its goal phase", D.campaign.phase === 3, String(D.campaign.phase));
   },
 
+  /* The phase-3 fixture with its query legs written by `bench query
+     --data-dir`: the same verdicts, plus the generation note and the
+     data-dir setup wording. */
+  "fixture-rps-data-dir": (doc, group, D) => {
+    FIXTURE_CHECKS["fixture-rps-phase3"](doc, group, D);
+    check(group, "the run records the data-dir query bench", D.campaign.query_cli === "data-dir",
+      String(D.campaign.query_cli));
+    const setupCap = txt(doc.querySelector("#figq5 figcaption"));
+    check(group, "setup caption says the data-dir bench evicts before each rate, summed over the cell",
+      setupCap.includes("before each rate, summed over the cell's legs") && setupCap.includes("daemon startup"), setupCap);
+  },
+
+  /* Phase 3b: a label rather than a number. The run must select the 3b entry
+     of the phases table and render it by name, never as phase 3. */
+  "fixture-rps-phase3b": (doc, group, D) => {
+    check(group, "the run names its goal phase", D.campaign.phase === "3b", String(D.campaign.phase));
+    const es = qEntries(D);
+    check(group, "every endpoint × profile × tier carries an SLA verdict",
+      es.length > 0 && es.every((e) => e.qout.verdict_sla),
+      es.filter((e) => !e.qout.verdict_sla).length + " without a verdict");
+    const body = txt(doc.getElementById("report"));
+    check(group, "the report labels the phase 3b", /Phase 3b/.test(body), body.slice(0, 200));
+    check(group, "the report states the 3b ingest target", /105 ms/.test(body),
+      (body.match(/.{0,60}105 ms.{0,60}/) || [""])[0]);
+    const sel = (D.campaign.phase_targets || []).find((p) => p.phase === "3b");
+    check(group, "the 3b goal is two 900 ms blocks inside a 2 s budget",
+      !!sel && sel.block_count === 2 && sel.block_time_ns === 900e6 && sel.e2e_budget_ns === 2e9, JSON.stringify(sel));
+    check(group, "no NaN or negative budget anywhere in the report", !/NaN|-\d+(\.\d+)? ?(ms|s)\b/.test(body),
+      (body.match(/.{0,40}(NaN|-\d+(\.\d+)? ?(ms|s)\b).{0,40}/) || [""])[0]);
+    const tx = es.filter((e) => e.qt === "txhash");
+    check(group, "every 3b getTransaction leg carries an E2E-budget verdict", tx.length > 0 && tx.every((e) => e.qout.verdict_e2e),
+      tx.filter((e) => !e.qout.verdict_e2e).length + " without a verdict");
+  },
+
+  /* One profile, and not sac: the summary must name the run's own workload,
+     never assume a sac row. */
+  "fixture-rps-soroswap-only": (doc, group, D) => {
+    check(group, "the run carries one soroswap unit", D.dataset.unit_order.join(",") === "soroswap-1500-c1", D.dataset.unit_order.join(","));
+    check(group, "the run names its goal phase", D.campaign.phase === 1, String(D.campaign.phase));
+  },
+
   /* No phase floor: the run is paced off-phase and names no query_phase, so the
      converter emits r-cells with no verdict at all. The section must still
      render and must judge every row on that endpoint and tier's own latency
@@ -977,6 +1081,22 @@ for (const file of fixtureFiles) {
     !!(D.campaign.query_load && qEntries(D).some((e) => rateKeys(e.qout).length)), "not the RPS shape");
   check(group, "fixture detected as the open-loop shape", queryShape(D) === "open", queryShape(D));
   checkSyntheticQueries(doc, group, D);
+  // The getLedgers page note belongs to runs that queried a page smaller than
+  // the SLA's 10-ledger shape.
+  const pageNote = /1 ledger per page \(SLA shape is 10\)/;
+  const wantPageNote = D.campaign.query_ledgers_limit === 1;
+  const verdictTxt = txt(doc.getElementById("query-verdict-table"));
+  check(group, "the getLedgers page note shows only on a 1-ledger-page run", pageNote.test(verdictTxt) === wantPageNote,
+    (verdictTxt.match(/getLedgers[^·]*·[^·]*/) || [""])[0]);
+  if (wantPageNote) {
+    check(group, "the getLedgers page note follows the tier with a separator, not in nested parentheses",
+      /· (cold|hot) · 1 ledger per page \(SLA shape is 10\)/.test(verdictTxt) && !/\(1 ledger per page/.test(verdictTxt),
+      (verdictTxt.match(/.{0,30}1 ledger per page.{0,30}/) || [""])[0]);
+  }
+  // The generation note belongs to data-dir runs alone.
+  const qIntro = txt(doc.querySelector("#queries > .sec-intro"));
+  check(group, "the JSON-RPC handler note shows only on a data-dir run",
+    qIntro.includes("JSON-RPC handlers") === (D.campaign.query_cli === "data-dir"), qIntro.slice(-160));
   const extra = FIXTURE_CHECKS[D.run_id];
   check(group, "fixture has its own assertions", !!extra, "no FIXTURE_CHECKS entry for " + D.run_id);
   if (extra) extra(doc, group, D);
@@ -992,6 +1112,49 @@ for (const file of fixtureFiles) {
   check(group, "summary: zero JS/console errors", sm.errors.length === 0, sm.errors.join(" | ") || "");
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
   checkSummarySections(sdoc, group + " summary", D);
+  checkDatasetWorkloads(sdoc, group + " summary", D);
+  {
+    const qTxt = txt(sdoc.getElementById("queries"));
+    check(group, "summary: the getLedgers page note shows only on a 1-ledger-page run",
+      /1 ledger per page \(SLA shape is 10\)/.test(qTxt) === (D.campaign.query_ledgers_limit === 1),
+      (qTxt.match(/getLedgers.{0,60}/) || [""])[0]);
+  }
+  // Sizes are matched by the run's set and profile. phase3 is on the 2026-07
+  // set, whose sizes are measured; phase3b and partial are on the 2026-10 c1
+  // set, whose sizes are not, and partial's sac-6000 also exists in 2026-07.
+  const dsTxt = txt(sdoc.getElementById("dataset-table"));
+  if (D.run_id === "fixture-rps-phase3") {
+    check(group, "summary: a 2026-07 run shows the size column", /Avg ledger size/.test(dsTxt) && /MiB/.test(dsTxt), dsTxt.slice(0, 120));
+  }
+  if (D.run_id === "fixture-rps-phase3b" || D.run_id === "fixture-rps-partial") {
+    check(group, "summary: a 2026-10 run without measured sizes has no size column, not another set's",
+      !/Avg ledger size|MiB/.test(dsTxt), dsTxt.slice(0, 120));
+    check(group, "summary: no test-data link to another set", !/2026-07/.test(txt(sdoc.getElementById("source-data"))), "2026-07 link");
+  }
+  if (D.run_id === "fixture-rps-phase3b") {
+    // With the 2026-10 c1 sizes filled in, the same run shows them.
+    const filled = JSON.parse(JSON.stringify(DATASET_SIZES));
+    const c1 = filled.sets["2026-10-apply-load-20k-c1"].profiles;
+    c1["sac-6000"].raw_meta_gib = 512; c1["sac-6000"].raw_meta_ledgers = 20000;           // 26.2 MiB/ledger
+    c1["soroswap-1500"].raw_meta_gib = 128; c1["soroswap-1500"].raw_meta_ledgers = 20000; // 6.55 MiB/ledger
+    const sf = await loadViewer(`?run=${D.run_id}`, { page: "summary.html", script: "summary.js",
+      fetch: makeFetch({ ...overlay, "dataset-sizes.json": JSON.stringify(filled) }) });
+    const fTxt = txt(sf.window.document.getElementById("dataset-table"));
+    check(group, "summary: a 2026-10 run with sizes shows them", summaryShowsSizes(D, filled)
+      && /Avg ledger size/.test(fTxt) && /26\.2 MiB/.test(fTxt), fTxt.slice(0, 200));
+    check(group, "summary: the test-data link names the 2026-10 c1 set",
+      /2026-10-apply-load-20k-c1/.test(txt(sf.window.document.getElementById("source-data"))), "missing");
+    sf.window.close();
+  }
+  if (D.run_id === "fixture-rps-phase3b") {
+    const stext = txt(sreport);
+    const budgetTxt = txt(sdoc.getElementById("budget"));
+    check(group, "summary: the 3b E2E budget spans 2 blocks of 900 ms", /2 blocks × 900 ms/.test(budgetTxt),
+      budgetTxt.slice(0, 200));
+    check(group, "summary: no NaN", !/NaN/.test(stext), (stext.match(/.{0,40}NaN.{0,40}/) || [""])[0]);
+    check(group, "summary: the 3b goal is 105 ms", /105 ms/.test(stext),
+      (stext.match(/.{0,60}105 ms.{0,60}/) || [""])[0]);
+  }
   sm.window.close();
 }
 
@@ -1054,6 +1217,87 @@ for (const file of fixtureFiles) {
   check(group, "all listing columns present",
     ["Run", "Phase", "Kind", "Machine", "Host", "Commit", "Branch"].every((h) => headers.some((x) => x.startsWith(h))), headers.join(","));
   window.close();
+}
+
+{
+  /* A phase is a label: the facet and the table sort must handle "3b" beside
+     the numeric phases. Listing entries need no run file to render. */
+  const group = "run-index phase labels";
+  console.log(`\n=== index.html (phase facet with a "3b" label) ===`);
+  const extra = [
+    { id: "idx-3b-a", name: "Phase 3b run A", date: "2026-10-01", kind: "synthetic", path: "runs/idx-3b-a.json", phase: "3b" },
+    { id: "idx-3b-b", name: "Phase 3b run B", date: "2026-10-02", kind: "synthetic", path: "runs/idx-3b-b.json", phase: "3b" },
+  ];
+  const runs = [...manifest.runs, ...extra];
+  const overlay = { "runs/index.json": JSON.stringify({ ...manifest, runs }) };
+  const facetRows = async (label, ov = overlay) => {
+    const { window, errors } = await loadViewer("", { fetch: makeFetch(ov) });
+    const doc = window.document;
+    const opt = [...doc.querySelectorAll('.idx-opt[data-f="phase"]')].find((b) => txt(b).startsWith(label));
+    if (opt) opt.click();
+    const out = { errors, found: !!opt, on: !!opt && !!doc.querySelector('.idx-opt.on[data-f="phase"]'),
+      rows: doc.querySelectorAll(".idx-row").length };
+    window.close();
+    return out;
+  };
+  // The published 3b runs count too: the manifest gains them as they land.
+  const want3b = (base) => extra.length + base.filter((r) => String(r.phase) === "3b").length;
+  const p3b = await facetRows("Phase 3b");
+  check(group, "zero JS/console errors", p3b.errors.length === 0, p3b.errors.join(" | ") || "");
+  check(group, "the Phase 3b facet filters to the 3b runs", p3b.found && p3b.on && p3b.rows === want3b(manifest.runs),
+    `found=${p3b.found} on=${p3b.on} rows=${p3b.rows} want=${want3b(manifest.runs)}`);
+  // The same check over a manifest that already carries a published 3b run.
+  const published = [...manifest.runs, { id: "idx-3b-published", name: "Published phase 3b run", date: "2026-10-03",
+    kind: "synthetic", path: "runs/idx-3b-published.json", phase: "3b" }];
+  const withPublished = { "runs/index.json": JSON.stringify({ ...manifest, runs: [...published, ...extra] }) };
+  const p3bPub = await facetRows("Phase 3b", withPublished);
+  check(group, "the Phase 3b facet counts a published 3b run too", p3bPub.found && p3bPub.on && p3bPub.rows === want3b(published),
+    `found=${p3bPub.found} on=${p3bPub.on} rows=${p3bPub.rows} want=${want3b(published)}`);
+  const numeric = runs.filter((r) => String(r.phase) === "1").length;
+  if (numeric) {
+    const p1 = await facetRows("Phase 1");
+    check(group, "a numeric phase facet still filters", p1.found && p1.on && p1.rows === numeric,
+      `found=${p1.found} on=${p1.on} rows=${p1.rows} want=${numeric}`);
+  }
+  const { window } = await loadViewer("?view=table", { fetch: makeFetch(overlay) });
+  const doc = window.document;
+  [...doc.querySelectorAll(".idx-table thead th")].find((th) => th.getAttribute("data-k") === "phase").click();
+  const col = [...doc.querySelectorAll(".idx-table thead th")].findIndex((th) => th.getAttribute("data-k") === "phase");
+  const phases = [...doc.querySelectorAll(".idx-table tbody tr")].map((tr) => txt(tr.children[col])).filter((p) => p !== "—");
+  const want = [...phases].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  check(group, "the phase column sorts 3 before 3b", phases.length > 0 && phases.join(",") === want.join(",")
+    && phases.indexOf("3b") > phases.lastIndexOf("3"), phases.join(","));
+  window.close();
+}
+
+{
+  /* The latency model page runs its own inline script, so it loads without
+     loadViewer's script injection; fetch must exist before that script runs. */
+  const group = "latency model";
+  console.log(`\n=== latency-model.html?phase=3b ===`);
+  const errors = [];
+  const vc = new VirtualConsole();
+  vc.on("jsdomError", (e) => errors.push("jsdomError: " + (e.detail?.message || e.message || e)));
+  vc.on("error", (...a) => errors.push("console.error: " + a.join(" ")));
+  const dom = new JSDOM(fs.readFileSync(path.join(DOCS, "latency-model.html"), "utf8"), {
+    url: `${ORIGIN}/latency-model.html?phase=3b`, runScripts: "dangerously", pretendToBeVisual: true,
+    virtualConsole: vc,
+    beforeParse(window) {
+      window.fetch = fetchShim;
+      window.matchMedia = (q) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} });
+    },
+  });
+  let body = "";
+  for (let i = 0; i < 80 && !/ingestion target/.test(body); i++) {
+    await new Promise((r) => setTimeout(r, 25));
+    body = txt(dom.window.document.body);
+  }
+  check(group, "zero JS/console errors", errors.length === 0, errors.join(" | ") || "");
+  check(group, "the 3b ingestion target is 105 ms", /ingestion target 105 ms/.test(body),
+    (body.match(/.{0,40}ingestion target.{0,60}/) || [""])[0]);
+  check(group, "the 3b goal counts 2 blocks of 900 ms in a 2 s budget", /900 ms block time × 2, 2 s E2E budget/.test(body),
+    (body.match(/.{0,40}block time ×.{0,60}/) || [""])[0]);
+  dom.window.close();
 }
 
 /* ---------------- unit-label display in the default report ---------------- */
@@ -1200,13 +1444,29 @@ for (const run of manifest.runs) {
   const dsCells = [...doc.querySelectorAll("#dataset-table td")].map(td => txt(td));
   const badCell = c => !c || c === "—" || /NaN|Infinity/.test(c);
   check(group, "dataset table has no empty or — cells", dsCells.length > 0 && !dsCells.some(badCell), dsCells.filter(badCell).length + " bad of " + dsCells.length);
-  check(group, "dataset table names the workloads", /SAC transfers/.test(txt(doc.getElementById("dataset-table"))), "missing");
+  checkDatasetWorkloads(doc, group, runJSON(run.id));
   // Test-data provenance: sizes + source come from dataset-sizes.json; the
   // run's own bundle URI (source_uri, legacy source_gcs) is the raw-results
   // dir, linked from §05.
   const dsTblTxt = txt(doc.getElementById("dataset-table"));
-  check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
-  check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
+  const RD = runJSON(run.id);
+  if (summaryShowsSizes(RD)) {
+    check(group, "avg ledger size column filled (MiB)", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
+  } else {
+    check(group, "no avg ledger size column without sizes for every profile of the run's set",
+      !/Avg ledger size/i.test(dsTblTxt), dsTblTxt.slice(0, 120));
+  }
+  if (summaryShowsSource(RD)) {
+    check(group, "test-data source links the synthetic dataset", /synthetic-ledgers/.test(txt(doc.getElementById("source-data"))), "missing");
+  }
+  // Independent of the lookup the checks above mirror, so a legacy_set typo in
+  // dataset-sizes.json cannot pass them both: every published run converted
+  // before dataset.sets ran on the 2026-07 set, whose sizes are measured.
+  if (RD.dataset.sets === undefined) {
+    check(group, "a 2026-07 run shows the size column", /Avg ledger size/i.test(dsTblTxt) && /MiB/.test(dsTblTxt), dsTblTxt.slice(0, 120));
+    check(group, "a 2026-07 run links the 2026-07 test data",
+      /synthetic-ledgers\/2026-07-18-apply-load-20k/.test(txt(doc.getElementById("source-data"))), txt(doc.getElementById("source-data")));
+  }
   check(group, "raw-results link in §05", /(gs|s3):\/\/\S*results\//.test(txt(doc.getElementById("raw-results"))), "missing");
   check(group, "pacing diagram rendered", !!doc.querySelector("#fig21-body svg"), "missing");
   // Headline figure: bars plus two visually separate reference lines.

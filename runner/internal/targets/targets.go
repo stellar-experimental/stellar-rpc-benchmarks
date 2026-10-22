@@ -36,8 +36,8 @@ type Targets struct {
 // Phase is one entry of the file's phases array. BlockTimeNs is what a paced
 // campaign's close_interval is matched against.
 type Phase struct {
-	Phase       int   `json:"phase"`
-	BlockTimeNs int64 `json:"block_time_ns"`
+	Phase       PhaseLabel `json:"phase"`
+	BlockTimeNs int64      `json:"block_time_ns"`
 }
 
 // QueryLoad is the open-loop load model: two families of floor and the ladder
@@ -48,6 +48,11 @@ type QueryLoad struct {
 	Ladder   []float64 `json:"ladder"`
 	SLA      SLA       `json:"sla"`
 	E2EProbe E2EProbe  `json:"e2e_probe"`
+	// LedgersPageCampaign is the getLedgers page size a campaign queries, which
+	// is smaller than the SLA's request shape (derivation.ledgers_span) because
+	// a full-size page of synthetic ledgers runs the handler out of memory. 0
+	// leaves the bench's default.
+	LedgersPageCampaign int `json:"ledgers_page_campaign"`
 }
 
 // SLA is the read-path requirement: one arrival rate and one p99 per endpoint,
@@ -59,8 +64,8 @@ type SLA struct {
 }
 
 // E2EProbe is getTransaction's second leg: the demand-derived floors of work
-// item 856, per profile, each array indexed by phase minus one so entry 0 is
-// phase 1. It answers for its in-RPC p99 alone.
+// item 856, per profile, each array in the order of the phases table. It
+// answers for its in-RPC p99 alone.
 type E2EProbe struct {
 	InRPCP99Ns int64                `json:"in_rpc_p99_ns"`
 	FloorsRPS  map[string][]float64 `json:"floors_rps"`
@@ -81,8 +86,18 @@ func Load(path string) (*Targets, error) {
 	if len(t.Phases) == 0 {
 		return nil, fmt.Errorf("targets: %s: phases is empty", path)
 	}
+	seen := make(map[PhaseLabel]bool, len(t.Phases))
+	for i, p := range t.Phases {
+		if p.Phase == "" || seen[p.Phase] {
+			return nil, fmt.Errorf("targets: %s: phases[%d] has a missing or repeated phase label '%s'", path, i, p.Phase)
+		}
+		seen[p.Phase] = true
+	}
 	if len(t.QueryLoad.E2EProbe.FloorsRPS) == 0 {
 		return nil, fmt.Errorf("targets: %s: query_load.e2e_probe.floors_rps is empty — this file predates the two-family query model", path)
+	}
+	if t.QueryLoad.LedgersPageCampaign < 0 {
+		return nil, fmt.Errorf("targets: %s: query_load.ledgers_page_campaign is %d, want >= 0", path, t.QueryLoad.LedgersPageCampaign)
 	}
 	if len(t.QueryLoad.Ladder) == 0 {
 		return nil, fmt.Errorf("targets: %s: query_load.ladder must list at least one multiplier", path)
@@ -145,17 +160,37 @@ func ProfileKey(datasetName string) string {
 	return reModelSuffix.ReplaceAllString(datasetName, "")
 }
 
-// MatchPhase is the phase whose block time is exactly closeIntervalNs, or 0
+// MatchPhase is the phase whose block time is exactly closeIntervalNs, or ""
 // when no phase paces its ledgers that way. Exact equality is the point: a
 // close_interval that is nearly a phase's block time is a different experiment,
 // and guessing which phase it meant would silently mislabel the run.
-func (t *Targets) MatchPhase(closeIntervalNs int64) int {
+func (t *Targets) MatchPhase(closeIntervalNs int64) PhaseLabel {
 	for _, p := range t.Phases {
 		if p.BlockTimeNs == closeIntervalNs {
 			return p.Phase
 		}
 	}
-	return 0
+	return ""
+}
+
+// PhaseIndex is the position of phase in the phases table, which is also its
+// position in every e2e_probe floors array.
+func (t *Targets) PhaseIndex(phase PhaseLabel) (int, bool) {
+	for i, p := range t.Phases {
+		if p.Phase == phase {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// PhaseLabels lists the table's phases in order, for messages.
+func (t *Targets) PhaseLabels() string {
+	labels := make([]string, len(t.Phases))
+	for i, p := range t.Phases {
+		labels[i] = string(p.Phase)
+	}
+	return strings.Join(labels, ", ")
 }
 
 // QueryTypes are the endpoint types the load model carries floors for. The
@@ -167,7 +202,7 @@ var QueryTypes = []string{"ledgers", "txpage", "txhash", "events"}
 // as ONE leg answering to both families, so its ladder also unions the
 // (profile, phase) E2E-probe ladder — a floor the two families share becomes
 // one cell carrying both verdicts.
-func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, error) {
+func (t *Targets) Rates(profileKey string, phase PhaseLabel, qtype string) ([]float64, error) {
 	slaFloor, ok := t.QueryLoad.SLA.FloorsRPS[qtype]
 	if !ok {
 		return nil, fmt.Errorf("targets: unknown query type '%s' (known types: %s)", qtype, strings.Join(QueryTypes, ", "))
@@ -179,12 +214,13 @@ func (t *Targets) Rates(profileKey string, phase int, qtype string) ([]float64, 
 		return nil, fmt.Errorf("targets: no query_load.e2e_probe profile '%s' (known profiles: %s)",
 			profileKey, strings.Join(sortedKeys(t.QueryLoad.E2EProbe.FloorsRPS), ", "))
 	}
-	if phase < 1 || phase > len(e2eFloors) {
-		return nil, fmt.Errorf("targets: phase %d has no floors (query_load carries phases 1-%d)", phase, len(e2eFloors))
+	idx, ok := t.PhaseIndex(phase)
+	if !ok || idx >= len(e2eFloors) {
+		return nil, fmt.Errorf("targets: phase '%s' has no floors (the phases table carries %s)", phase, t.PhaseLabels())
 	}
 	rates := t.ladderAround(slaFloor)
 	if qtype == "txhash" {
-		rates = append(rates, t.ladderAround(e2eFloors[phase-1])...)
+		rates = append(rates, t.ladderAround(e2eFloors[idx])...)
 	}
 	slices.Sort(rates)
 	return slices.Compact(rates), nil

@@ -214,6 +214,40 @@ class PaceLagInconsistencyTests(unittest.TestCase):
             [800_000_000, 1_600_000_000])
 
 
+class RunnerSidecarTests(unittest.TestCase):
+    """The runner's host.csv and Go profiles in leg dirs leave the conversion unchanged."""
+
+    def test_sidecars_ignored(self):
+        for build in (lambda r: fixtures.build_campaign_bundle(r, paced=True), fixtures.build_rps_bundle):
+            with self.subTest(build=build):
+                self._check(build)
+
+    def _check(self, build):
+        tmp = tempfile.mkdtemp()
+        base, extra = os.path.join(tmp, "base"), os.path.join(tmp, "extra")
+        build(base)
+        build(extra)
+        for name in os.listdir(extra):
+            d = os.path.join(extra, name)
+            if not os.path.isdir(d):
+                continue
+            with open(os.path.join(d, "host.csv"), "w") as f:
+                f.write("timestamp,device,cpu_user_pct\n2026-10-21T12:00:05Z,,42.9\n")
+            for prof in ("cpu.pprof", "cpu.txhash.650rps.pprof", "mem.pprof"):
+                with open(os.path.join(d, prof), "wb") as f:
+                    f.write(b"\x1f\x8b")
+            with open(d + ".host.csv", "w") as f:
+                f.write("timestamp\n")
+        want, want_warnings, _ = run_convert(base)
+        got, got_warnings, _ = run_convert(extra)
+        for k in ("source", "results_dir"):
+            want.pop(k, None)
+            got.pop(k, None)
+        self.assertEqual(got_warnings, want_warnings)
+        self.assertEqual(json.dumps(got, sort_keys=True).replace(extra, base),
+                         json.dumps(want, sort_keys=True))
+
+
 class BinaryMismatchTests(unittest.TestCase):
     def test_warns_on_commit_mismatch(self):
         tmp = tempfile.mkdtemp()
@@ -275,6 +309,147 @@ class InvocationSchemaTests(unittest.TestCase):
         _, warnings, _ = run_convert(root)
         self.assertTrue(any("FAILED run" in w and "ingest-hot-sac-6000-c1-run1" in w
                             for w in warnings))
+
+
+class RunRecordTests(unittest.TestCase):
+    """run.json (stellar-rpc#1066) replaces invocation.json and carries the peak
+    RSS that driver.csv used to; the converter reads either."""
+
+    def _bundle(self, keep_invocation=False):
+        root = os.path.join(tempfile.mkdtemp(), "runrec")
+        fixtures.build_campaign_bundle(root, paced=True)
+        fixtures.to_run_records(root, keep_invocation=keep_invocation)
+        return root
+
+    def test_run_json_bundle_converts_like_invocation_bundle(self):
+        data, warnings, _ = run_convert(self._bundle())
+        self.assertEqual(convert.validate_run(data, reps=2), [])
+        self.assertEqual(data["build"]["commit"], fixtures.COMMIT)
+        self.assertEqual(data["build"]["version"], fixtures.VERSION)
+        self.assertEqual(data["campaign"]["close_interval_ns"], 2_000_000_000)
+        cold = data["ingest_cold"]["sac-6000-c1"]
+        self.assertEqual(cold["peak_rss_bytes"]["r"], [20_000_000_000, 40_000_000_000])
+        self.assertNotIn("peak_rss_bytes", cold["driver"])
+        self.assertEqual(data["ingest_hot"]["sac-6000-c1"]["peak_rss_bytes"]["m"], 14_000_000_000)
+        self.assertFalse(any("FAILED" in w or "never finished" in w for w in warnings))
+
+    def test_run_json_bundle_keeps_hostname_and_query_peak(self):
+        root = os.path.join(tempfile.mkdtemp(), "rps")
+        fixtures.build_rps_bundle(root)
+        before, _, _ = run_convert(root)
+        fixtures.to_run_records(root)
+        # Without the manifest's hostname the run.json one is the only source.
+        meta = os.path.join(root, "metadata.json")
+        with open(meta) as f:
+            m = json.load(f)
+        m.pop("hostname", None)
+        with open(meta, "w") as f:
+            json.dump(m, f)
+        data, _, _ = run_convert(root)
+        self.assertEqual(data["hostname"], "user-dev-063a")
+        unit = next(iter(data["queries"]["cold"]))
+        for tier in ("cold", "hot"):
+            self.assertEqual(data["queries"][tier][unit]["setup"]["peak_rss_bytes"],
+                             before["queries"][tier][unit]["setup"]["peak_rss_bytes"])
+
+    def test_run_json_failed_status_warns(self):
+        root = os.path.join(tempfile.mkdtemp(), "failed")
+        fixtures.build_campaign_bundle(root, paced=True)
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")
+        with open(p) as f:
+            inv = json.load(f)
+        inv["error"] = "context deadline exceeded"
+        with open(p, "w") as f:
+            json.dump(inv, f)
+        fixtures.to_run_records(root)
+        with open(os.path.join(root, "ingest-hot-sac-6000-c1-run1", "run.json")) as f:
+            self.assertEqual(json.load(f)["status"], "failed")
+        _, warnings, _ = run_convert(root)
+        self.assertTrue(any("FAILED run" in w and "ingest-hot-sac-6000-c1-run1" in w
+                            for w in warnings))
+
+    def test_run_json_wins_over_invocation_json(self):
+        root = self._bundle(keep_invocation=True)
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "invocation.json")
+        with open(p) as f:
+            inv = json.load(f)
+        inv["error"] = "stale record that run.json supersedes"
+        with open(p, "w") as f:
+            json.dump(inv, f)
+        _, warnings, _ = run_convert(root)
+        self.assertFalse(any("FAILED run" in w for w in warnings))
+
+    def test_run_json_peak_wins_over_driver_row(self):
+        root = os.path.join(tempfile.mkdtemp(), "both")
+        fixtures.build_campaign_bundle(root, paced=True)
+        for r, peak in ((1, 7), (2, 9)):
+            d = os.path.join(root, f"ingest-cold-sac-6000-c1-run{r}")
+            with open(os.path.join(d, "run.json"), "w") as f:
+                json.dump({"schemaVersion": 2, "status": "ok", "peakRssBytes": peak}, f)
+        data, _, _ = run_convert(root)
+        self.assertEqual(data["ingest_cold"]["sac-6000-c1"]["peak_rss_bytes"]["r"], [7, 9])
+
+    def test_partial_peak_rss_is_dropped_with_a_warning(self):
+        root = self._bundle()
+        p = os.path.join(root, "ingest-cold-sac-6000-c1-run2", "run.json")
+        with open(p) as f:
+            rec = json.load(f)
+        del rec["peakRssBytes"]
+        with open(p, "w") as f:
+            json.dump(rec, f)
+        data, warnings, _ = run_convert(root)
+        self.assertNotIn("peak_rss_bytes", data["ingest_cold"]["sac-6000-c1"])
+        self.assertTrue(any("peak RSS present in 1/2 runs" in w
+                            and "ingest-cold-sac-6000-c1-run2" in w for w in warnings))
+
+    def test_running_status_warns(self):
+        root = self._bundle()
+        p = os.path.join(root, "ingest-hot-sac-6000-c1-run1", "run.json")
+        with open(p) as f:
+            rec = json.load(f)
+        rec["status"] = "running"
+        with open(p, "w") as f:
+            json.dump(rec, f)
+        _, warnings, _ = run_convert(root)
+        self.assertTrue(any("never finished" in w and "ingest-hot-sac-6000-c1-run1" in w
+                            for w in warnings))
+
+
+class DatasetSetTests(unittest.TestCase):
+    """dataset.sets records the synthetic set each dataset was fetched from, so
+    the viewer matches sizes by set and profile, never by profile alone."""
+
+    def test_set_from_the_location(self):
+        meta = {"datasets": [
+            {"name": "sac-6000", "location":
+             "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1/sac-6000/packs-v4/cold"},
+            {"name": "soroswap-1500", "location":
+             "gs://rpc-full-history/synthetic-ledgers/2026-07-18-apply-load-20k/soroswap-1500/packs/cold"},
+            {"name": "local", "location": "/data/local/packs/cold"},
+            {"name": "fixture"},
+        ]}
+        self.assertEqual(convert.dataset_sets(meta), {
+            "sac-6000": "2026-10-apply-load-20k-c1",
+            "soroswap-1500": "2026-07-18-apply-load-20k",
+            "local": None,
+            "fixture": None,
+        })
+
+    def test_campaign_run_carries_sets(self):
+        root = os.path.join(tempfile.mkdtemp(), "sets")
+        fixtures.build_campaign_bundle(root, paced=True)
+        data, _, _ = run_convert(root)
+        # The fixture locations (gs://bucket/<name>/...) name no set.
+        self.assertEqual(data["dataset"]["sets"], {"sac-6000": None, "soroswap-1500": None})
+
+    def test_bundle_without_a_manifest_carries_no_sets_key(self):
+        # A bundle without metadata.json predates campaigns: no key sends the
+        # viewer to legacy_set, so a re-ingest keeps its sizes and link.
+        root = os.path.join(tempfile.mkdtemp(), "leg")
+        fixtures.build_legacy_bundle(root)
+        data, _, _ = run_convert(root, dataset_kind="pubnet", run_id="l", run_name="L",
+                                 run_date="2026-07-13")
+        self.assertNotIn("sets", data["dataset"])
 
 
 class LegacyBundleTests(unittest.TestCase):

@@ -92,7 +92,7 @@ func machineInput(t *testing.T, benchRoot, bin string) MachineInput {
 		BuiltCommit: "deadbeefcafebabe",
 		BinPath:     bin,
 		BenchRoot:   benchRoot,
-		QueryPhase:  1,
+		QueryPhase:  "1",
 		Hardware: Hardware{
 			InstanceType: "i4i.4xlarge",
 			InstanceID:   "i-0123456789abcdef0",

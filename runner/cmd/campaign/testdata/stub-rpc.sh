@@ -2,17 +2,28 @@
 # Stub stellar-rpc binary for the campaign runner's end-to-end test
 # (cmd/campaign/e2e_test.go). It answers the bench subcommands the campaign
 # drives, materializes the directories they would materialize, and writes the
-# CSV and invocation.json shapes converter/tests/fixtures.py documents — enough
-# for the real converter to convert a bundle this stub produced.
+# CSV and manifest shapes converter/tests/fixtures.py documents — enough for the
+# real converter to convert a bundle this stub produced.
+#
+# It answers both CLI shapes. Called as `bench ingest|query <tier>` it behaves
+# like a build with stellar-rpc#1105 and #1066: it refuses a non-empty --out,
+# writes run.json, and keeps the peak RSS out of driver.csv. Called as
+# `bench-ingest|bench-query <tier>` it behaves like an older build and writes
+# invocation.json with a driver.csv peak_rss_bytes row. Called as
+# `bench query --data-dir=<dir>` it behaves like a build with stellar-rpc#1070:
+# it takes the tier from the dataset and writes latency.csv and scenarios.csv.
 #
 # Environment:
 #   STUB_RPC_COMMIT   40-hex commit to report as the build identity. It must be
 #                     the sha the test's fake git resolves to, or the converter
 #                     warns about a binary/manifest commit mismatch.
+#   STUB_RPC_CLI      data-dir makes this the one stellar-rpc binary of
+#                     stellar-rpc#1123, which runs the bench commands only
+#                     under a leading --enable-rpcv2.
 #   STUB_RPC_CONTROL  optional control file, one `fail <out-basename>` or
 #                     `hang <out-basename>` line per leg to derail. A failed leg
-#                     writes a partial driver.csv and an invocation.json
-#                     carrying an error (stellar-rpc#907) and exits 1; a hung
+#                     writes a partial driver.csv and a manifest carrying an
+#                     error (stellar-rpc#907) and exits 1; a hung
 #                     leg writes nothing and sleeps until it is killed.
 #
 # Flags are read in the --key=value form the runner emits, and only the ones
@@ -24,8 +35,24 @@ branch=stub/e2e
 commit=${STUB_RPC_COMMIT:-0123456789abcdef0123456789abcdef01234567}
 header='stage,n,n_items,total_ns,p50_ns,p90_ns,p99_ns,max_ns'
 
+rpcv2=
+if [ "${1:-}" = --enable-rpcv2 ]; then
+	rpcv2=1
+	shift
+fi
+if [ "${STUB_RPC_CLI:-}" = data-dir ] && [ "${1:-}" = bench ] && [ -z "$rpcv2" ]; then
+	echo 'Error: unknown command "bench" for "stellar-rpc"' >&2
+	exit 1
+fi
+
 sub=${1:-}
 tier=${2:-}
+cli=legacy
+if [ "$sub" = bench ]; then
+	cli=bench
+	sub=bench-${2:-}
+	tier=${3:-}
+fi
 
 if [ "$sub" = version ]; then
 	echo "stellar-rpc $version"
@@ -37,6 +64,9 @@ fi
 out=
 pack_dir=
 cold_dir=
+data_dir=
+evict=
+ledgers_limit=
 cold_out_dir=
 hot_dir=
 close_interval=
@@ -48,6 +78,9 @@ for arg in "$@"; do
 	--out=*) out=${arg#--out=} ;;
 	--pack-dir=*) pack_dir=${arg#--pack-dir=} ;;
 	--cold-dir=*) cold_dir=${arg#--cold-dir=} ;;
+	--data-dir=*) data_dir=${arg#--data-dir=} ;;
+	--evict-page-cache=*) evict=${arg#--evict-page-cache=} ;;
+	--ledgers-limit=*) ledgers_limit=${arg#--ledgers-limit=} ;;
 	--cold-out-dir=*) cold_out_dir=${arg#--cold-out-dir=} ;;
 	--hot-dir=*) hot_dir=${arg#--hot-dir=} ;;
 	--close-interval=*) close_interval=${arg#--close-interval=} ;;
@@ -63,19 +96,46 @@ csv_start() { echo "$header" >"$1"; }
 csv_row() { echo "$2" >>"$1"; }
 
 # write_invocation mirrors stellar-rpc's own writer: camelCase keys, and an
-# `error` field on the runs that failed.
+# `error` field on the runs that failed. The bench CLI writes run.json with a
+# status and the peak RSS; the legacy CLI writes invocation.json.
 write_invocation() {
 	inv_error=${1:-}
+	peak=${2:-}
+	if [ "$cli" = bench ]; then
+		manifest=run.json
+		command="bench ${sub#bench-} $tier"
+		if [ -n "$data_dir" ]; then
+			command="bench ${sub#bench-}"
+		fi
+	else
+		manifest=invocation.json
+		command="$sub $tier"
+	fi
 	{
 		echo '{'
-		echo '  "schemaVersion": 1,'
-		printf '  "command": "stellar-rpc %s %s",\n' "$sub" "$tier"
+		if [ "$cli" = bench ]; then
+			echo '  "schemaVersion": 2,'
+			if [ -n "$inv_error" ]; then
+				echo '  "status": "failed",'
+			else
+				echo '  "status": "ok",'
+			fi
+			if [ -n "$peak" ]; then
+				printf '  "peakRssBytes": %s,\n' "$peak"
+			fi
+		else
+			echo '  "schemaVersion": 1,'
+		fi
+		printf '  "command": "stellar-rpc %s",\n' "$command"
 		echo '  "flags": {'
 		if [ -n "$close_interval" ]; then
 			printf '    "close-interval": "%s",\n' "$close_interval"
 		fi
 		if [ -n "$duration" ]; then
 			printf '    "duration": "%s",\n' "$duration"
+		fi
+		if [ -n "$ledgers_limit" ]; then
+			printf '    "ledgers-limit": "%s",\n' "$ledgers_limit"
 		fi
 		printf '    "out": "%s"\n' "$out"
 		echo '  },'
@@ -90,9 +150,21 @@ write_invocation() {
 		if [ -n "$inv_error" ]; then
 			printf '  "error": "%s",\n' "$inv_error"
 		fi
+		if [ -n "${settings_json:-}" ]; then
+			printf '  "settings": %s,\n' "$settings_json"
+			echo '  "setupNs": {"storeOpen": 5000},'
+		fi
 		echo '  "finishedAt": "2026-07-30T01:00:01Z"'
 		echo '}'
-	} >"$out/invocation.json"
+	} >"$out/$manifest"
+}
+
+# peak_row appends the driver.csv peak_rss_bytes row the legacy CLI writes; the
+# bench CLI records the same value in run.json instead.
+peak_row() {
+	if [ "$cli" = legacy ]; then
+		csv_row "$1" "peak_rss_bytes,1,0,$2,$2,$2,$2,$2"
+	fi
 }
 
 # fail_leg is the one way this stub dies: a partial driver.csv and an
@@ -127,6 +199,13 @@ control_mode() {
 	fi
 	echo "$mode"
 }
+
+# The bench CLI refuses an --out that already holds files, before it writes
+# anything (stellar-rpc#1066).
+if [ "$cli" = bench ] && [ -n "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
+	echo "stub-rpc: --out dir $out is not empty" >&2
+	exit 1
+fi
 
 if [ -n "$out" ]; then
 	case "$(control_mode "${out##*/}")" in
@@ -164,8 +243,7 @@ case "$sub $tier" in
 	csv_row "$out/driver.csv" 'txhash_total,600,600,6000,60,70,90,100'
 	csv_row "$out/driver.csv" 'events_total,600,600,9000,90,95,99,110'
 	csv_row "$out/driver.csv" 'cold_extract,1,0,7000,70,80,90,100'
-	csv_row "$out/driver.csv" \
-		'peak_rss_bytes,1,0,20000000000,20000000000,20000000000,20000000000,20000000000'
+	peak_row "$out/driver.csv" 20000000000
 	csv_start "$out/events.csv"
 	csv_row "$out/events.csv" 'term_index,600,600,4000,40,45,49,60'
 	csv_row "$out/events.csv" 'write,600,600,3000,30,35,39,50'
@@ -173,7 +251,7 @@ case "$sub $tier" in
 	csv_row "$out/ledgers.csv" 'write,100,100,3000,30,35,39,50'
 	csv_start "$out/txhash.csv"
 	csv_row "$out/txhash.csv" 'finalize,1,0,1500,1500,1500,1500,1500'
-	write_invocation
+	write_invocation '' 20000000000
 	;;
 
 "bench-ingest hot")
@@ -183,8 +261,7 @@ case "$sub $tier" in
 	csv_start "$out/driver.csv"
 	csv_row "$out/driver.csv" 'ingest_total,100,100,2000,100,200,500,900'
 	csv_row "$out/driver.csv" 'run_wall,1,100,60000,60000,60000,60000,60000'
-	csv_row "$out/driver.csv" \
-		'peak_rss_bytes,1,0,14000000000,14000000000,14000000000,14000000000,14000000000'
+	peak_row "$out/driver.csv" 14000000000
 	csv_start "$out/hot.csv"
 	csv_row "$out/hot.csv" 'extract,100,0,300,30,40,50,80'
 	csv_row "$out/hot.csv" 'ledgers,100,100,400,40,50,60,90'
@@ -192,7 +269,44 @@ case "$sub $tier" in
 	csv_row "$out/hot.csv" 'events,100,600,500,50,55,60,90'
 	csv_row "$out/hot.csv" 'commit,100,0,800,80,90,120,200'
 	csv_row "$out/hot.csv" 'apply,100,0,250,25,30,40,70'
-	write_invocation
+	write_invocation '' 14000000000
+	;;
+
+"bench-query --data-dir="*)
+	# The dataset says which tier it is: a hot DB, or a cold store written for
+	# this very directory. Anything else fails at open, as the real binary does.
+	if [ -f "$data_dir/hot.stub" ]; then
+		dtier=hot
+		evict_ns=
+		eviction=off
+	elif [ -f "$data_dir/ledgers/chunk-0001.stub" ] && [ "$(cat "$data_dir/ledgers/chunk-0001.stub")" = "$data_dir" ]; then
+		dtier=cold
+		evict_ns=4000
+		eviction=requested
+		if [ "$evict" = false ]; then
+			evict_ns=
+			eviction=off
+		fi
+	else
+		echo "stub-rpc: bench query: no dataset under $data_dir" >&2
+		fail_leg "no dataset under $data_dir"
+	fi
+	mkdir -p "$out"
+	echo 'query_type,target_rps,metric,outcome,count,items,total_ns,p50_ns,p90_ns,p99_ns,max_ns' >"$out/latency.csv"
+	echo 'query_type,target_rps,planned,started,dropped,succeeded,failed,warmup_planned,warmup_dropped,warmup_failed,achieved_rps,completion_rps,schedule_ns,elapsed_ns,overrun_ns,process_cpu_ns,page_cache_evict_ns' >"$out/scenarios.csv"
+	IFS=,
+	for qt in $types; do
+		for rps in $target_rps; do
+			csv_row "$out/latency.csv" "$qt,$rps,latency,all,100,100,500000,5000,6000,7000,9000"
+			csv_row "$out/latency.csv" "$qt,$rps,handler_latency,all,100,100,400000,4000,5000,6000,8000"
+			csv_row "$out/latency.csv" "$qt,$rps,latency_from_due,all,100,100,900000,9000,11000,13000,20000"
+			csv_row "$out/latency.csv" "$qt,$rps,start_delay,all,100,0,100000,500,800,1000,1200"
+			csv_row "$out/scenarios.csv" "$qt,$rps,100,100,0,100,0,0,0,0,$rps,$rps,1000000,1000000,0,500000,$evict_ns"
+		done
+	done
+	unset IFS
+	settings_json="{\"tier\": \"$dtier\", \"pageCacheEviction\": \"$eviction\"}"
+	write_invocation '' 900000000
 	;;
 
 "bench-query cold" | "bench-query hot")

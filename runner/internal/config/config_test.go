@@ -65,6 +65,7 @@ query_duration = "90s"
 phase = 2
 workers = 4
 hot_num_ledgers = 1000
+profile = false
 publish_uri = "s3://bucket/bench"
 
 [[dataset]]
@@ -104,14 +105,17 @@ chunks = [0]
 	if cfg.QueryDuration != "90s" {
 		t.Errorf("query_duration = %q, want 90s", cfg.QueryDuration)
 	}
-	if cfg.Phase != 2 {
-		t.Errorf("phase = %d, want 2", cfg.Phase)
+	if cfg.Phase != "2" {
+		t.Errorf("phase = %q, want 2", cfg.Phase)
 	}
 	if cfg.Workers != 4 {
 		t.Errorf("workers = %d, want 4", cfg.Workers)
 	}
 	if cfg.HotNumLedgers != 1000 {
 		t.Errorf("hot_num_ledgers = %d, want 1000", cfg.HotNumLedgers)
+	}
+	if cfg.Profile {
+		t.Error("profile = true, want false")
 	}
 	if cfg.PublishURI != "s3://bucket/bench" {
 		t.Errorf("publish_uri = %q", cfg.PublishURI)
@@ -159,14 +163,17 @@ func TestLoadMinimalConfigAppliesDefaults(t *testing.T) {
 	if cfg.QueryDuration != DefaultQueryDuration {
 		t.Errorf("query_duration = %q, want %q", cfg.QueryDuration, DefaultQueryDuration)
 	}
-	if cfg.Phase != 0 {
-		t.Errorf("phase = %d, want 0 (unset)", cfg.Phase)
+	if cfg.Phase != "" {
+		t.Errorf("phase = %q, want empty (unset)", cfg.Phase)
 	}
 	if cfg.Workers != 1 {
 		t.Errorf("workers = %d, want 1", cfg.Workers)
 	}
 	if cfg.HotNumLedgers != 0 {
 		t.Errorf("hot_num_ledgers = %d, want 0", cfg.HotNumLedgers)
+	}
+	if !cfg.Profile {
+		t.Error("profile = false, want true")
 	}
 	if cfg.PublishURI != "" {
 		t.Errorf("publish_uri = %q, want empty", cfg.PublishURI)
@@ -190,6 +197,7 @@ func TestLoadAcceptedConfigs(t *testing.T) {
 		{"sub-minute query_duration", withTop(`query_duration = "30s"`)},
 		{"compound query_duration", withTop(`query_duration = "2m30s"`)},
 		{"explicit phase", withTop("phase = 3")},
+		{"explicit phase label", withTop(`phase = "3b"`)},
 		{"chunk id zero", strings.Replace(minimal, "chunks = [7]", "chunks = [0, 1]", 1)},
 		{"fixture whole chunk", `
 name = "f"
@@ -355,14 +363,14 @@ func TestLoadRejects(t *testing.T) {
 			want: []string{"query_duration must be a positive Go duration", "-30s"},
 		},
 		{
-			name: "phase above the goal range",
-			src:  withTop("phase = 4"),
-			want: []string{"phase must be 1|2|3", "4"},
-		},
-		{
 			name: "negative phase",
 			src:  withTop("phase = -1"),
-			want: []string{"phase must be 1|2|3", "-1"},
+			want: []string{"phase label", "-1"},
+		},
+		{
+			name: "malformed phase label",
+			src:  withTop(`phase = "phase3"`),
+			want: []string{"phase label", "phase3"},
 		},
 		{
 			name: "zero workers",
@@ -392,6 +400,16 @@ query = true
 			name: "bad dataset name charset",
 			src:  strings.Replace(minimal, `name = "local"`, `name = "my data"`, 1),
 			want: []string{"dataset name must match [A-Za-z0-9._-]+", "my data"},
+		},
+		{
+			name: "dot dataset name",
+			src:  strings.Replace(minimal, `name = "local"`, `name = "."`, 1),
+			want: []string{"dataset name must not be '.' or '..'", "'.'"},
+		},
+		{
+			name: "dot-dot dataset name",
+			src:  strings.Replace(minimal, `name = "local"`, `name = ".."`, 1),
+			want: []string{"dataset name must not be '.' or '..'", "'..'"},
 		},
 		{
 			name: "duplicate dataset names",

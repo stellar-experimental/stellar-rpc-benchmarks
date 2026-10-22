@@ -36,7 +36,11 @@ func TestRunCmdDryRunTouchesNothing(t *testing.T) {
 	for _, want := range []string{
 		"dry run: printing commands only",
 		"using placeholder sha 'deadbeef' in paths",
+		"assuming the current shapes: the bench CLI (bench ingest/bench query), the data-dir query CLI, " +
+			"and make build-stellar-rpc with static libs (--enable-rpcv2)",
 		"== build\n",
+		"build-stellar-rpc ZSTD_HOME=$(HOME)/.zstd-static ROCKSDB_HOME=$(HOME)/.rocksdb-static\n",
+		"stellar-rpc-deadbeef --enable-rpcv2 bench query --data-dir=",
 		filepath.Join(benchRoot, "bin", "stellar-rpc-deadbeef"),
 		// close_interval is phase 1's block time, so the query legs pace
 		// themselves at the phase-1 floors without the config naming a phase.

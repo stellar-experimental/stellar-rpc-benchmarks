@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/hoststat"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
@@ -60,8 +62,8 @@ type Options struct {
 
 // legSentinel is leg.json: the runner's own record that a leg ran to
 // completion, written whether it succeeded or not. The bench subcommands'
-// invocation.json cannot play this role — it is written by the process being
-// measured, so a process killed before it got there leaves no trace at all.
+// run.json cannot play this role: the measured process writes it, so it cannot
+// record how that process itself ended.
 //
 // ExitCode carries no omitempty on purpose: exit 0 is the success record resume
 // reads, and a sentinel without the field is not trusted (see legSentinelView).
@@ -176,9 +178,22 @@ func executeStep(p *plan.Plan, s plan.Step, opts Options) StepResult {
 		return runBuild(p, s, opts)
 	case plan.KindDataset:
 		return runDataset(s, opts)
+	case plan.KindCleanup:
+		return runCleanup(s, opts)
 	default:
 		return failure(s, fmt.Errorf("unknown step kind %q", s.Kind))
 	}
+}
+
+// runCleanup removes a cleanup step's directories. Like a leg's post-clean, a
+// failure to remove them is a warning, not a failed step.
+func runCleanup(s plan.Step, opts Options) StepResult {
+	for _, dir := range s.PostClean {
+		if err := removeAll(opts.Output, dir); err != nil {
+			Notef(opts.Output, "warning: %s: %v", s.ID, err)
+		}
+	}
+	return StepResult{ID: s.ID, Status: StatusOK}
 }
 
 // runLeg runs one timed benchmark leg: the whole point of the campaign, and the
@@ -219,7 +234,7 @@ func runLeg(s plan.Step, opts Options) StepResult {
 	started := time.Now()
 	runErr := os.MkdirAll(s.OutDir, 0o755)
 	if runErr == nil {
-		runErr = runCommand(s.Argv[0], s.Env, opts.Output)
+		runErr = runSampled(s, opts)
 	}
 	finished := time.Now()
 
@@ -243,6 +258,29 @@ func runLeg(s plan.Step, opts Options) StepResult {
 		}
 	}
 	return StepResult{ID: s.ID, Status: StatusOK}
+}
+
+// hostSamplesName is the host sampler's CSV in a leg's --out directory.
+const hostSamplesName = "host.csv"
+
+// runSampled runs a leg's command under the host sampler. The samples stream
+// to a sibling of the --out directory, because the bench refuses a non-empty
+// --out, and move into it once the command exits; when the move fails they
+// stay beside it, inside the bundle. A sampler failure is a warning, never a
+// leg failure.
+func runSampled(s plan.Step, opts Options) error {
+	partial := s.OutDir + "." + hostSamplesName
+	sampler := hoststat.Start(partial)
+	runErr := runCommand(s.Argv[0], s.Env, opts.Output)
+	if err := sampler.Stop(); err != nil {
+		Notef(opts.Output, "warning: %s: host sampling stopped: %v", s.ID, err)
+	}
+	switch err := os.Rename(partial, filepath.Join(s.OutDir, hostSamplesName)); {
+	case err == nil, errors.Is(err, fs.ErrNotExist):
+	default:
+		Notef(opts.Output, "warning: %s: %v", s.ID, err)
+	}
+	return runErr
 }
 
 // writeLegSentinel records how the leg went, success or failure, into its --out

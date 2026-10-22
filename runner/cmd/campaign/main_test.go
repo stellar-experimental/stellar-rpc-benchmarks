@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -140,6 +142,8 @@ func TestPlanCmd(t *testing.T) {
 		}
 		for _, want := range []string{
 			"using placeholder sha 'deadbeef' in paths",
+			"assuming the current shapes: the bench CLI (bench ingest/bench query), the data-dir query CLI, " +
+				"and make build-stellar-rpc with static libs (--enable-rpcv2)",
 			"== build\n",
 			filepath.Join(benchRoot, "bin", "stellar-rpc-deadbeef"),
 			"== ingest-cold-ds-c1-run1\n",
@@ -170,6 +174,20 @@ kind = "packs-local"
 location = "/packs/sac"
 chunks = [1]
 `
+}
+
+// mustLoadConfig loads a config body through a temp file.
+func mustLoadConfig(t *testing.T, src string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "campaign.toml")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 // TestPlanCmdQueryLoad covers the one thing the CLI layer adds to a plan: the
@@ -215,6 +233,55 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("a 900ms close_interval picks phase 3b and its floors", func(t *testing.T) {
+		code, stdout, stderr := planFor(t, queryConfig(`close_interval = "900ms"`))
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
+		}
+		// 3b shares phase 3's sac demand floor (1000 rps).
+		if want := "--types=txhash --target-rps=150,300,500,600,1000,2000 --duration=60s"; !strings.Contains(stdout, want) {
+			t.Errorf("stdout missing %q, got:\n%s", want, stdout)
+		}
+		ql, err := resolveQueryLoad(mustLoadConfig(t, queryConfig(`close_interval = "900ms"`)), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ql.phase != "3b" {
+			t.Errorf("resolved phase = %q, want 3b", ql.phase)
+		}
+	})
+
+	t.Run("an explicit phase label paces an unpaced campaign", func(t *testing.T) {
+		code, stdout, stderr := planFor(t, queryConfig(`phase = "3b"`))
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr)
+		}
+		if want := "--types=txhash --target-rps=150,300,500,600,1000,2000"; !strings.Contains(stdout, want) {
+			t.Errorf("stdout missing %q, got:\n%s", want, stdout)
+		}
+	})
+
+	t.Run("a phase the table lacks is refused without query legs too", func(t *testing.T) {
+		src := strings.Replace(queryConfig("phase = 4"), "query = true", "query = false", 1)
+		code, _, stderr := planFor(t, src)
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2", code)
+		}
+		if want := "phase = 4 is not in the phases table"; !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+		}
+	})
+
+	t.Run("a phase the table lacks is refused", func(t *testing.T) {
+		code, _, stderr := planFor(t, queryConfig("phase = 4"))
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2", code)
+		}
+		if want := "phase = 4 is not in the phases table"; !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+		}
+	})
+
 	t.Run("a phase and a close_interval that disagree are refused", func(t *testing.T) {
 		code, _, stderr := planFor(t, queryConfig("phase = 1\nclose_interval = \"600ms\""))
 		if code != 2 {
@@ -232,7 +299,7 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		if code != 2 {
 			t.Errorf("exit code = %d, want 2", code)
 		}
-		for _, want := range []string{"query = true needs a phase", "phase = 1|2|3", "targets.json"} {
+		for _, want := range []string{"query = true needs a phase", "phase = 1|2|3|3b", "targets.json"} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr missing %q, got:\n%s", want, stderr)
 			}
@@ -260,6 +327,14 @@ func TestPlanCmdQueryLoad(t *testing.T) {
 		}
 		if !strings.Contains(stderr, missing) {
 			t.Errorf("stderr = %q, want it to name %s", stderr, missing)
+		}
+	})
+
+	t.Run("an ingest-only phase needs no targets file", func(t *testing.T) {
+		src := strings.Replace(queryConfig("phase = 4"), "query = true", "query = false", 1)
+		code, _, stderr := planFor(t, src, "--targets", filepath.Join(t.TempDir(), "absent.json"))
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr: %s)", code, stderr)
 		}
 	})
 

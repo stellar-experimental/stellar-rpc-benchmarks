@@ -97,11 +97,15 @@ func TestE2E(t *testing.T) {
 		mustExist(t, filepath.Join(bundle, "golden-sac-6000-c1"))
 		for _, leg := range legNames {
 			dir := filepath.Join(bundle, leg)
-			for _, f := range []string{"driver.csv", "invocation.json", "leg.json"} {
+			for _, f := range []string{"driver.csv", "run.json", "leg.json"} {
 				mustExist(t, filepath.Join(dir, f))
 			}
-			if got := readLeg(t, dir).ExitCode; got != 0 {
-				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, got)
+			l := readLeg(t, dir)
+			if l.ExitCode != 0 {
+				t.Errorf("%s: leg.json exit_code = %d, want 0", leg, l.ExitCode)
+			}
+			if want := []string{"bench", strings.SplitN(leg, "-", 2)[0]}; len(l.Argv) < 3 || !slices.Equal(l.Argv[1:3], want) {
+				t.Errorf("%s argv = %v, want the %v command", leg, l.Argv, want)
 			}
 		}
 		for _, f := range []string{"plan.json", "binary.txt", "machine-metadata.txt", "campaign.log"} {
@@ -227,8 +231,8 @@ func TestE2E(t *testing.T) {
 			t.Errorf("failed leg.json = exit_code %d, error %q; want exit_code 1 with an error",
 				leg.ExitCode, leg.Error)
 		}
-		if inv := readFile(t, filepath.Join(failed, "invocation.json")); !strings.Contains(inv, `"error": "induced failure"`) {
-			t.Errorf("failed leg's invocation.json carries no error:\n%s", inv)
+		if inv := readFile(t, filepath.Join(failed, "run.json")); !strings.Contains(inv, `"error": "induced failure"`) {
+			t.Errorf("failed leg's run.json carries no error:\n%s", inv)
 		}
 
 		meta := readMetadata(t, bundle)
@@ -309,28 +313,203 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("LegacyCLI", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "legacy"), cfgPath)
+		sc.cli = "legacy"
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+		}
+		bundle := sc.bundle(t)
+		for _, leg := range legNames {
+			dir := filepath.Join(bundle, leg)
+			mustExist(t, filepath.Join(dir, "invocation.json"))
+			mustNotExist(t, filepath.Join(dir, "run.json"))
+			argv := readLeg(t, dir).Argv
+			if want := "bench-" + strings.SplitN(leg, "-", 2)[0]; len(argv) < 2 || argv[1] != want {
+				t.Errorf("%s argv = %v, want the legacy %s command", leg, argv, want)
+			}
+		}
+		convertBundle(t, bundle)
+	})
+
+	t.Run("DataDirCLI", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "datadir"), cfgPath)
+		sc.cli = "data-dir"
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+		}
+		bundle := sc.bundle(t)
+		var p plan.Plan
+		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(bundle, "plan.json"))), &p); err != nil {
+			t.Fatalf("plan.json: %v", err)
+		}
+		if p.BuildTarget != plan.BuildStellarRPC || p.QueryCLI != plan.QueryCLIDataDir {
+			t.Errorf("plan.json build_target = %q, query_cli = %q; want %q, %q",
+				p.BuildTarget, p.QueryCLI, plan.BuildStellarRPC, plan.QueryCLIDataDir)
+		}
+		for _, leg := range legNames {
+			dir := filepath.Join(bundle, leg)
+			argv := readLeg(t, dir).Argv
+			group := strings.SplitN(leg, "-", 2)[0]
+			if want := []string{"--enable-rpcv2", "bench", group}; len(argv) < 4 || !slices.Equal(argv[1:4], want) {
+				t.Errorf("%s argv = %v, want it to start %v", leg, argv, want)
+			}
+			if group == "query" {
+				for _, f := range []string{"latency.csv", "scenarios.csv", "run.json"} {
+					mustExist(t, filepath.Join(dir, f))
+				}
+			}
+		}
+		coldStore := filepath.Join(sc.root, "scratch", "sac-6000", "1")
+		cold := readLeg(t, filepath.Join(bundle, "query-cold-sac-6000-c1-txhash-run2")).Argv
+		for _, want := range []string{"--data-dir=" + coldStore, "--evict-page-cache=true"} {
+			if !slices.Contains(cold, want) {
+				t.Errorf("query-cold-sac-6000-c1-txhash-run2 argv = %v, want it to carry %s", cold, want)
+			}
+		}
+
+		ledgers := readLeg(t, filepath.Join(bundle, "query-hot-sac-6000-c1-ledgers-run1")).Argv
+		if !slices.Contains(ledgers, "--ledgers-limit=1") {
+			t.Errorf("query-hot-sac-6000-c1-ledgers-run1 argv = %v, want --ledgers-limit=1", ledgers)
+		}
+		if meta := readFile(t, filepath.Join(bundle, "metadata.json")); !strings.Contains(meta, `"query_ledgers_limit": 1`) {
+			t.Errorf("metadata.json does not record query_ledgers_limit 1:\n%s", meta)
+		}
+
+		var run struct {
+			Campaign struct {
+				QueryCLI          string `json:"query_cli"`
+				QueryLedgersLimit int    `json:"query_ledgers_limit"`
+			} `json:"campaign"`
+			Queries map[string]map[string]map[string]map[string]any `json:"queries"`
+		}
+		if err := json.Unmarshal([]byte(readFile(t, convertBundle(t, bundle))), &run); err != nil {
+			t.Fatalf("converted run: %v", err)
+		}
+		if run.Campaign.QueryCLI != "data-dir" || run.Campaign.QueryLedgersLimit != 1 {
+			t.Errorf("converted campaign.query_cli = %q, query_ledgers_limit = %d; want data-dir, 1",
+				run.Campaign.QueryCLI, run.Campaign.QueryLedgersLimit)
+		}
+		for _, tier := range []string{"cold", "hot"} {
+			txhash := run.Queries[tier]["sac-6000-c1"]["txhash"]
+			if txhash["verdict_sla"] == nil {
+				t.Errorf("converted %s txhash carries no SLA verdict: %v", tier, txhash)
+			}
+		}
+		if setup := run.Queries["cold"]["sac-6000-c1"]["setup"]; setup["evict"] == nil || setup["open"] == nil {
+			t.Errorf("converted cold setup = %v, want open and evict rows", setup)
+		}
+	})
+
+	t.Run("FailedColdQueryKeepsTheStoreForResume", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "coldkeep"), cfgPath)
+		// An early type of the last rep: the cell's later legs still succeed.
+		failing := "query-cold-sac-6000-c1-ledgers-run2"
+		sc.setControl("fail " + failing)
+		coldStore := filepath.Join(sc.root, "scratch", "sac-6000", "1")
+
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want nonzero; output:\n%s", out)
+		}
+		bundle := sc.bundle(t)
+		if got := readLeg(t, filepath.Join(bundle, "query-cold-sac-6000-c1-events-run2")).ExitCode; got != 0 {
+			t.Errorf("the cell's last cold query leg exit_code = %d, want 0", got)
+		}
+		mustExist(t, filepath.Join(coldStore, "ledgers", "chunk-0001.stub"))
+
+		// The resume skips the complete cold ingest and re-runs the failed leg
+		// against the store it kept, then frees the store.
+		sc.setControl("")
+		code, out = sc.run(t, "run", sc.cfg, "--no-preflight", "--resume", bundle)
+		if code != 0 {
+			t.Fatalf("resume exit code = %d, want 0; output:\n%s", code, out)
+		}
+		for _, want := range []string{
+			"resume: ingest-cold-sac-6000-c1-run2 already complete",
+			"resume: " + failing + " failed in an earlier session",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("resume output missing %q:\n%s", want, out)
+			}
+		}
+		if got := readLeg(t, filepath.Join(bundle, failing)).ExitCode; got != 0 {
+			t.Errorf("%s after resume: exit_code = %d, want 0", failing, got)
+		}
+		mustNotExist(t, coldStore)
+	})
+
+	t.Run("IngestOnlyMultiChunkBSBAtADataDirRef", func(t *testing.T) {
+		// The empty --cold-out-dir rule is bench ingest's, so it holds without
+		// query legs too.
+		cfg := filepath.Join(work, "bsb-multi.toml")
+		writeFile(t, cfg, `name = "e2e"
+ingest = "cold"
+query = false
+runs = 1
+
+[[dataset]]
+name = "mainnet"
+kind = "bsb-s3"
+location = "s3://bucket/prefix"
+chunks = [4, 5]
+`)
+		sc := newScenario(t, bin, filepath.Join(work, "bsbmulti"), cfg)
+		sc.cli = "data-dir"
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want a refusal; output:\n%s", out)
+		}
+		if want := "dataset 'mainnet' is bsb-s3 with 2 chunks"; !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+		mustNotExist(t, filepath.Join(sc.root, "bin", "stellar-rpc-"+stubSha8))
+	})
+
+	t.Run("SharedLibsMissing", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "nolibs"), cfgPath)
+		if err := os.RemoveAll(filepath.Join(sc.home, ".rocksdb")); err != nil {
+			t.Fatal(err)
+		}
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want a failed build; output:\n%s", out)
+		}
+		for _, want := range []string{"librocksdb.so is missing", "run bootstrap.sh with SRC_REF=" + stubCommit} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output missing %q:\n%s", want, out)
+			}
+		}
+		mustNotExist(t, filepath.Join(sc.root, "bin", "stellar-rpc-"+stubSha8))
+	})
+
+	t.Run("QueryCampaignOnACommitWithoutTheQueryBench", func(t *testing.T) {
+		sc := newScenario(t, bin, filepath.Join(work, "noquery"), cfgPath)
+		sc.noQuery = true
+		code, out := sc.run(t, "run", sc.cfg, "--no-preflight")
+		if code == 0 {
+			t.Fatalf("exit code = 0, want a failure; output:\n%s", out)
+		}
+		if !strings.Contains(out, "has no query bench") {
+			t.Errorf("output does not name the missing query bench:\n%s", out)
+		}
+		// It fails before the build: no binary, no bundle.
+		mustNotExist(t, filepath.Join(sc.root, "bin", "stellar-rpc-"+stubSha8))
+		mustNotExist(t, filepath.Join(sc.root, "results"))
+
+		code, out = sc.run(t, "plan", sc.cfg)
+		if code != 0 || !strings.Contains(out, "has no query bench") {
+			t.Errorf("plan: exit code = %d, want 0 with a note; output:\n%s", code, out)
+		}
+	})
+
 	t.Run("ConverterOverBundle", func(t *testing.T) {
 		if happyBundle == "" {
 			t.Skip("HappyPath produced no bundle to convert")
 		}
-		python, err := exec.LookPath("python3")
-		if err != nil {
-			t.Skip("python3 not available")
-		}
-		convert := absPath(t, filepath.Join("..", "..", "..", "converter", "convert.py"))
-		outDir := t.TempDir()
-		ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, python, convert, happyBundle,
-			"--run-id", "e2e-test", "--run-name", "E2E", "--run-date", "2026-08-01",
-			"--dataset-kind", "synthetic", "--out-dir", outDir)
-		// Warnings are expected: the golden-* prep dirs are dataset preparation,
-		// and the converter says so every time it skips them.
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("convert.py: %v\n%s", err, out)
-		}
-		mustExist(t, filepath.Join(outDir, "e2e-test.json"))
+		convertBundle(t, happyBundle)
 	})
 
 	t.Run("TarFailureGatesPublish", func(t *testing.T) {
@@ -378,12 +557,47 @@ type scenario struct {
 	cfg     string   // the config path passed on the CLI
 	root    string   // BENCH_ROOT
 	control string   // STUB_RPC_CONTROL
+	cli     string   // STUB_RPC_CLI: legacy makes the clone a pre-#1105 commit, data-dir a post-#1123 one
+	noQuery bool     // STUB_RPC_NO_QUERY: the clone's commit has no query bench
+	home    string   // HOME, which holds the shared native libs unless a test removes them
 	path    []string // dirs prepended to PATH, in order
+}
+
+// convertBundle runs the real converter over bundle and fails the test unless
+// it writes a run JSON.
+func convertBundle(t *testing.T, bundle string) string {
+	t.Helper()
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available")
+	}
+	convert := absPath(t, filepath.Join("..", "..", "..", "converter", "convert.py"))
+	outDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, python, convert, bundle,
+		"--run-id", "e2e-test", "--run-name", "E2E", "--run-date", "2026-08-01",
+		"--dataset-kind", "synthetic", "--out-dir", outDir)
+	// Warnings are expected: the golden-* prep dirs are dataset preparation,
+	// and the converter says so every time it skips them.
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("convert.py: %v\n%s", err, out)
+	}
+	path := filepath.Join(outDir, "e2e-test.json")
+	mustExist(t, path)
+	return path
 }
 
 func newScenario(t *testing.T, bin, root, cfg string) *scenario {
 	t.Helper()
-	sc := &scenario{bin: bin, cfg: cfg, root: root, control: filepath.Join(root, "control")}
+	sc := &scenario{bin: bin, cfg: cfg, root: root, control: filepath.Join(root, "control"), home: filepath.Join(root, "home")}
+	// A build-rpc-v2 build checks for the shared libraries bootstrap.sh
+	// installs before it runs make.
+	for _, lib := range []string{".zstd/lib/libzstd.so", ".rocksdb/lib/librocksdb.so"} {
+		mkdirAll(t, filepath.Dir(filepath.Join(sc.home, lib)))
+		writeFile(t, filepath.Join(sc.home, lib), "")
+	}
 	// The build clone is a black box to the runner: a .git is all EnsureSrc and
 	// ResolveRef look for before handing the work to git, which is fake here.
 	src := filepath.Join(root, "src")
@@ -394,30 +608,51 @@ func newScenario(t *testing.T, bin, root, cfg string) *scenario {
 	mkdirAll(t, stubs)
 	writeExec(t, filepath.Join(stubs, "git"), fmt.Sprintf(`#!/bin/sh
 # Fake git: every rev-parse resolves to one fixed commit, and the clone,
-# fetch, reset, and checkout the runner drives are no-ops.
+# fetch, reset, and checkout the runner drives are no-ops. The bench CLI probes
+# (git grep for a command's Use: line or a Makefile target) answer as a commit
+# of the STUB_RPC_CLI shape would: bench-ingest and bench-query exist only on a
+# legacy commit, the tiered root query command only on a bench one, the
+# data-dir query command and the build-stellar-rpc binary only on a data-dir
+# one, and STUB_RPC_NO_QUERY removes the query bench from any of them.
+grep=
 for arg in "$@"; do
 	if [ "$arg" = rev-parse ]; then
 		echo %s
 		exit 0
 	fi
+	if [ "$arg" = grep ]; then grep=1; fi
 done
-exit 0
+[ -n "$grep" ] || exit 0
+for arg in "$@"; do
+	case $arg in
+	*'^build-native-libs:'*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
+	*'^build-rpc-v2:'*) [ "${STUB_RPC_CLI:-}" != data-dir ]; exit ;;
+	*'^build-stellar-rpc:'*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
+	*requireEmptyDir*) [ "${STUB_RPC_CLI:-}" = data-dir ]; exit ;;
+	*newBenchCommand*) [ "${STUB_RPC_CLI:-}" = data-dir ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
+	*'"bench-ingest"'*) [ "${STUB_RPC_CLI:-}" = legacy ]; exit ;;
+	*'"bench-query"'*) [ "${STUB_RPC_CLI:-}" = legacy ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
+	*'"query"'*) [ -z "${STUB_RPC_CLI:-}" ] && [ -z "${STUB_RPC_NO_QUERY:-}" ]; exit ;;
+	esac
+done
+exit 1
 `, stubCommit))
 	writeExec(t, filepath.Join(stubs, "make"), fmt.Sprintf(`#!/bin/sh
-# Fake make: build-rpc-v2 installs the stub binary where the real target leaves
-# it, for the runner's own mv to move into the versioned path. Every other
-# target succeeds without doing anything.
+# Fake make: build-rpc-v2 and build-stellar-rpc install the stub binary where
+# the real target leaves it, for the runner's own mv to move into the versioned
+# path. Every other target succeeds without doing anything.
 src=
 prev=
-target=
+binary=
 for arg in "$@"; do
 	if [ "$prev" = -C ]; then src=$arg; fi
-	if [ "$arg" = build-rpc-v2 ]; then target=$arg; fi
+	if [ "$arg" = build-rpc-v2 ]; then binary=stellar-rpc-v2; fi
+	if [ "$arg" = build-stellar-rpc ]; then binary=stellar-rpc; fi
 	prev=$arg
 done
-[ -n "$target" ] || exit 0
-cp %s "$src/stellar-rpc-v2"
-chmod +x "$src/stellar-rpc-v2"
+[ -n "$binary" ] || exit 0
+cp %s "$src/$binary"
+chmod +x "$src/$binary"
 `, absPath(t, filepath.Join("testdata", "stub-rpc.sh"))))
 	sc.path = []string{stubs}
 
@@ -465,6 +700,7 @@ func (sc *scenario) env() []string {
 			// PUBLISH_URI would give `campaign publish` a destination the
 			// scenario never asked for.
 			strings.HasPrefix(kv, "PUBLISH_URI="),
+			strings.HasPrefix(kv, "HOME="),
 			strings.HasPrefix(kv, "STUB_RPC_"):
 		default:
 			env = append(env, kv)
@@ -474,8 +710,11 @@ func (sc *scenario) env() []string {
 	return append(env,
 		"PATH="+strings.Join(path, string(os.PathListSeparator)),
 		"BENCH_ROOT="+sc.root,
+		"HOME="+sc.home,
 		"STUB_RPC_CONTROL="+sc.control,
 		"STUB_RPC_COMMIT="+stubCommit,
+		"STUB_RPC_CLI="+sc.cli,
+		"STUB_RPC_NO_QUERY="+map[bool]string{true: "1"}[sc.noQuery],
 	)
 }
 

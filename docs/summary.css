@@ -148,6 +148,10 @@
   font: 600 12.5px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
   color: var(--ink); white-space: nowrap;
 }
+.summary .q-table .q-page {
+  display: block; margin-top: 2px; color: var(--muted);
+  font-weight: 400; font-size: 11px; white-space: normal;
+}
 .summary .q-table .q-cell { vertical-align: middle; }
 .summary .q-table .q-latency {
   display: block; color: var(--ink); font-weight: 700;
@@ -207,3 +211,10 @@
 .pace-note.warn { fill: var(--warn); }
 .pace-note.anchor { fill: var(--ink-2); }
 .pace-barlab { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px; fill: #fff; }
+
+/* Tooltip on the summary page: one grid for all rows, so values and labels align; labels wrap. */
+.tip { max-width: min(420px, calc(100vw - 16px)); display: grid; grid-template-columns: 12px max-content minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.tip-title { grid-column: 1 / -1; }
+.tip-row { display: contents; white-space: normal; }
+.tip-row .tip-val { text-align: right; }
+.tip-total > * { border-top: 1px solid var(--tip-ink2); margin-top: 4px; padding-top: 4px; }
