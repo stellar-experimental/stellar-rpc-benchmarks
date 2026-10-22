@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/memlimit"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
@@ -113,6 +114,9 @@ func TestE2E(t *testing.T) {
 		}
 
 		meta := readMetadata(t, bundle)
+		if meta.Campaign.GoMemLimit == nil {
+			t.Error("metadata.json has no campaign.gomemlimit")
+		}
 		if meta.FinishedAt == "" {
 			t.Error("metadata.json has no finished_at")
 		}
@@ -875,7 +879,8 @@ func readLeg(t *testing.T, dir string) legJSON {
 // metadataJSON is the sliver of the bundle manifest these tests assert on.
 type metadataJSON struct {
 	Campaign struct {
-		Resumed bool `json:"resumed"`
+		Resumed    bool               `json:"resumed"`
+		GoMemLimit *memlimit.Resolved `json:"gomemlimit"`
 	} `json:"campaign"`
 	FinishedAt string `json:"finished_at"`
 	Status     string `json:"status"`

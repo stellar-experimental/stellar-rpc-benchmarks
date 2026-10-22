@@ -23,13 +23,14 @@ func runDataset(s plan.Step, opts Options) StepResult {
 	if s.Dataset == nil {
 		return failure(s, errors.New("dataset step has no dataset spec"))
 	}
-	if err := prepareDataset(s, opts.Output); err != nil {
+	if err := prepareDataset(s, opts); err != nil {
 		return failure(s, err)
 	}
 	return StepResult{ID: s.ID, Status: StatusOK}
 }
 
-func prepareDataset(s plan.Step, out io.Writer) error {
+func prepareDataset(s plan.Step, opts Options) error {
+	out := opts.Output
 	d := s.Dataset
 	partial := d.Root + ".partial"
 
@@ -55,7 +56,7 @@ func prepareDataset(s plan.Step, out io.Writer) error {
 		if err := mkdirAll(out, partial); err != nil {
 			return err
 		}
-		if err := runDatasetCommands(s, out); err != nil {
+		if err := runDatasetCommands(s, opts); err != nil {
 			return err
 		}
 		if err := rename(out, partial, d.Root); err != nil {
@@ -76,7 +77,7 @@ func prepareDataset(s plan.Step, out io.Writer) error {
 		// with the machine's IAM role and the public bucket 403s, but setting
 		// it for the whole campaign would also hide those same instance-role
 		// credentials from the publish step's `aws s3` calls.
-		if err := runDatasetCommands(s, out); err != nil {
+		if err := runDatasetCommands(s, opts); err != nil {
 			return err
 		}
 		if err := rename(out, partial, d.Root); err != nil {
@@ -100,7 +101,7 @@ func prepareDataset(s plan.Step, out io.Writer) error {
 		}
 		// Generate every chunk into the staging pack tree, then freeze every
 		// chunk into the golden packs — both untimed.
-		if err := runDatasetCommands(s, out); err != nil {
+		if err := runDatasetCommands(s, opts); err != nil {
 			return err
 		}
 		if err := rename(out, partial, d.Root); err != nil {
@@ -131,9 +132,9 @@ func preClean(s plan.Step, out io.Writer) error {
 // runDatasetCommands runs the step's commands in order, stopping at the first
 // failure: what they build together is one pack tree, and half of one is worth
 // nothing.
-func runDatasetCommands(s plan.Step, out io.Writer) error {
+func runDatasetCommands(s plan.Step, opts Options) error {
 	for _, argv := range s.Argv {
-		if err := runCommand(argv, s.Env, out); err != nil {
+		if err := runCommand(argv, s.Env, opts.commandEnv(argv, s.Env), opts.Output); err != nil {
 			return err
 		}
 	}

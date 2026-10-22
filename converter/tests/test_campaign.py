@@ -146,6 +146,26 @@ class CampaignPacedTests(unittest.TestCase):
         self.assertNotIn("source_gcs", data["campaign"])
 
 
+class GoMemLimitTests(unittest.TestCase):
+    """campaign.gomemlimit comes from the manifest's resolved Go memory limit."""
+
+    def test_emitted_only_from_manifest(self):
+        gml = {"bytes": 53084160000, "source": "auto", "mem_total_bytes": 66356318208}
+        for manifest, want in ((gml, gml), (None, None)):
+            root = os.path.join(tempfile.mkdtemp(), "b")
+            fixtures.build_campaign_bundle(root, paced=True)
+            path = os.path.join(root, "metadata.json")
+            with open(path) as f:
+                meta = json.load(f)
+            if manifest:
+                meta["campaign"]["gomemlimit"] = manifest
+            with open(path, "w") as f:
+                json.dump(meta, f)
+            camp = run_convert(root)[0]["campaign"]
+            self.assertEqual(camp.get("gomemlimit"), want)
+            self.assertNotIn("gomemlimit", camp.get("config", {}))
+
+
 class CampaignHotOnlyTests(unittest.TestCase):
     """A campaign run with ingest = "hot" has no ingest-cold-* dirs at all:
     units, reps, vocabulary, and counts must all come from the hot legs."""

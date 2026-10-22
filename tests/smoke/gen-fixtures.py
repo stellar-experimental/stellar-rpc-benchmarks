@@ -13,8 +13,8 @@ query type, one cell per target rate — in a variation no committed run carries
   fixture-rps-data-dir   fixture-rps-phase3's numbers, with every query leg in
                          the latency.csv/scenarios.csv shape of `bench query
                          --data-dir`: the same cells and verdicts,
-                         campaign.query_cli = "data-dir", and 1-ledger
-                         getLedgers pages.
+                         campaign.query_cli = "data-dir", 1-ledger
+                         getLedgers pages, and an auto Go memory limit.
   fixture-rps-partial    two profiles, phase 3, first profile's COLD query legs
                          removed before conversion. The grid must still be
                          discovered from the units that do have cold legs
@@ -261,6 +261,8 @@ def build_bundle(root, spec):
         "started_at": FIXTURE_DATE + "T01:00:00Z",
         "finished_at": FIXTURE_DATE + "T09:30:00Z",
     }
+    if spec.get("gomemlimit"):
+        metadata["campaign"]["gomemlimit"] = spec["gomemlimit"]
     with open(os.path.join(root, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
     with open(os.path.join(root, "machine-metadata.txt"), "w") as f:
@@ -394,6 +396,7 @@ def check_soroswap_only(D, spec):
 def check_data_dir(D, spec):
     """The phase-3 verdicts, from legs of the data-dir shape."""
     assert D["campaign"]["query_cli"] == "data-dir", D["campaign"].get("query_cli")
+    assert D["campaign"]["gomemlimit"]["source"] == "auto", D["campaign"].get("gomemlimit")
     assert D["campaign"]["query_ledgers_limit"] == spec["ledgers_limit"], D["campaign"].get("query_ledgers_limit")
     check_phase3(D, spec)
 
@@ -470,6 +473,8 @@ SPECS = [
         "set": "2026-07-18-apply-load-20k",
         "data_dir": True,
         "ledgers_limit": 1,          # the campaigns' getLedgers page, not the SLA's 10
+        # A c6id.8xlarge's auto limit: 80% of 61.8 GiB.
+        "gomemlimit": {"bytes": 53084160000, "source": "auto", "mem_total_bytes": 66356318208},
         "check": check_data_dir,
     },
     {

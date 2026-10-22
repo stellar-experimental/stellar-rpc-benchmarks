@@ -768,3 +768,53 @@ func TestLegSentinelJSONShape(t *testing.T) {
 		t.Errorf("a successful leg recorded an error: %s", b)
 	}
 }
+
+// TestBenchEnvReachesBenchProcessesOnly checks that BenchEnv goes to every
+// command that runs the plan's binary and to no other command.
+func TestBenchEnvReachesBenchProcessesOnly(t *testing.T) {
+	t.Setenv("GOMEMLIMIT", "")
+	tmp := t.TempDir()
+	got := func(name string) string { return filepath.Join(tmp, name+".env") }
+	record := func(name string) []string {
+		return []string{"/bin/sh", "-c", `printf %s "$GOMEMLIMIT" > "$1"`, "sh", got(name)}
+	}
+	stub := filepath.Join(tmp, "stub")
+	mustWrite(t, stub, "#!/bin/sh\nprintf %s \"$GOMEMLIMIT\" > \"$1\"\n")
+	if err := os.Chmod(stub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(tmp, "bin", "stellar-rpc-deadbeef")
+	root := filepath.Join(tmp, "golden", "ds")
+	legOut := filepath.Join(tmp, "res", "ingest-cold-ds-c0-run1")
+	p := &plan.Plan{Bin: bin, Steps: []plan.Step{
+		{ID: "build", Kind: plan.KindBuild, Argv: [][]string{
+			record("build"),
+			{"/bin/sh", "-c", `mkdir -p "$(dirname "$2")" && cp "$1" "$2"`, "sh", stub, bin},
+		}},
+		{ID: "dataset-ds", Kind: plan.KindDataset, Needs: []string{"build"},
+			Dataset: &plan.DatasetSpec{Name: "ds", Kind: "bsb-s3", Root: root},
+			Env:     map[string]string{"AWS_EC2_METADATA_DISABLED": "true"},
+			Argv: [][]string{
+				{bin, got("dataset-bench")},
+				{"/bin/mkdir", "-p", filepath.Join(root+".partial", "ledgers")},
+			}},
+		{ID: "ingest-cold-ds-c0-run1", Kind: plan.KindLeg, Timed: true, OutDir: legOut,
+			Argv: [][]string{{bin, got("leg")}}},
+	}}
+	res := walk(t, p, Options{BenchEnv: map[string]string{"GOMEMLIMIT": "4096MiB"}})
+	if res.err != nil {
+		t.Fatalf("Execute: %v\nlog:\n%s", res.err, res.log)
+	}
+	for name, want := range map[string]string{
+		"build": "", "dataset-bench": "4096MiB", "leg": "4096MiB",
+	} {
+		b, err := os.ReadFile(got(name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if string(b) != want {
+			t.Errorf("%s saw GOMEMLIMIT=%q, want %q", name, b, want)
+		}
+	}
+	res.assertLogLacks(t, "GOMEMLIMIT=")
+}

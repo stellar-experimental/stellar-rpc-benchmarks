@@ -163,6 +163,14 @@ const judgedKey = (qout) => {
   return ks.length ? ks[Math.floor((ks.length - 1) / 2)] : null;
 };
 
+// checkGoMemLimit checks that a page shows the Go memory limit line exactly
+// when the run records one.
+function checkGoMemLimit(doc, group, D) {
+  const g = (D.campaign || {}).gomemlimit, t = txt(doc.getElementById("report"));
+  check(group, `Go memory limit line ${g ? "shown" : "absent"}`,
+    g ? /Go memory limit:?\s*49\.4 GiB \(80% of RAM\)/.test(t) : !/Go memory limit/.test(t), (t.match(/Go memory limit.{0,40}/) || [""])[0]);
+}
+
 function checkKind(kind, doc, group, data) {
   const reps = data.campaign.reps;
   const base = EXPECT[kind];
@@ -570,6 +578,7 @@ for (const run of manifest.runs) {
     doc.getElementById("summary-link").getAttribute("href") === `summary.html?run=${encodeURIComponent(run.id)}`,
     doc.getElementById("summary-link").getAttribute("href"));
   checkKind(run.kind, doc, group, runJSON(run.id));
+  checkGoMemLimit(doc, group, runJSON(run.id));
   checkSanity(run.kind, doc, group, runJSON(run.id));
   window.close();
 }
@@ -1100,6 +1109,7 @@ for (const file of fixtureFiles) {
   const extra = FIXTURE_CHECKS[D.run_id];
   check(group, "fixture has its own assertions", !!extra, "no FIXTURE_CHECKS entry for " + D.run_id);
   if (extra) extra(doc, group, D);
+  checkGoMemLimit(doc, group, D);
   window.close();
 
   // The same fixture through the stakeholder summary. The committed runs carry
@@ -1113,6 +1123,7 @@ for (const file of fixtureFiles) {
   check(group, "summary: machine metadata block filled", txt(sdoc.getElementById("machine-metadata")).length > 40, "empty");
   checkSummarySections(sdoc, group + " summary", D);
   checkDatasetWorkloads(sdoc, group + " summary", D);
+  checkGoMemLimit(sdoc, group + " summary", D);
   {
     const qTxt = txt(sdoc.getElementById("queries"));
     check(group, "summary: the getLedgers page note shows only on a 1-ledger-page run",
@@ -1413,6 +1424,7 @@ for (const run of manifest.runs) {
   // sections (go / no-go, query latency).
   const text = txt(report);
   checkSummarySections(doc, group, runJSON(run.id));
+  checkGoMemLimit(doc, group, runJSON(run.id));
   // The goal banner leads the goal section; the conditional budget section
   // above it carries a verdict banner of its own.
   const goalSection = report.querySelector("#goal");

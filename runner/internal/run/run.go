@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,22 @@ type Options struct {
 	// the moment the build succeeds, so a campaign that dies during its legs
 	// still leaves the binary's identity in the bundle.
 	OnStepDone func(s plan.Step, res StepResult)
+	// BenchEnv is added to the environment of every command that runs the
+	// plan's binary, and of no other command.
+	BenchEnv map[string]string
+
+	benchBin string
+}
+
+// commandEnv is the environment a command adds to the runner's own: the step's,
+// plus BenchEnv when the command runs the binary under test.
+func (o Options) commandEnv(argv []string, stepEnv map[string]string) map[string]string {
+	if len(o.BenchEnv) == 0 || len(argv) == 0 || argv[0] != o.benchBin {
+		return stepEnv
+	}
+	env := maps.Clone(o.BenchEnv)
+	maps.Copy(env, stepEnv)
+	return env
 }
 
 // legSentinel is leg.json: the runner's own record that a leg ran to
@@ -91,6 +108,7 @@ func Execute(p *plan.Plan, opts Options) ([]StepResult, error) {
 	if opts.Output == nil {
 		opts.Output = os.Stdout
 	}
+	opts.benchBin = p.Bin
 	results := make([]StepResult, 0, len(p.Steps))
 	// bad holds every step that failed or was skipped. Skipped steps being bad
 	// is what makes the propagation transitive: the dependent of a skipped step
@@ -271,7 +289,7 @@ const hostSamplesName = "host.csv"
 func runSampled(s plan.Step, opts Options) error {
 	partial := s.OutDir + "." + hostSamplesName
 	sampler := hoststat.Start(partial)
-	runErr := runCommand(s.Argv[0], s.Env, opts.Output)
+	runErr := runCommand(s.Argv[0], s.Env, opts.commandEnv(s.Argv[0], s.Env), opts.Output)
 	if err := sampler.Stop(); err != nil {
 		Notef(opts.Output, "warning: %s: host sampling stopped: %v", s.ID, err)
 	}
@@ -340,7 +358,7 @@ func executableExists(path string) bool {
 // something half-made.
 func runCommands(s plan.Step, opts Options) StepResult {
 	for _, argv := range s.Argv {
-		if err := runCommand(argv, s.Env, opts.Output); err != nil {
+		if err := runCommand(argv, s.Env, opts.commandEnv(argv, s.Env), opts.Output); err != nil {
 			return failure(s, err)
 		}
 	}
@@ -358,13 +376,14 @@ func RunStep(s plan.Step, out io.Writer) error {
 	return nil
 }
 
-// runCommand prints the command the way the plan printer and bash's run() do,
-// then executes it with its output going wherever the notes go.
-func runCommand(argv []string, env map[string]string, out io.Writer) error {
+// runCommand prints the command with the plan's env the way the plan printer
+// and bash's run() do, then executes it with env added to the runner's
+// environment and its output going wherever the notes go.
+func runCommand(argv []string, planEnv, env map[string]string, out io.Writer) error {
 	if len(argv) == 0 {
 		return errors.New("empty command")
 	}
-	fmt.Fprintf(out, "  $ %s%s\n", envPrefix(env), strings.Join(argv, " "))
+	fmt.Fprintf(out, "  $ %s%s\n", envPrefix(planEnv), strings.Join(argv, " "))
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.Env = os.Environ()

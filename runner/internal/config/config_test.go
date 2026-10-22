@@ -175,6 +175,9 @@ func TestLoadMinimalConfigAppliesDefaults(t *testing.T) {
 	if !cfg.Profile {
 		t.Error("profile = false, want true")
 	}
+	if cfg.GoMemLimit != "auto" {
+		t.Errorf("gomemlimit = %q, want auto", cfg.GoMemLimit)
+	}
 	if cfg.PublishURI != "" {
 		t.Errorf("publish_uri = %q, want empty", cfg.PublishURI)
 	}
@@ -198,6 +201,7 @@ func TestLoadAcceptedConfigs(t *testing.T) {
 		{"compound query_duration", withTop(`query_duration = "2m30s"`)},
 		{"explicit phase", withTop("phase = 3")},
 		{"explicit phase label", withTop(`phase = "3b"`)},
+		{"gomemlimit off", withTop(`gomemlimit = "off"`)},
 		{"chunk id zero", strings.Replace(minimal, "chunks = [7]", "chunks = [0, 1]", 1)},
 		{"fixture whole chunk", `
 name = "f"
@@ -249,6 +253,11 @@ func TestLoadRejects(t *testing.T) {
 		src  string
 		want []string // substrings the error must contain
 	}{
+		{
+			name: "gomemlimit byte count",
+			src:  withTop(`gomemlimit = "48GiB"`),
+			want: []string{"gomemlimit must be auto|off", "48GiB"},
+		},
 		{
 			name: "unknown top-level key",
 			src:  withTop("runz = 3"),

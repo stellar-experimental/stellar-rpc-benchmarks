@@ -72,6 +72,10 @@ query = false
 # dir (--cpuprofile, --memprofile). Default true.
 #profile = true
 
+# GOMEMLIMIT of every bench process: "auto" = 80% of MemTotal (/proc/meminfo),
+# rounded down to MiB; "off" = not set. Default "auto".
+#gomemlimit = "auto"
+
 # Publish the finished bundle to object storage (gs:// or s3://) at the end of
 # the campaign. Default "" = keep results local; publish later by hand with
 # `campaign publish <bundle> <dest-root>`.

@@ -77,6 +77,9 @@
   const fmtInt = x => Math.round(x).toLocaleString("en-US");
   const fmtMiB = bytes => trim(bytes / 1048576) + " MiB";
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // goMemLimitText is the run's Go memory limit, or "" for a run without one.
+  const goMemLimitText = camp => { const g = (camp || {}).gomemlimit;
+    return !g ? "" : g.bytes > 0 ? (g.bytes / 2 ** 30).toFixed(1) + " GiB (80% of RAM)" : "off"; };
   const shortCommit = c => (c || "").slice(0, 8);
 
   /* ============================ section navigation ============================ */
@@ -1110,6 +1113,7 @@
       ${sourceData}
       <h3 class="method-sub">Ingestion and pacing</h3>
       <p class="sec-intro">${pacePara}</p>
+      ${goMemLimitText(D.campaign) ? `<p class="sec-intro" id="gomemlimit">Go memory limit: ${esc(goMemLimitText(D.campaign))}.</p>` : ""}
       ${figHTML("fig21", `Fig ${+secNo("method")}.1`, "How ledgers are fed — the close-interval schedule", "",
         `Ledger 0 sets the <strong>anchor</strong>; startup before it is untimed. Ledger <em>i</em> is due at <code>anchor + i × interval</code>. L0–L2 finish within their slots, so the loop waits for each next due time. L3 overruns its slot; L4 starts immediately, and normal pacing resumes with L5 after catch-up. Lag is the time from a ledger's due time to its commit.`, { noTable: true })}
     </section>
