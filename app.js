@@ -52,6 +52,9 @@
   const fmtInt = x => Math.round(x).toLocaleString("en-US");
   const fmtK = x => x >= 1e6 ? trim(x / 1e6) + " M" : x >= 1e3 ? trim(x / 1e3) + " K" : trim(x);
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // goMemLimitText is the run's Go memory limit, or "" for a run without one.
+  const goMemLimitText = camp => { const g = (camp || {}).gomemlimit;
+    return !g ? "" : g.bytes > 0 ? (g.bytes / 2 ** 30).toFixed(1) + " GiB (80% of RAM)" : "off"; };
   const median5 = rs => [...rs].sort((a, b) => a - b)[Math.floor(rs.length / 2)];
 
   /* ============================ svg helpers ============================ */
@@ -1181,6 +1184,7 @@
       D.hostname ? metaCell("Hostname", D.hostname) : "",
       camp.name ? metaCell("Campaign", camp.name + (camp.config_file ? " · " + camp.config_file : "")) : "",
       closeNs != null ? metaCell("Pacing", closeTxt) : "",
+      goMemLimitText(camp) ? metaCell("Go memory limit", goMemLimitText(camp)) : "",
     ].join("");
     return `
     <header class="masthead">
