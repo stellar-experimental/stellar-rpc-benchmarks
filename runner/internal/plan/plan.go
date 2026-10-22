@@ -98,6 +98,12 @@ const sharedLibsCheck = `for lib in "$HOME/.zstd/lib/libzstd" "$HOME/.rocksdb/li
 	`[ -e "$lib.so" ] || [ -e "$lib.dylib" ] || { echo "error: $lib.so is missing: this ref links the ` +
 	`shared native libs; run bootstrap.sh with SRC_REF=%s first" >&2; exit 1; }; done`
 
+// rpcv2Check is the build step's last command for a static build: it fails the
+// build, rather than every leg, when the binary at $1 refuses --enable-rpcv2.
+const rpcv2Check = `out=$("$1" --enable-rpcv2 version 2>&1); case $out in *"not available in this build"*) ` +
+	`echo "error: $1 refuses --enable-rpcv2 ($out); build it with make build-stellar-rpc RPCV2=true ` +
+	`(stellar-rpc#1136)" >&2; exit 1;; esac`
+
 // Inputs carries everything about the environment that Build would otherwise
 // have to discover for itself. Keeping them in a struct is what makes Build
 // pure: the caller resolves the ref, reads the clock, and picks the storage
@@ -133,6 +139,10 @@ type Inputs struct {
 	// StaticLibs reports that the build links RocksDB and zstd statically and
 	// that the binary needs --enable-rpcv2 (run.DetectBuildTarget).
 	StaticLibs bool
+	// RPCV2BuildFlag reports that the built commit's Makefile takes RPCV2,
+	// which from stellar-rpc#1136 on must be true for the binary to accept
+	// --enable-rpcv2 (run.DetectRPCV2BuildFlag).
+	RPCV2BuildFlag bool
 	// EmptyColdOutDir reports that the built commit's bench ingest cold refuses
 	// a non-empty --cold-out-dir (run.DetectEmptyColdOutDir).
 	EmptyColdOutDir bool
@@ -199,6 +209,8 @@ type Plan struct {
 	QueryCLI      QueryCLI    `json:"query_cli"`    // tiered | data-dir: the argv shape of every query leg
 	BuildTarget   BuildTarget `json:"build_target"` // the Makefile target the build step runs
 	StaticLibs    bool        `json:"static_libs"`  // static RocksDB and zstd, and --enable-rpcv2 on every bench leg
+	// RPCV2BuildFlag reports that the build step passes RPCV2=true to make.
+	RPCV2BuildFlag bool `json:"rpcv2_build_flag"`
 	// Profile reports that every timed leg passes --cpuprofile and --memprofile
 	// into its --out dir.
 	Profile bool `json:"profile"`
@@ -237,6 +249,7 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 		p.BuildTarget = BuildRPCV2
 	}
 	p.StaticLibs = in.StaticLibs
+	p.RPCV2BuildFlag = in.RPCV2BuildFlag
 	p.Profile = cfg.Profile
 	if cfg.Query && p.QueryCLI == QueryCLIDataDir {
 		p.QueryLedgersLimit = in.QueryLedgersLimit
@@ -383,6 +396,9 @@ func buildStep(p *Plan, in Inputs) Step {
 		p.makeBuild(),
 		[]string{"mv", filepath.Join(p.Src, p.builtBinary()), p.Bin},
 	)
+	if p.StaticLibs {
+		argv = append(argv, []string{"sh", "-c", rpcv2Check, "sh", p.Bin})
+	}
 	return Step{ID: "build", Kind: KindBuild, Argv: argv}
 }
 
@@ -391,6 +407,9 @@ func (p *Plan) makeBuild() []string {
 	argv := []string{"make", "-C", p.Src, string(p.BuildTarget)}
 	if p.StaticLibs {
 		argv = append(argv, staticLibHomes...)
+	}
+	if p.RPCV2BuildFlag {
+		argv = append(argv, "RPCV2=true")
 	}
 	return argv
 }

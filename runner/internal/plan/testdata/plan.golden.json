@@ -8,6 +8,7 @@
   "query_cli": "tiered",
   "build_target": "build-rpc-v2",
   "static_libs": false,
+  "rpcv2_build_flag": false,
   "profile": true,
   "results_dir": "/bench/results/golden-deadbeef-20260101T000000Z",
   "tarball": "/tmp/bench-results-golden-deadbeef-20260101T000000Z.tgz",

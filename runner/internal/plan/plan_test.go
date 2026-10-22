@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -891,6 +892,66 @@ func TestSingleBinaryLegsEnableRPCv2(t *testing.T) {
 	}
 	if legs == 0 {
 		t.Fatal("the config planned no legs")
+	}
+}
+
+// TestRPCV2BuildFlag checks that make gets RPCV2=true only when the Makefile
+// takes it, and that the rest of the static make argv stays the same.
+func TestRPCV2BuildFlag(t *testing.T) {
+	cfg := load(t, fmt.Sprintf(hotConfig, 0))
+	static := []string{"make", "-C", "/bench/src", "build-stellar-rpc",
+		"ZSTD_HOME=$(HOME)/.zstd-static", "ROCKSDB_HOME=$(HOME)/.rocksdb-static"}
+	for _, tc := range []struct {
+		name string
+		flag bool
+		want []string
+	}{
+		{"a Makefile without RPCV2 (before #1136)", false, static},
+		{"a Makefile with RPCV2 (#1136 on)", true, append(slices.Clone(static), "RPCV2=true")},
+	} {
+		in := singleBinaryInputs()
+		in.RPCV2BuildFlag = tc.flag
+		p := Build(cfg, in)
+		if p.RPCV2BuildFlag != tc.flag {
+			t.Errorf("%s: plan records rpcv2_build_flag %t, want %t", tc.name, p.RPCV2BuildFlag, tc.flag)
+		}
+		if argv := stepByID(t, p, "build").Argv; !slices.Equal(argv[2], tc.want) {
+			t.Errorf("%s: make = %v, want %v", tc.name, argv[2], tc.want)
+		}
+	}
+}
+
+// TestRPCV2Check checks that the static build's last command fails on a binary
+// that refuses --enable-rpcv2 and passes on one that accepts it, and that a
+// shared build has no such command.
+func TestRPCV2Check(t *testing.T) {
+	cfg := load(t, fmt.Sprintf(hotConfig, 0))
+	if argv := stepByID(t, Build(cfg, goldenInputs()), "build").Argv; argv[len(argv)-1][0] != "mv" {
+		t.Errorf("shared build ends with %v, want the mv", argv[len(argv)-1])
+	}
+	argv := stepByID(t, Build(cfg, singleBinaryInputs()), "build").Argv
+	check := slices.Clone(argv[len(argv)-1])
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name   string
+		stub   string
+		wantOK bool
+	}{
+		{"a binary that refuses rpcv2", "echo 'rpcv2 is not available in this build of stellar-rpc' >&2; exit 1", false},
+		{"a binary that accepts rpcv2", "echo 'stellar-rpc 23.0.0'", true},
+	} {
+		bin := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-"))
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+tc.stub+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		check[len(check)-1] = bin
+		out, err := exec.Command(check[0], check[1:]...).CombinedOutput()
+		if (err == nil) != tc.wantOK {
+			t.Errorf("%s: check err = %v, want ok %t; output: %s", tc.name, err, tc.wantOK, out)
+		}
+		if !tc.wantOK && !strings.Contains(string(out), "RPCV2=true") {
+			t.Errorf("%s: check output = %q, want it to name RPCV2=true", tc.name, out)
+		}
 	}
 }
 

@@ -139,6 +139,17 @@ func DetectBuildTarget(src, commit string) (plan.BuildTarget, bool, error) {
 		commit, plan.BuildRPCV2, plan.BuildStellarRPC)
 }
 
+// DetectRPCV2BuildFlag reports whether commit's Makefile defines the RPCV2
+// variable that stellar-rpc#1136 added, without which build-stellar-rpc
+// writes a binary that refuses --enable-rpcv2.
+func DetectRPCV2BuildFlag(src, commit string) (bool, error) {
+	ok, err := grepTree(src, commit, `^RPCV2[[:space:]]*[?:]?=`, "Makefile")
+	if err != nil {
+		return false, fmt.Errorf("probe the RPCV2 build flag of %s in %s: %w", commit, src, err)
+	}
+	return ok, nil
+}
+
 // DetectEmptyColdOutDir reports whether commit's bench ingest cold refuses a
 // non-empty --cold-out-dir, as it does from stellar-rpc#1070 on.
 func DetectEmptyColdOutDir(src, commit string) (bool, error) {
