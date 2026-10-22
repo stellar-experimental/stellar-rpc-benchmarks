@@ -52,15 +52,9 @@
   const fmtInt = x => Math.round(x).toLocaleString("en-US");
   const fmtK = x => x >= 1e6 ? trim(x / 1e6) + " M" : x >= 1e3 ? trim(x / 1e3) + " K" : trim(x);
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  // goMemLimitText is the run's Go memory limit as one line, or "" for a run
-  // that does not record one.
-  const goMemLimitText = camp => {
-    const g = (camp || {}).gomemlimit;
-    if (!g || typeof g.bytes !== "number") return "";
-    if (g.bytes <= 0) return "off";
-    const why = { auto: "80% of RAM", env: "from the runner's GOMEMLIMIT", explicit: "set in the campaign config" }[g.source];
-    return (g.bytes / 2 ** 30).toFixed(1) + " GiB" + (why ? ` (${why})` : "");
-  };
+  // goMemLimitText is the run's Go memory limit, or "" for a run without one.
+  const goMemLimitText = camp => { const g = (camp || {}).gomemlimit;
+    return !g ? "" : g.bytes > 0 ? (g.bytes / 2 ** 30).toFixed(1) + " GiB (80% of RAM)" : "off"; };
   const median5 = rs => [...rs].sort((a, b) => a - b)[Math.floor(rs.length / 2)];
 
   /* ============================ svg helpers ============================ */
