@@ -481,7 +481,9 @@ additive, so manifest-less bundles convert unchanged:
   query campaign its `campaign.phase` and its query verdicts), the structured `hardware`
   object, and `hostname`. `datasets[].kind` is the dataset
   **transport** (`packs-local|packs-gs|packs-s3|bsb-s3|fixture`), not pubnet-vs-synthetic, and sets
-  campaign display order. `finished_at` is absent until the campaign finishes (the runner
+  campaign display order. `datasets[].location` is the location the runner read; when the
+  runner rewrote it to the pack generation of the ref, `datasets[].configured_location` holds
+  the config's location (the converter ignores it). `finished_at` is absent until the campaign finishes (the runner
   writes the manifest up front), and `campaign.resumed` appears only on a bundle built
   across more than one `--resume` session. `status` (`running|finished|failed`) is
   additive and written the same way — `running` up front, rewritten at the end; bash-era

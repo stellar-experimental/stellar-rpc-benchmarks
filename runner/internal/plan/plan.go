@@ -82,6 +82,18 @@ const (
 	BuildStellarRPC BuildTarget = "build-stellar-rpc"
 )
 
+// PackGeneration names the on-disk pack format a stellar-rpc commit reads,
+// which is also the packs-vN path segment of the dataset trees in that format.
+type PackGeneration string
+
+const (
+	// PackGenV4 packs carry the packfile content hash: every commit before
+	// stellar-rpc#1128.
+	PackGenV4 PackGeneration = "v4"
+	// PackGenV5 packs have no content hash: stellar-rpc#1128 on.
+	PackGenV5 PackGeneration = "v5"
+)
+
 // staticLibHomes point a static build at its zstd and RocksDB archives, which
 // the Makefile builds there when they are missing. They are apart from ~/.zstd
 // and ~/.rocksdb because those hold the shared libraries the older builds
@@ -146,6 +158,10 @@ type Inputs struct {
 	// EmptyColdOutDir reports that the built commit's bench ingest cold refuses
 	// a non-empty --cold-out-dir (run.DetectEmptyColdOutDir).
 	EmptyColdOutDir bool
+	// PackGeneration is the pack format the built commit reads; empty means
+	// unknown, and then no dataset location is rewritten
+	// (run.DetectPackGeneration).
+	PackGeneration PackGeneration
 }
 
 // Step is one unit of scheduling, skipping, and failure. Argv is a *list* of
@@ -195,6 +211,9 @@ type DatasetSpec struct {
 	Ledgers  *int   `json:"ledgers,omitempty"`  // fixture only
 	Root     string `json:"root"`               // the cold pack root this converges on
 	Stage    string `json:"stage,omitempty"`    // fixture staging pack dir
+	// ConfiguredLocation is the config's location when Location is its
+	// rewrite to the plan's pack generation, and absent otherwise.
+	ConfiguredLocation string `json:"configured_location,omitempty"`
 }
 
 // Plan is a whole campaign as data: the paths it derives and the steps it
@@ -211,6 +230,9 @@ type Plan struct {
 	StaticLibs    bool        `json:"static_libs"`  // static RocksDB and zstd, and --enable-rpcv2 on every bench leg
 	// RPCV2BuildFlag reports that the build step passes RPCV2=true to make.
 	RPCV2BuildFlag bool `json:"rpcv2_build_flag"`
+	// PackGeneration is the pack format the built commit reads; absent when
+	// unknown.
+	PackGeneration PackGeneration `json:"pack_generation,omitempty"`
 	// Profile reports that every timed leg passes --cpuprofile and --memprofile
 	// into its --out dir.
 	Profile bool `json:"profile"`
@@ -250,6 +272,7 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	}
 	p.StaticLibs = in.StaticLibs
 	p.RPCV2BuildFlag = in.RPCV2BuildFlag
+	p.PackGeneration = in.PackGeneration
 	p.Profile = cfg.Profile
 	if cfg.Query && p.QueryCLI == QueryCLIDataDir {
 		p.QueryLedgersLimit = in.QueryLedgersLimit
@@ -451,13 +474,19 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		step.PreClean = []string{root}
 		step.Argv = [][]string{{"gcloud", "storage", "rsync", "-r", d.Location, root + ".partial"}}
 	case config.KindPacksS3:
-		step.Dataset.Location = d.Location
+		step.Dataset.Location = DatasetLocation(d, in.PackGeneration)
+		if step.Dataset.Location != d.Location {
+			step.Dataset.ConfiguredLocation = d.Location
+			p.Notes = append(p.Notes, fmt.Sprintf(
+				"dataset %s: fetching %s, not the configured %s — stellar-rpc %s reads packs-%s (stellar-rpc#1128)",
+				d.Name, step.Dataset.Location, d.Location, in.Sha8, in.PackGeneration))
+		}
 		// Same fetch as packs-gs, with the other CLI: `aws s3 sync` copies the
 		// prefix's contents into the destination, as gcloud rsync does, and
 		// re-copies only what is missing or changed — so the .partial is kept
 		// out of pre_clean here too.
 		step.PreClean = []string{root}
-		step.Argv = [][]string{{"aws", "s3", "sync", d.Location, root + ".partial"}}
+		step.Argv = [][]string{{"aws", "s3", "sync", step.Dataset.Location, root + ".partial"}}
 	case config.KindBSBS3:
 		step.Dataset.Location = d.Location
 		step.Needs = []string{"build"}
@@ -722,6 +751,36 @@ func targetRPS(in Inputs, d *config.Dataset, qtype string) string {
 		parts[i] = strconv.FormatFloat(r, 'f', -1, 64)
 	}
 	return strings.Join(parts, ",")
+}
+
+// DatasetLocation is where a dataset is read from by a commit that reads pack
+// generation gen: a packs-s3 location's packs-v4 or packs-v5 path segment is
+// renamed to gen, and any other location is the configured one.
+func DatasetLocation(d *config.Dataset, gen PackGeneration) string {
+	if d.Kind != config.KindPacksS3 || !gen.known() {
+		return d.Location
+	}
+	segs := strings.Split(d.Location, "/")
+	for i, seg := range segs {
+		if seg == "packs-"+string(PackGenV4) || seg == "packs-"+string(PackGenV5) {
+			segs[i] = "packs-" + string(gen)
+		}
+	}
+	return strings.Join(segs, "/")
+}
+
+func (g PackGeneration) known() bool { return g == PackGenV4 || g == PackGenV5 }
+
+// RewrittenLocations maps each dataset whose location the plan rewrote to
+// the location its step reads.
+func (p *Plan) RewrittenLocations() map[string]string {
+	out := map[string]string{}
+	for _, s := range p.Steps {
+		if s.Dataset != nil && s.Dataset.ConfiguredLocation != "" {
+			out[s.Dataset.Name] = s.Dataset.Location
+		}
+	}
+	return out
 }
 
 // datasetRoot is the local cold pack root a dataset converges on: its own

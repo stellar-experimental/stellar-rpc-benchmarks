@@ -137,7 +137,8 @@ func dryRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDir
 
 // probeShape fills in's commit shape for the commands that only print a plan:
 // run.DetectBenchCLI, run.DetectBuildTarget, run.DetectRPCV2BuildFlag,
-// run.DetectEmptyColdOutDir, and run.DetectQueryCLI for a query campaign. A failed probe, a missing query
+// run.DetectEmptyColdOutDir, run.DetectPackGeneration, and run.DetectQueryCLI
+// for a query campaign. A failed probe, a missing query
 // bench, or a config the shape cannot run is a note, and the plan falls back
 // to the default shape.
 func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout io.Writer) {
@@ -162,6 +163,12 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 	} else {
 		in.EmptyColdOutDir = empty
 	}
+	if gen, err := run.DetectPackGeneration(src, commit); err != nil {
+		run.Notef(stdout, "%s — planning the configured dataset locations", err)
+	} else {
+		in.PackGeneration = gen
+		run.Notef(stdout, "%s", packGenerationNote(gen))
+	}
 	if cfg.Query {
 		switch shape, ok, err := run.DetectQueryCLI(src, commit, cli); {
 		case err != nil:
@@ -183,12 +190,24 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 func assumeCurrentShape(cfg *config.Config, in *plan.Inputs) string {
 	in.BenchCLI, in.QueryCLI = plan.BenchCLIRoot, plan.QueryCLIDataDir
 	in.BuildTarget, in.StaticLibs, in.RPCV2BuildFlag, in.EmptyColdOutDir = plan.BuildStellarRPC, true, true, true
-	assumed := fmt.Sprintf("assuming the current shapes: the %s CLI (%s), the %s query CLI, and make %s "+
-		"RPCV2=true with static libs (--enable-rpcv2)", in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget)
+	in.PackGeneration = plan.PackGenV5
+	assumed := fmt.Sprintf("assuming the current shapes: the %s CLI (%s), the %s query CLI, make %s "+
+		"RPCV2=true with static libs (--enable-rpcv2), and packs-%s datasets (stellar-rpc#1128)",
+		in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget, in.PackGeneration)
 	if err := plan.Check(cfg, *in); err != nil {
 		assumed += "; " + err.Error()
 	}
 	return assumed
+}
+
+// packGenerationNote names the pack generation a commit reads, or says that
+// the probe found none.
+func packGenerationNote(gen plan.PackGeneration) string {
+	if gen == "" {
+		return "pack generation: unknown (no packfile trailerSize in cmd/) — dataset locations are not " +
+			"rewritten and packs are not checked"
+	}
+	return fmt.Sprintf("pack generation: packs-%s", gen)
 }
 
 // noQueryCLI is the message for a query campaign whose commit has no query bench.
@@ -256,6 +275,12 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 1
 	}
+	packGeneration, err := run.DetectPackGeneration(src, builtCommit)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return 1
+	}
+	run.Notef(out, "%s", packGenerationNote(packGeneration))
 	var queryCLI plan.QueryCLI
 	if cfg.Query {
 		shape, ok, err := run.DetectQueryCLI(src, builtCommit, benchCLI)
@@ -317,6 +342,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		StaticLibs:        staticLibs,
 		RPCV2BuildFlag:    rpcv2BuildFlag,
 		EmptyColdOutDir:   emptyColdOutDir,
+		PackGeneration:    packGeneration,
 	}
 	if err := plan.Check(cfg, in); err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
@@ -331,6 +357,12 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	}
 
 	run.Notef(out, "campaign %s → %s", cfg.Name, res)
+	for _, s := range p.Steps {
+		if s.Dataset != nil && s.Dataset.ConfiguredLocation != "" {
+			run.Notef(out, "dataset %s: fetching %s, not the configured %s (packs-%s)",
+				s.Dataset.Name, s.Dataset.Location, s.Dataset.ConfiguredLocation, packGeneration)
+		}
+	}
 	for _, dir := range []string{"bin", "golden", "scratch", "hot", "fixture"} {
 		if err := os.MkdirAll(filepath.Join(benchRoot, dir), 0o755); err != nil {
 			fmt.Fprintf(stderr, "error: %s\n", err)
@@ -380,6 +412,7 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		QueryPhase:        ql.phase,
 		QueryLedgersLimit: p.QueryLedgersLimit,
 		GoMemLimit:        &limit,
+		Locations:         p.RewrittenLocations(),
 		Resumed:           resume != nil,
 		Hardware:          bundle.CollectHardware(bundle.DefaultIMDSBase),
 		Hostname:          hostname,

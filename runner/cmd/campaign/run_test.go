@@ -37,7 +37,7 @@ func TestRunCmdDryRunTouchesNothing(t *testing.T) {
 		"dry run: printing commands only",
 		"using placeholder sha 'deadbeef' in paths",
 		"assuming the current shapes: the bench CLI (bench ingest/bench query), the data-dir query CLI, " +
-			"and make build-stellar-rpc RPCV2=true with static libs (--enable-rpcv2)",
+			"make build-stellar-rpc RPCV2=true with static libs (--enable-rpcv2), and packs-v5 datasets (stellar-rpc#1128)",
 		"== build\n",
 		"build-stellar-rpc ZSTD_HOME=$(HOME)/.zstd-static ROCKSDB_HOME=$(HOME)/.rocksdb-static RPCV2=true\n",
 		"stellar-rpc-deadbeef --enable-rpcv2 bench query --data-dir=",

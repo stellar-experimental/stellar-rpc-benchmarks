@@ -1100,3 +1100,86 @@ func TestProfileFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestDatasetLocation checks which locations the pack generation rewrites:
+// only a packs-v4 or packs-v5 path segment of a packs-s3 location.
+func TestDatasetLocation(t *testing.T) {
+	const c1 = "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1/sac-9000/"
+	for _, tc := range []struct {
+		name, kind, location string
+		gen                  PackGeneration
+		want                 string
+	}{
+		{"v4 location, v5 ref", config.KindPacksS3, c1 + "packs-v4/cold", PackGenV5, c1 + "packs-v5/cold"},
+		{"v5 location, v4 ref", config.KindPacksS3, c1 + "packs-v5/cold", PackGenV4, c1 + "packs-v4/cold"},
+		{"v4 location, v4 ref", config.KindPacksS3, c1 + "packs-v4/cold", PackGenV4, c1 + "packs-v4/cold"},
+		{"trailing segment", config.KindPacksS3, "s3://b/sac/packs-v4", PackGenV5, "s3://b/sac/packs-v5"},
+		{"unknown generation", config.KindPacksS3, c1 + "packs-v4/cold", "", c1 + "packs-v4/cold"},
+		{"older generation", config.KindPacksS3, "s3://b/sac/packs-v3/cold", PackGenV5, "s3://b/sac/packs-v3/cold"},
+		{"unversioned packs", config.KindPacksS3, "s3://b/sac/packs/cold", PackGenV5, "s3://b/sac/packs/cold"},
+		{"not a whole segment", config.KindPacksS3, "s3://b/sac/my-packs-v4/cold", PackGenV5, "s3://b/sac/my-packs-v4/cold"},
+		{"no packs segment", config.KindPacksS3, "s3://bucket/cold", PackGenV5, "s3://bucket/cold"},
+		{"packs-gs", config.KindPacksGS, "gs://b/sac/packs-v4/cold", PackGenV5, "gs://b/sac/packs-v4/cold"},
+		{"packs-local", config.KindPacksLocal, "/mnt/sac/packs-v4/cold", PackGenV5, "/mnt/sac/packs-v4/cold"},
+		{"bsb-s3", config.KindBSBS3, "bucket/packs-v4", PackGenV5, "bucket/packs-v4"},
+	} {
+		d := &config.Dataset{Name: "sac-9000", Kind: tc.kind, Location: tc.location}
+		if got := DatasetLocation(d, tc.gen); got != tc.want {
+			t.Errorf("%s: DatasetLocation = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// packsV4Config is packsS3Config over a packs-v4 location.
+var packsV4Config = strings.Replace(packsS3Config, "s3://bucket/cold", "s3://bucket/sac/packs-v4/cold", 1)
+
+// TestPackGenerationRewritesTheFetch checks that a packs-v5 plan fetches the
+// packs-v5 tree, and records the configured location and a note.
+func TestPackGenerationRewritesTheFetch(t *testing.T) {
+	in := goldenInputs()
+	in.PackGeneration = PackGenV5
+	p := Build(load(t, packsV4Config), in)
+	ds := stepByID(t, p, "dataset-packs")
+	want := []string{"aws", "s3", "sync", "s3://bucket/sac/packs-v5/cold", "/bench/golden/packs.partial"}
+	if len(ds.Argv) != 1 || !slices.Equal(ds.Argv[0], want) {
+		t.Errorf("argv = %v, want %v", ds.Argv, want)
+	}
+	if ds.Dataset.Location != "s3://bucket/sac/packs-v5/cold" || ds.Dataset.ConfiguredLocation != "s3://bucket/sac/packs-v4/cold" {
+		t.Errorf("location = %q, configured = %q, want the packs-v5 rewrite of the packs-v4 config",
+			ds.Dataset.Location, ds.Dataset.ConfiguredLocation)
+	}
+	if got := p.RewrittenLocations(); !reflect.DeepEqual(got, map[string]string{"packs": "s3://bucket/sac/packs-v5/cold"}) {
+		t.Errorf("RewrittenLocations = %v", got)
+	}
+	note := "dataset packs: fetching s3://bucket/sac/packs-v5/cold, not the configured s3://bucket/sac/packs-v4/cold " +
+		"— stellar-rpc deadbeef reads packs-v5 (stellar-rpc#1128)"
+	if !slices.Contains(p.Notes, note) {
+		t.Errorf("notes = %q, want %q", p.Notes, note)
+	}
+	if p.PackGeneration != PackGenV5 {
+		t.Errorf("pack_generation = %q, want v5", p.PackGeneration)
+	}
+}
+
+// TestPackGenerationV4KeepsThePlan checks that a packs-v4 plan over packs-v4
+// locations differs from the unprobed plan only by its pack_generation field.
+func TestPackGenerationV4KeepsThePlan(t *testing.T) {
+	cfg := load(t, packsV4Config)
+	unprobed, err := json.MarshalIndent(Build(cfg, goldenInputs()), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := goldenInputs()
+	in.PackGeneration = PackGenV4
+	v4, err := json.MarshalIndent(Build(cfg, in), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := "\n  \"pack_generation\": \"v4\","
+	if !bytes.Contains(v4, []byte(field)) {
+		t.Fatalf("v4 plan lacks %q:\n%s", field, v4)
+	}
+	if got := bytes.Replace(v4, []byte(field), nil, 1); !bytes.Equal(got, unprobed) {
+		t.Errorf("v4 plan differs from the unprobed plan beyond pack_generation:\n%s", diffLines(unprobed, got))
+	}
+}
