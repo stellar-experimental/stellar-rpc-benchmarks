@@ -662,6 +662,12 @@
     if (sets === undefined) return (DATASET_SIZES && DATASET_SIZES.legacy_set) || null;
     return (sets && sets[String(unit).replace(/-c\d+$/, "")]) || null;
   }
+  // diagEventsText says whether the run's synthetic ledgers include diagnostic events; empty unless every unit comes from one C1 or C2 set.
+  function diagEventsText(D, units) {
+    const kinds = new Set(units.map(u => (/-(c[12])$/.exec(setOf(D, u) || "") || [])[1]));
+    if (kinds.size !== 1 || kinds.has(undefined)) return "";
+    return kinds.has("c1") ? " The ledgers include diagnostic events (set C1)." : " The ledgers do not include diagnostic events (set C2).";
+  }
   // sizesFor is a run unit's dataset-sizes entry, matched by set and profile
   // ("sac-5000-c1" -> "sac-5000"), never by profile alone.
   function sizesFor(D, unit) {
@@ -1108,7 +1114,7 @@
     <section id="method">
       <div class="sec-head"><span class="sec-num">${secNo("method")}</span><h2>Methodology</h2></div>
       <h3 class="method-sub">Test data</h3>
-      <p class="sec-intro">Synthetic ledgers are generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's target TPL.</p>
+      <p class="sec-intro">Synthetic ledgers are generated with Stellar Core's <code>apply-load</code> command. Each profile fills every ledger with one transaction type at the phase's target TPL.${diagEventsText(D, dsUnits)}</p>
       ${datasetTable}
       ${sourceData}
       <h3 class="method-sub">Ingestion and pacing</h3>
