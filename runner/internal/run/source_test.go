@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/packgen"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 )
 
@@ -374,8 +375,9 @@ func TestDetectEmptyColdOutDir(t *testing.T) {
 	}
 }
 
-// TestDetectPackGeneration checks the probe for the packfile trailer size,
-// which a test file alone does not set.
+// TestDetectPackGeneration checks that the default registry picks the newest
+// generation whose markers match, on commits shaped like stellar-rpc before
+// #1128, after it, mid-way through the index rewrite, and after it.
 func TestDetectPackGeneration(t *testing.T) {
 	repo, none := originRepo(t)
 	pkg := "cmd/stellar-rpc/internal/rpcv2/packfile"
@@ -384,26 +386,59 @@ func TestDetectPackGeneration(t *testing.T) {
 	v4 := commit(t, repo, pkg+"/packfile.go", fmt.Sprintf(decl, "76"))
 	testOnly := commit(t, repo, pkg+"/packfile_test.go", fmt.Sprintf(decl, "44"))
 	v5 := commit(t, repo, pkg+"/packfile.go", fmt.Sprintf(decl, "44"))
+	v6TestOnly := commit(t, repo, pkg+"/index_test.go", "package packfile\n\nconst groupHasCounts uint8 = 1\n")
+	directory := commit(t, repo, pkg+"/index.go", "package packfile\n\nconst (\n\tknownGroupFlags uint8 = 0\n\tdirEntryLen  = 17\n)\n")
+	v6 := commit(t, repo, pkg+"/index.go", "package packfile\n\nconst (\n\tgroupHasCounts uint8 = 1 << 0\n"+
+		"\tknownGroupFlags = groupHasCounts\n\tdirEntryLen  = 17\n)\n")
 	unknown := commit(t, repo, pkg+"/packfile.go", fmt.Sprintf(decl, "52"))
+	git(t, repo, "rm", "-q", pkg+"/index.go")
+	git(t, repo, "commit", "-q", "-m", "drop the index")
+	unknownTrailer := git(t, repo, "rev-parse", "HEAD")
 	for _, tc := range []struct {
 		name   string
 		commit string
 		want   plan.PackGeneration
 	}{
 		{"no packfile library", none, ""},
-		{"before #1128", v4, plan.PackGenV4},
-		{"a 44-byte trailer in a test file only", testOnly, plan.PackGenV4},
-		{"from #1128 on", v5, plan.PackGenV5},
+		{"before #1128", v4, "packs-v4"},
+		{"a 44-byte trailer in a test file only", testOnly, "packs-v4"},
+		{"from #1128 on", v5, "packs-v5"},
+		{"a v6 marker in a test file only", v6TestOnly, "packs-v5"},
+		{"the index directory without item counts", directory, ""},
+		{"the v6 index", v6, "packs-v6"},
+		{"the v6 index with an unknown trailer", unknown, "packs-v6"},
+		{"an unknown trailer", unknownTrailer, ""},
 	} {
-		got, err := DetectPackGeneration(repo, tc.commit)
+		got, err := DetectPackGeneration(repo, tc.commit, packgen.Default())
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if got != tc.want {
-			t.Errorf("%s: DetectPackGeneration = %q, want %q", tc.name, got, tc.want)
+		if got.Generation != tc.want {
+			t.Errorf("%s: DetectPackGeneration = %q, want %q", tc.name, got.Generation, tc.want)
+		}
+		if g, _ := packgen.Default().Lookup(string(tc.want)); tc.want != "" && got.Marker != g.Describe() {
+			t.Errorf("%s: marker = %q, want %q", tc.name, got.Marker, g.Describe())
 		}
 	}
-	if got, err := DetectPackGeneration(repo, unknown); err == nil {
-		t.Errorf("DetectPackGeneration of a 52-byte trailer = %q, want an error", got)
+}
+
+// TestDetectPackGenerationNewEntry checks that a registry entry added on top
+// is chosen first, with no code change.
+func TestDetectPackGenerationNewEntry(t *testing.T) {
+	repo, _ := originRepo(t)
+	mustMkdir(t, filepath.Join(repo, "cmd"))
+	head := commit(t, repo, "cmd/packfile.go", "package packfile\n\nconst (\n\ttrailerSize = 44\n\tsealV7 = true\n)\n")
+	reg, err := packgen.Parse([]byte(`{"generations":[
+		{"name":"packs-v7","reader_marker":{"pattern":"sealV7","paths":["cmd"]},"writer_commit":"abcdef12","format_change":"x"},
+		{"name":"packs-v5","reader_marker":{"pattern":"trailerSize = 44","paths":["cmd"]},"writer_commit":"4d30c258","format_change":"y"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DetectPackGeneration(repo, head, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Generation != "packs-v7" || got.Marker != "/sealV7/ in cmd" {
+		t.Errorf("DetectPackGeneration = %+v, want packs-v7 by /sealV7/ in cmd", got)
 	}
 }

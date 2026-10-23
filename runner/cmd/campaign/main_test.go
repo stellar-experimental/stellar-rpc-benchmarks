@@ -143,7 +143,7 @@ func TestPlanCmd(t *testing.T) {
 		for _, want := range []string{
 			"using placeholder sha 'deadbeef' in paths",
 			"assuming the current shapes: the bench CLI (bench ingest/bench query), the data-dir query CLI, " +
-				"make build-stellar-rpc RPCV2=true with static libs (--enable-rpcv2), and packs-v5 datasets (stellar-rpc#1128)",
+				"make build-stellar-rpc RPCV2=true with static libs (--enable-rpcv2), and packs-v6 datasets (the newest registry entry)",
 			"== build\n",
 			filepath.Join(benchRoot, "bin", "stellar-rpc-deadbeef"),
 			"== ingest-cold-ds-c1-run1\n",

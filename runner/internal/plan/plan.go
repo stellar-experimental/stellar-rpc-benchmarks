@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/packgen"
 )
 
 // SchemaVersion is the version of the plan.json contract. Additive changes
@@ -82,17 +83,10 @@ const (
 	BuildStellarRPC BuildTarget = "build-stellar-rpc"
 )
 
-// PackGeneration names the on-disk pack format a stellar-rpc commit reads,
-// which is also the packs-vN path segment of the dataset trees in that format.
+// PackGeneration names the on-disk pack format a stellar-rpc commit reads, a
+// packgen registry name such as "packs-v5", which is also the path segment of
+// the dataset trees in that format.
 type PackGeneration string
-
-const (
-	// PackGenV4 packs carry the packfile content hash: every commit before
-	// stellar-rpc#1128.
-	PackGenV4 PackGeneration = "v4"
-	// PackGenV5 packs have no content hash: stellar-rpc#1128 on.
-	PackGenV5 PackGeneration = "v5"
-)
 
 // staticLibHomes point a static build at its zstd and RocksDB archives, which
 // the Makefile builds there when they are missing. They are apart from ~/.zstd
@@ -162,6 +156,8 @@ type Inputs struct {
 	// unknown, and then no dataset location is rewritten
 	// (run.DetectPackGeneration).
 	PackGeneration PackGeneration
+	// PackMarker names the registry markers that chose PackGeneration.
+	PackMarker string
 }
 
 // Step is one unit of scheduling, skipping, and failure. Argv is a *list* of
@@ -214,6 +210,11 @@ type DatasetSpec struct {
 	// ConfiguredLocation is the config's location when Location is its
 	// rewrite to the plan's pack generation, and absent otherwise.
 	ConfiguredLocation string `json:"configured_location,omitempty"`
+	// ReadCheck is the one-ledger bench ingest hot that proves the binary
+	// reads the dataset before any leg; ReadCheckDir is its scratch dir, which
+	// the executor removes before and after it.
+	ReadCheck    []string `json:"read_check,omitempty"`
+	ReadCheckDir string   `json:"read_check_dir,omitempty"`
 }
 
 // Plan is a whole campaign as data: the paths it derives and the steps it
@@ -230,9 +231,10 @@ type Plan struct {
 	StaticLibs    bool        `json:"static_libs"`  // static RocksDB and zstd, and --enable-rpcv2 on every bench leg
 	// RPCV2BuildFlag reports that the build step passes RPCV2=true to make.
 	RPCV2BuildFlag bool `json:"rpcv2_build_flag"`
-	// PackGeneration is the pack format the built commit reads; absent when
-	// unknown.
+	// PackGeneration is the pack format the built commit reads, and
+	// PackMarker the registry markers that chose it; both absent when unknown.
 	PackGeneration PackGeneration `json:"pack_generation,omitempty"`
+	PackMarker     string         `json:"pack_marker,omitempty"`
 	// Profile reports that every timed leg passes --cpuprofile and --memprofile
 	// into its --out dir.
 	Profile bool `json:"profile"`
@@ -273,6 +275,7 @@ func Build(cfg *config.Config, in Inputs) *Plan {
 	p.StaticLibs = in.StaticLibs
 	p.RPCV2BuildFlag = in.RPCV2BuildFlag
 	p.PackGeneration = in.PackGeneration
+	p.PackMarker = in.PackMarker
 	p.Profile = cfg.Profile
 	if cfg.Query && p.QueryCLI == QueryCLIDataDir {
 		p.QueryLedgersLimit = in.QueryLedgersLimit
@@ -478,8 +481,8 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 		if step.Dataset.Location != d.Location {
 			step.Dataset.ConfiguredLocation = d.Location
 			p.Notes = append(p.Notes, fmt.Sprintf(
-				"dataset %s: fetching %s, not the configured %s — stellar-rpc %s reads packs-%s (stellar-rpc#1128)",
-				d.Name, step.Dataset.Location, d.Location, in.Sha8, in.PackGeneration))
+				"dataset %s: fetching %s, not the configured %s — stellar-rpc %s reads %s (registry marker %s)",
+				d.Name, step.Dataset.Location, d.Location, in.Sha8, in.PackGeneration, in.PackMarker))
 		}
 		// Same fetch as packs-gs, with the other CLI: `aws s3 sync` copies the
 		// prefix's contents into the destination, as gcloud rsync does, and
@@ -545,6 +548,7 @@ func datasetStep(p *Plan, in Inputs, d *config.Dataset) Step {
 			})
 		}
 	}
+	readCheck(p, in, d, &step)
 	return step
 }
 
@@ -754,22 +758,64 @@ func targetRPS(in Inputs, d *config.Dataset, qtype string) string {
 }
 
 // DatasetLocation is where a dataset is read from by a commit that reads pack
-// generation gen: a packs-s3 location's packs-v4 or packs-v5 path segment is
-// renamed to gen, and any other location is the configured one.
+// generation gen: every path segment of a packs-s3 location that names a
+// registered generation is renamed to gen, and any other location is the
+// configured one.
 func DatasetLocation(d *config.Dataset, gen PackGeneration) string {
-	if d.Kind != config.KindPacksS3 || !gen.known() {
+	reg := packgen.Default()
+	if _, ok := reg.Lookup(string(gen)); d.Kind != config.KindPacksS3 || !ok {
 		return d.Location
 	}
 	segs := strings.Split(d.Location, "/")
 	for i, seg := range segs {
-		if seg == "packs-"+string(PackGenV4) || seg == "packs-"+string(PackGenV5) {
-			segs[i] = "packs-" + string(gen)
+		if _, ok := reg.Lookup(seg); ok {
+			segs[i] = string(gen)
 		}
 	}
 	return strings.Join(segs, "/")
 }
 
-func (g PackGeneration) known() bool { return g == PackGenV4 || g == PackGenV5 }
+// Sha8 is the short commit the plan's binary is named after.
+func (p *Plan) Sha8() string { return strings.TrimPrefix(filepath.Base(p.Bin), "stellar-rpc-") }
+
+// LocationGeneration is the registered generation a location's path names,
+// or "" when it names none.
+func LocationGeneration(location string) PackGeneration {
+	for _, seg := range strings.Split(location, "/") {
+		if _, ok := packgen.Default().Lookup(seg); ok {
+			return PackGeneration(seg)
+		}
+	}
+	return ""
+}
+
+// ReadsForeignPacks reports whether a dataset kind reads packs another binary
+// wrote. A backfill or a fixture is written by the binary under test.
+func ReadsForeignPacks(kind string) bool {
+	switch kind {
+	case config.KindPacksLocal, config.KindPacksGS, config.KindPacksS3:
+		return true
+	}
+	return false
+}
+
+// readCheck sets the dataset step's one-ledger read check: a bench ingest hot
+// of the first ledger of the dataset's first chunk, the read the hot and cold
+// legs start with. Only the rpcv2 bench CLI (--enable-rpcv2) gets one.
+func readCheck(p *Plan, in Inputs, d *config.Dataset, step *Step) {
+	if !p.StaticLibs || p.BenchCLI != BenchCLIRoot || !ReadsForeignPacks(d.Kind) || len(d.Chunks) == 0 {
+		return
+	}
+	dir := filepath.Join(in.BenchRoot, "scratch", "readcheck-"+d.Name)
+	step.Dataset.ReadCheckDir = dir
+	step.Dataset.ReadCheck = append(p.benchArgv("ingest", "hot"),
+		"--source=pack", "--pack-dir="+filepath.Join(step.Dataset.Root, "ledgers"),
+		"--start-chunk="+strconv.Itoa(d.Chunks[0]), "--num-ledgers=1", "--close-interval=0",
+		"--hot-dir="+filepath.Join(dir, "hot"), "--out="+filepath.Join(dir, "out"))
+	if !slices.Contains(step.Needs, "build") {
+		step.Needs = append(step.Needs, "build")
+	}
+}
 
 // RewrittenLocations maps each dataset whose location the plan rewrote to
 // the location its step reads.
@@ -848,6 +894,11 @@ func (p *Plan) Print(w io.Writer) {
 		}
 		if s.Dataset != nil && materializes(s.Dataset.Kind) {
 			fmt.Fprintf(w, "  $ mv %s.partial %s\n", s.Dataset.Root, s.Dataset.Root)
+		}
+		if s.Dataset != nil && len(s.Dataset.ReadCheck) > 0 {
+			fmt.Fprintf(w, "  $ rm -rf %s\n", s.Dataset.ReadCheckDir)
+			fmt.Fprintf(w, "  $ %s\n", strings.Join(s.Dataset.ReadCheck, " "))
+			fmt.Fprintf(w, "  $ rm -rf %s\n", s.Dataset.ReadCheckDir)
 		}
 		if s.Kind == KindPublish {
 			fmt.Fprintf(w, "  $ campaign publish %s %s\n", p.ResultsDir, s.PublishURI)

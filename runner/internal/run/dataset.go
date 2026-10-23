@@ -20,8 +20,8 @@ import (
 // for a finished one — the golden-present check below is exactly that
 // distinction, and `rm -rf <root>` is the documented lever to force a re-fetch.
 //
-// When the plan knows the pack generation its binary reads, a dataset of packs
-// another binary wrote is checked against it before any leg reads them.
+// A dataset step with a read check then proves the binary under test reads
+// the dataset before any leg does.
 func runDataset(p *plan.Plan, s plan.Step, opts Options) StepResult {
 	if s.Dataset == nil {
 		return failure(s, errors.New("dataset step has no dataset spec"))
@@ -29,11 +29,11 @@ func runDataset(p *plan.Plan, s plan.Step, opts Options) StepResult {
 	if err := prepareDataset(s, opts); err != nil {
 		return failure(s, err)
 	}
-	if p.PackGeneration != "" && checksPackGeneration(s.Dataset.Kind) {
-		if err := CheckPackGeneration(s.Dataset, p.PackGeneration, p.Bin); err != nil {
+	if len(s.Dataset.ReadCheck) > 0 {
+		if err := checkReadable(p, s.Dataset, opts); err != nil {
 			return failure(s, err)
 		}
-		Notef(opts.Output, "dataset %s: packs-%s, the generation %s reads", s.Dataset.Name, p.PackGeneration, filepath.Base(p.Bin))
+		Notef(opts.Output, "dataset %s: %s reads it", s.Dataset.Name, filepath.Base(p.Bin))
 	}
 	return StepResult{ID: s.ID, Status: StatusOK}
 }
