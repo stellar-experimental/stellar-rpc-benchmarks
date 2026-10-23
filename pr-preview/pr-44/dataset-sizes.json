@@ -1,0 +1,220 @@
+{
+  "schema_version": 2,
+  "note": "Single source of truth for the synthetic test-data sizes, one entry per generated set, keyed by set then profile. The set is the <set> segment of a run's dataset location (.../synthetic-ledgers/<set>/<profile>/...), which the converter records as dataset.sets. A run converted before dataset.sets existed reads legacy_set. A run whose set is absent here, or whose profile has a null size, shows no size column: a profile is never matched across sets. Per profile: raw_meta_gib and raw_meta_ledgers come from the 'Sizes'/'Ledgers' lines of the profile's METADATA.md; ledger_pack_bytes = bytes of the frozen ledger packs the benchmark ingests, ledger_pack_ledgers = ledgers frozen into them. Derive averages, never bake them: avg raw ledger = raw_meta_gib*2^30/raw_meta_ledgers; avg packed ledger = ledger_pack_bytes/ledger_pack_ledgers. summary.html reads this file; run units map to profiles by stripping their chunk suffix (sac-5000-c1 -> sac-5000).",
+  "legacy_set": "2026-07-18-apply-load-20k",
+  "sets": {
+    "2026-07-18-apply-load-20k": {
+      "source": "gs://rpc-full-history/synthetic-ledgers/2026-07-18-apply-load-20k",
+      "note": "Measured 2026-07-24 against the GCS dataset: ledger_pack_bytes = `gsutil du` over <profile>/packs/cold/ledgers (the frozen ledger packs the benchmark ingests), ledger_pack_ledgers = ledgers actually frozen into those packs; raw_meta_gib and raw_meta_ledgers come from the 'Sizes'/'Ledgers' lines of each profile's METADATA.md. Derive averages, never bake them: avg raw ledger = raw_meta_gib*2^30/raw_meta_ledgers; avg packed ledger = ledger_pack_bytes/ledger_pack_ledgers.",
+      "profiles": {
+        "sac-5000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 5000,
+          "raw_meta_gib": 236,
+          "raw_meta_ledgers": 20000,
+          "ledger_pack_bytes": 34927256626,
+          "ledger_pack_ledgers": 20000
+        },
+        "sac-6000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 6000,
+          "raw_meta_gib": 155,
+          "raw_meta_ledgers": 11008,
+          "ledger_pack_bytes": 20954563902,
+          "ledger_pack_ledgers": 10000,
+          "partial": "generation stopped at seq 11,008 of ~20,022; only chunk 1 (10,000 ledgers) was frozen into packs"
+        },
+        "custom_token-3600": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 3600,
+          "raw_meta_gib": 183,
+          "raw_meta_ledgers": 20000,
+          "ledger_pack_bytes": 23170184260,
+          "ledger_pack_ledgers": 20000
+        },
+        "custom_token-4000": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 4000,
+          "raw_meta_gib": 204,
+          "raw_meta_ledgers": 20000,
+          "ledger_pack_bytes": 25737649949,
+          "ledger_pack_ledgers": 20000
+        },
+        "soroswap-1500": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 1500,
+          "raw_meta_gib": 178,
+          "raw_meta_ledgers": 20000,
+          "ledger_pack_bytes": 10461551928,
+          "ledger_pack_ledgers": 20000
+        },
+        "soroswap-1800": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 1800,
+          "raw_meta_gib": 213,
+          "raw_meta_ledgers": 20000,
+          "ledger_pack_bytes": 12715700766,
+          "ledger_pack_ledgers": 20000
+        }
+      }
+    },
+    "2026-10-apply-load-20k-c1": {
+      "source": "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1",
+      "generated_with": "core meta with ENABLE_SOROBAN_DIAGNOSTIC_EVENTS, EMIT_CLASSIC_EVENTS and EMIT_SOROBAN_TRANSACTION_META_EXT_V1",
+      "note": "Sizes not yet measured: null fields are unknown, and a run on this set shows no size column until every one of its profiles has raw_meta_gib and raw_meta_ledgers. ledger_pack_bytes / ledger_pack_ledgers are for <profile>/packs-v4/cold/ledgers.",
+      "profiles": {
+        "sac-5000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 5000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "sac-6000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 6000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "sac-9000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 9000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "custom_token-3600": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 3600,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "custom_token-4000": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 4000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "custom_token-5400": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 5400,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "soroswap-1500": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 1500,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "soroswap-1800": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 1800,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "soroswap-2700": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 2700,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        }
+      }
+    },
+    "2026-10-apply-load-20k-c2": {
+      "source": "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c2",
+      "generated_with": "the c1 core meta config without ENABLE_SOROBAN_DIAGNOSTIC_EVENTS",
+      "note": "Sizes not yet measured: null fields are unknown, and a run on this set shows no size column until every one of its profiles has raw_meta_gib and raw_meta_ledgers. ledger_pack_bytes / ledger_pack_ledgers are for <profile>/packs-v4/cold/ledgers.",
+      "profiles": {
+        "sac-5000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 5000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "sac-6000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 6000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "sac-9000": {
+          "workload": "SAC transfers",
+          "tx_per_ledger": 9000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "custom_token-3600": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 3600,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "custom_token-4000": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 4000,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "custom_token-5400": {
+          "workload": "OZ token transfers",
+          "tx_per_ledger": 5400,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "soroswap-1500": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 1500,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "soroswap-1800": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 1800,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        },
+        "soroswap-2700": {
+          "workload": "Soroswap swaps",
+          "tx_per_ledger": 2700,
+          "raw_meta_gib": null,
+          "raw_meta_ledgers": null,
+          "ledger_pack_bytes": null,
+          "ledger_pack_ledgers": null
+        }
+      }
+    }
+  }
+}

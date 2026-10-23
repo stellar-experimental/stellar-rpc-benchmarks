@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-28T03:26:22Z",
+  "run": {
+    "mode": "soroswap",
+    "window_start": "2026-07-28T03:24:17Z",
+    "window_end": "2026-07-28T03:26:22Z",
+    "expected_count": 1152,
+    "log_file": "/home/marwen/txsub-standalone-20260728/rpc-log-soroswap.log",
+    "metrics_file": "/home/marwen/txsub-standalone-20260728/metrics-soroswap.prom"
+  },
+  "log_parse": {
+    "non_empty_lines": 57420,
+    "non_json_lines": 15254,
+    "starting_lines": 7816,
+    "finished_lines": 7816,
+    "unjoined_finished_lines": 0,
+    "other_method_pairs": 4307,
+    "send_transaction_pairs": 3509,
+    "excluded_by_window": 2357,
+    "unparsable_durations": 0,
+    "unparsable_timestamps": 0
+  },
+  "handler": {
+    "source": "'finished JSONRPC request' log lines joined to 'starting JSONRPC request' on req",
+    "count": 1152,
+    "by_status": {
+      "ok": 1152
+    },
+    "min_ns": 968745,
+    "mean_ns": 1312976,
+    "p50_ns": 1222514,
+    "p90_ns": 1393057,
+    "p99_ns": 4564515,
+    "max_ns": 13333437
+  },
+  "core_leg": {
+    "metric": "soroban_rpc_txsub_submission_duration_seconds",
+    "label_filter": {},
+    "present": true,
+    "total_count": 1152,
+    "total_sum_ns": 1229064607,
+    "mean_ns": 1066896,
+    "by_status": {
+      "PENDING": {
+        "p50_ns": 983182,
+        "p90_ns": 1130471,
+        "p99_ns": 4397112,
+        "sum_ns": 1229064607,
+        "count": 1152,
+        "mean_ns": 1066896
+      }
+    }
+  },
+  "json_rpc_cross_check": {
+    "metric": "soroban_rpc_json_rpc_request_duration_seconds",
+    "label_filter": {
+      "endpoint": "sendTransaction"
+    },
+    "present": true,
+    "total_count": 1152,
+    "total_sum_ns": 1512548430,
+    "mean_ns": 1312976,
+    "by_status": {
+      "ok": {
+        "p50_ns": 1217453,
+        "p90_ns": 1391176,
+        "p99_ns": 4647143,
+        "sum_ns": 1512548430,
+        "count": 1152,
+        "mean_ns": 1312976
+      }
+    }
+  },
+  "mean_residue": {
+    "handler_mean_ns": 1312976,
+    "core_leg_mean_ns": 1066896,
+    "residue_mean_ns": 246080,
+    "note": "means only - quantiles never subtract"
+  },
+  "warnings": [
+    "skipped 15254 non-JSON line(s) in the log - supervisord process noise"
+  ]
+}
