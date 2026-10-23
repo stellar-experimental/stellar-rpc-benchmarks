@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
 )
 
@@ -44,6 +45,9 @@ type Deps struct {
 	ListRoot   func(uri string) error           // default ListRoot
 	Mountpoint func(dir string) error           // default: exec `mountpoint -q <dir>`
 	DiskFree   func(dir string) (uint64, error) // free bytes; default syscall.Statfs
+	// ListPrefix lists an object-storage prefix; default publish.List of the
+	// prefix with a trailing slash.
+	ListPrefix func(uri string) (publish.State, error)
 }
 
 // Result is what preflight found. Failures are things the campaign will need
@@ -181,7 +185,50 @@ func withDefaults(d Deps) Deps {
 	if d.DiskFree == nil {
 		d.DiskFree = diskFree
 	}
+	if d.ListPrefix == nil {
+		d.ListPrefix = func(uri string) (publish.State, error) {
+			return publish.List(strings.TrimSuffix(uri, "/") + "/")
+		}
+	}
 	return d
+}
+
+// DatasetLocations fails each packs-s3 dataset of p that the campaign will
+// fetch, because its root is empty or absent, whose location holds no
+// objects: the usual cause is a pack generation the registry chose that is
+// not uploaded for that dataset.
+func DatasetLocations(p *plan.Plan, d Deps) Result {
+	d = withDefaults(d)
+	var res Result
+	for _, s := range p.Steps {
+		ds := s.Dataset
+		if ds == nil || ds.Kind != config.KindPacksS3 || hasEntries(ds.Root) {
+			continue
+		}
+		state, err := d.ListPrefix(ds.Location)
+		switch {
+		case err != nil:
+			res.failf("dataset %s: cannot list %s: %s", ds.Name, ds.Location, err)
+		case state == publish.Empty && p.PackGeneration != "" && plan.LocationGeneration(ds.Location) == p.PackGeneration:
+			res.failf("dataset %s: %s holds no objects — the registry chose %s for %s by marker %s, and %s is not "+
+				"uploaded for this dataset (freeze it, upload it, or build a ref that reads a generation it has)",
+				ds.Name, ds.Location, p.PackGeneration, p.Sha8(), p.PackMarker, p.PackGeneration)
+		case state == publish.Empty:
+			res.failf("dataset %s: %s holds no objects", ds.Name, ds.Location)
+		}
+	}
+	return res
+}
+
+// hasEntries reports whether dir exists and is not empty.
+func hasEntries(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(1)
+	return err == nil && len(names) > 0
 }
 
 // willBuild reports whether the campaign will compile the ref, which is what

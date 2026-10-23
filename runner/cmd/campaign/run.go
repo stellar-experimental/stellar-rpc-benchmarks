@@ -11,6 +11,7 @@ import (
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/bundle"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/config"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/memlimit"
+	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/packgen"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/preflight"
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/publish"
@@ -163,11 +164,11 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 	} else {
 		in.EmptyColdOutDir = empty
 	}
-	if gen, err := run.DetectPackGeneration(src, commit); err != nil {
+	if m, err := run.DetectPackGeneration(src, commit, packgen.Default()); err != nil {
 		run.Notef(stdout, "%s — planning the configured dataset locations", err)
 	} else {
-		in.PackGeneration = gen
-		run.Notef(stdout, "%s", packGenerationNote(gen))
+		in.PackGeneration, in.PackMarker = m.Generation, m.Marker
+		run.Notef(stdout, "%s", packGenerationNote(m))
 	}
 	if cfg.Query {
 		switch shape, ok, err := run.DetectQueryCLI(src, commit, cli); {
@@ -190,9 +191,10 @@ func probeShape(cfg *config.Config, src, commit string, in *plan.Inputs, stdout 
 func assumeCurrentShape(cfg *config.Config, in *plan.Inputs) string {
 	in.BenchCLI, in.QueryCLI = plan.BenchCLIRoot, plan.QueryCLIDataDir
 	in.BuildTarget, in.StaticLibs, in.RPCV2BuildFlag, in.EmptyColdOutDir = plan.BuildStellarRPC, true, true, true
-	in.PackGeneration = plan.PackGenV5
+	newest := packgen.Default()[0]
+	in.PackGeneration, in.PackMarker = plan.PackGeneration(newest.Name), "assumed: the newest registry entry"
 	assumed := fmt.Sprintf("assuming the current shapes: the %s CLI (%s), the %s query CLI, make %s "+
-		"RPCV2=true with static libs (--enable-rpcv2), and packs-%s datasets (stellar-rpc#1128)",
+		"RPCV2=true with static libs (--enable-rpcv2), and %s datasets (the newest registry entry)",
 		in.BenchCLI, benchCLIDescription(in.BenchCLI), in.QueryCLI, in.BuildTarget, in.PackGeneration)
 	if err := plan.Check(cfg, *in); err != nil {
 		assumed += "; " + err.Error()
@@ -200,14 +202,13 @@ func assumeCurrentShape(cfg *config.Config, in *plan.Inputs) string {
 	return assumed
 }
 
-// packGenerationNote names the pack generation a commit reads, or says that
-// the probe found none.
-func packGenerationNote(gen plan.PackGeneration) string {
-	if gen == "" {
-		return "pack generation: unknown (no packfile trailerSize in cmd/) — dataset locations are not " +
-			"rewritten and packs are not checked"
+// packGenerationNote names the pack generation a commit reads and the
+// registry markers that chose it, or says that no entry matched.
+func packGenerationNote(m run.PackMatch) string {
+	if m.Generation == "" {
+		return "pack generation: unknown (no registry marker matches) — dataset locations are not rewritten"
 	}
-	return fmt.Sprintf("pack generation: packs-%s", gen)
+	return fmt.Sprintf("pack generation: %s (registry marker %s)", m.Generation, m.Marker)
 }
 
 // noQueryCLI is the message for a query campaign whose commit has no query bench.
@@ -275,12 +276,12 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 1
 	}
-	packGeneration, err := run.DetectPackGeneration(src, builtCommit)
+	pack, err := run.DetectPackGeneration(src, builtCommit, packgen.Default())
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
 		return 1
 	}
-	run.Notef(out, "%s", packGenerationNote(packGeneration))
+	run.Notef(out, "%s", packGenerationNote(pack))
 	var queryCLI plan.QueryCLI
 	if cfg.Query {
 		shape, ok, err := run.DetectQueryCLI(src, builtCommit, benchCLI)
@@ -342,7 +343,8 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 		StaticLibs:        staticLibs,
 		RPCV2BuildFlag:    rpcv2BuildFlag,
 		EmptyColdOutDir:   emptyColdOutDir,
-		PackGeneration:    packGeneration,
+		PackGeneration:    pack.Generation,
+		PackMarker:        pack.Marker,
 	}
 	if err := plan.Check(cfg, in); err != nil {
 		fmt.Fprintf(stderr, "error: %s\n", err)
@@ -359,8 +361,15 @@ func realRun(cfg *config.Config, ql queryLoad, cfgPath, benchRoot, src, resumeDi
 	run.Notef(out, "campaign %s → %s", cfg.Name, res)
 	for _, s := range p.Steps {
 		if s.Dataset != nil && s.Dataset.ConfiguredLocation != "" {
-			run.Notef(out, "dataset %s: fetching %s, not the configured %s (packs-%s)",
-				s.Dataset.Name, s.Dataset.Location, s.Dataset.ConfiguredLocation, packGeneration)
+			run.Notef(out, "dataset %s: fetching %s, not the configured %s (%s)",
+				s.Dataset.Name, s.Dataset.Location, s.Dataset.ConfiguredLocation, pack.Generation)
+		}
+	}
+	if !noPreflight {
+		// A generation the registry chose but nobody uploaded fails here, not
+		// at an `aws s3 sync` that copies nothing.
+		if !printPreflight(preflight.DatasetLocations(p, preflight.Deps{}), out) {
+			return 1
 		}
 	}
 	for _, dir := range []string{"bin", "golden", "scratch", "hot", "fixture"} {

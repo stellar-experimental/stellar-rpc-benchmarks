@@ -1102,7 +1102,7 @@ func TestProfileFlags(t *testing.T) {
 }
 
 // TestDatasetLocation checks which locations the pack generation rewrites:
-// only a packs-v4 or packs-v5 path segment of a packs-s3 location.
+// only a registered packs-vN path segment of a packs-s3 location.
 func TestDatasetLocation(t *testing.T) {
 	const c1 = "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1/sac-9000/"
 	for _, tc := range []struct {
@@ -1110,18 +1110,21 @@ func TestDatasetLocation(t *testing.T) {
 		gen                  PackGeneration
 		want                 string
 	}{
-		{"v4 location, v5 ref", config.KindPacksS3, c1 + "packs-v4/cold", PackGenV5, c1 + "packs-v5/cold"},
-		{"v5 location, v4 ref", config.KindPacksS3, c1 + "packs-v5/cold", PackGenV4, c1 + "packs-v4/cold"},
-		{"v4 location, v4 ref", config.KindPacksS3, c1 + "packs-v4/cold", PackGenV4, c1 + "packs-v4/cold"},
-		{"trailing segment", config.KindPacksS3, "s3://b/sac/packs-v4", PackGenV5, "s3://b/sac/packs-v5"},
+		{"v4 location, v5 ref", config.KindPacksS3, c1 + "packs-v4/cold", "packs-v5", c1 + "packs-v5/cold"},
+		{"v5 location, v4 ref", config.KindPacksS3, c1 + "packs-v5/cold", "packs-v4", c1 + "packs-v4/cold"},
+		{"v4 location, v6 ref", config.KindPacksS3, c1 + "packs-v4/cold", "packs-v6", c1 + "packs-v6/cold"},
+		{"v6 location, v5 ref", config.KindPacksS3, c1 + "packs-v6/cold", "packs-v5", c1 + "packs-v5/cold"},
+		{"v4 location, v4 ref", config.KindPacksS3, c1 + "packs-v4/cold", "packs-v4", c1 + "packs-v4/cold"},
+		{"trailing segment", config.KindPacksS3, "s3://b/sac/packs-v4", "packs-v5", "s3://b/sac/packs-v5"},
 		{"unknown generation", config.KindPacksS3, c1 + "packs-v4/cold", "", c1 + "packs-v4/cold"},
-		{"older generation", config.KindPacksS3, "s3://b/sac/packs-v3/cold", PackGenV5, "s3://b/sac/packs-v3/cold"},
-		{"unversioned packs", config.KindPacksS3, "s3://b/sac/packs/cold", PackGenV5, "s3://b/sac/packs/cold"},
-		{"not a whole segment", config.KindPacksS3, "s3://b/sac/my-packs-v4/cold", PackGenV5, "s3://b/sac/my-packs-v4/cold"},
-		{"no packs segment", config.KindPacksS3, "s3://bucket/cold", PackGenV5, "s3://bucket/cold"},
-		{"packs-gs", config.KindPacksGS, "gs://b/sac/packs-v4/cold", PackGenV5, "gs://b/sac/packs-v4/cold"},
-		{"packs-local", config.KindPacksLocal, "/mnt/sac/packs-v4/cold", PackGenV5, "/mnt/sac/packs-v4/cold"},
-		{"bsb-s3", config.KindBSBS3, "bucket/packs-v4", PackGenV5, "bucket/packs-v4"},
+		{"unregistered ref generation", config.KindPacksS3, c1 + "packs-v4/cold", "packs-v99", c1 + "packs-v4/cold"},
+		{"unregistered location generation", config.KindPacksS3, "s3://b/sac/packs-v3/cold", "packs-v5", "s3://b/sac/packs-v3/cold"},
+		{"unversioned packs", config.KindPacksS3, "s3://b/sac/packs/cold", "packs-v5", "s3://b/sac/packs/cold"},
+		{"not a whole segment", config.KindPacksS3, "s3://b/sac/my-packs-v4/cold", "packs-v5", "s3://b/sac/my-packs-v4/cold"},
+		{"no packs segment", config.KindPacksS3, "s3://bucket/cold", "packs-v5", "s3://bucket/cold"},
+		{"packs-gs", config.KindPacksGS, "gs://b/sac/packs-v4/cold", "packs-v5", "gs://b/sac/packs-v4/cold"},
+		{"packs-local", config.KindPacksLocal, "/mnt/sac/packs-v4/cold", "packs-v5", "/mnt/sac/packs-v4/cold"},
+		{"bsb-s3", config.KindBSBS3, "bucket/packs-v4", "packs-v5", "bucket/packs-v4"},
 	} {
 		d := &config.Dataset{Name: "sac-9000", Kind: tc.kind, Location: tc.location}
 		if got := DatasetLocation(d, tc.gen); got != tc.want {
@@ -1130,39 +1133,54 @@ func TestDatasetLocation(t *testing.T) {
 	}
 }
 
+// TestLocationGeneration checks that a location names the registered
+// generation of its path segment, if any.
+func TestLocationGeneration(t *testing.T) {
+	for loc, want := range map[string]PackGeneration{
+		"s3://b/sac/packs-v6/cold": "packs-v6",
+		"/mnt/sac/packs-v4/cold":   "packs-v4",
+		"s3://b/sac/packs-v3/cold": "",
+		"s3://b/cold":              "",
+	} {
+		if got := LocationGeneration(loc); got != want {
+			t.Errorf("LocationGeneration(%q) = %q, want %q", loc, got, want)
+		}
+	}
+}
+
 // packsV4Config is packsS3Config over a packs-v4 location.
 var packsV4Config = strings.Replace(packsS3Config, "s3://bucket/cold", "s3://bucket/sac/packs-v4/cold", 1)
 
-// TestPackGenerationRewritesTheFetch checks that a packs-v5 plan fetches the
-// packs-v5 tree, and records the configured location and a note.
+// TestPackGenerationRewritesTheFetch checks that a packs-v6 plan fetches the
+// packs-v6 tree, and records the configured location, the marker, and a note.
 func TestPackGenerationRewritesTheFetch(t *testing.T) {
 	in := goldenInputs()
-	in.PackGeneration = PackGenV5
+	in.PackGeneration, in.PackMarker = "packs-v6", "/groupHasCounts/ in cmd"
 	p := Build(load(t, packsV4Config), in)
 	ds := stepByID(t, p, "dataset-packs")
-	want := []string{"aws", "s3", "sync", "s3://bucket/sac/packs-v5/cold", "/bench/golden/packs.partial"}
+	want := []string{"aws", "s3", "sync", "s3://bucket/sac/packs-v6/cold", "/bench/golden/packs.partial"}
 	if len(ds.Argv) != 1 || !slices.Equal(ds.Argv[0], want) {
 		t.Errorf("argv = %v, want %v", ds.Argv, want)
 	}
-	if ds.Dataset.Location != "s3://bucket/sac/packs-v5/cold" || ds.Dataset.ConfiguredLocation != "s3://bucket/sac/packs-v4/cold" {
-		t.Errorf("location = %q, configured = %q, want the packs-v5 rewrite of the packs-v4 config",
+	if ds.Dataset.Location != "s3://bucket/sac/packs-v6/cold" || ds.Dataset.ConfiguredLocation != "s3://bucket/sac/packs-v4/cold" {
+		t.Errorf("location = %q, configured = %q, want the packs-v6 rewrite of the packs-v4 config",
 			ds.Dataset.Location, ds.Dataset.ConfiguredLocation)
 	}
-	if got := p.RewrittenLocations(); !reflect.DeepEqual(got, map[string]string{"packs": "s3://bucket/sac/packs-v5/cold"}) {
+	if got := p.RewrittenLocations(); !reflect.DeepEqual(got, map[string]string{"packs": "s3://bucket/sac/packs-v6/cold"}) {
 		t.Errorf("RewrittenLocations = %v", got)
 	}
-	note := "dataset packs: fetching s3://bucket/sac/packs-v5/cold, not the configured s3://bucket/sac/packs-v4/cold " +
-		"— stellar-rpc deadbeef reads packs-v5 (stellar-rpc#1128)"
+	note := "dataset packs: fetching s3://bucket/sac/packs-v6/cold, not the configured s3://bucket/sac/packs-v4/cold " +
+		"— stellar-rpc deadbeef reads packs-v6 (registry marker /groupHasCounts/ in cmd)"
 	if !slices.Contains(p.Notes, note) {
 		t.Errorf("notes = %q, want %q", p.Notes, note)
 	}
-	if p.PackGeneration != PackGenV5 {
-		t.Errorf("pack_generation = %q, want v5", p.PackGeneration)
+	if p.PackGeneration != "packs-v6" || p.PackMarker != in.PackMarker {
+		t.Errorf("pack_generation = %q, pack_marker = %q", p.PackGeneration, p.PackMarker)
 	}
 }
 
 // TestPackGenerationV4KeepsThePlan checks that a packs-v4 plan over packs-v4
-// locations differs from the unprobed plan only by its pack_generation field.
+// locations differs from the unprobed plan only by its pack fields.
 func TestPackGenerationV4KeepsThePlan(t *testing.T) {
 	cfg := load(t, packsV4Config)
 	unprobed, err := json.MarshalIndent(Build(cfg, goldenInputs()), "", "  ")
@@ -1170,16 +1188,69 @@ func TestPackGenerationV4KeepsThePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := goldenInputs()
-	in.PackGeneration = PackGenV4
+	in.PackGeneration, in.PackMarker = "packs-v4", "m"
 	v4, err := json.MarshalIndent(Build(cfg, in), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	field := "\n  \"pack_generation\": \"v4\","
+	field := "\n  \"pack_generation\": \"packs-v4\",\n  \"pack_marker\": \"m\","
 	if !bytes.Contains(v4, []byte(field)) {
 		t.Fatalf("v4 plan lacks %q:\n%s", field, v4)
 	}
 	if got := bytes.Replace(v4, []byte(field), nil, 1); !bytes.Equal(got, unprobed) {
-		t.Errorf("v4 plan differs from the unprobed plan beyond pack_generation:\n%s", diffLines(unprobed, got))
+		t.Errorf("v4 plan differs from the unprobed plan beyond its pack fields:\n%s", diffLines(unprobed, got))
+	}
+}
+
+// TestReadCheck checks that only a pack dataset of an rpcv2 bench CLI plan
+// gets the one-ledger read check, and that it then needs the build.
+func TestReadCheck(t *testing.T) {
+	const cfgText = `
+name = "n"
+ingest = "none"
+query = false
+runs = 1
+
+[[dataset]]
+name = "packs"
+kind = "packs-s3"
+location = "s3://bucket/sac/packs-v5/cold"
+chunks = [7, 8]
+
+[[dataset]]
+name = "local"
+kind = "packs-local"
+location = "/mnt/local/cold"
+chunks = [3]
+
+[[dataset]]
+name = "fx"
+kind = "fixture"
+ledgers = 10000
+chunks = [1]
+`
+	in := goldenInputs()
+	in.BenchCLI, in.StaticLibs = BenchCLIRoot, true
+	p := Build(load(t, cfgText), in)
+	ds := stepByID(t, p, "dataset-packs")
+	want := []string{"/bench/bin/stellar-rpc-deadbeef", "--enable-rpcv2", "bench", "ingest", "hot",
+		"--source=pack", "--pack-dir=/bench/golden/packs/ledgers", "--start-chunk=7", "--num-ledgers=1",
+		"--close-interval=0", "--hot-dir=/bench/scratch/readcheck-packs/hot", "--out=/bench/scratch/readcheck-packs/out"}
+	if !slices.Equal(ds.Dataset.ReadCheck, want) || ds.Dataset.ReadCheckDir != "/bench/scratch/readcheck-packs" {
+		t.Errorf("read check = %v in %q, want %v", ds.Dataset.ReadCheck, ds.Dataset.ReadCheckDir, want)
+	}
+	if !slices.Equal(ds.Needs, []string{"build"}) {
+		t.Errorf("needs = %v, want [build]", ds.Needs)
+	}
+	if got := stepByID(t, p, "dataset-local").Dataset.ReadCheck; len(got) == 0 || got[6] != "--pack-dir=/mnt/local/cold/ledgers" {
+		t.Errorf("packs-local read check = %v", got)
+	}
+	if got := stepByID(t, p, "dataset-fx").Dataset.ReadCheck; got != nil {
+		t.Errorf("fixture read check = %v, want none", got)
+	}
+
+	in.StaticLibs = false
+	if got := stepByID(t, Build(load(t, cfgText), in), "dataset-packs"); got.Dataset.ReadCheck != nil || got.Needs != nil {
+		t.Errorf("without --enable-rpcv2: read check = %v, needs = %v, want neither", got.Dataset.ReadCheck, got.Needs)
 	}
 }

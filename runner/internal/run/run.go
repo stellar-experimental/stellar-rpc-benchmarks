@@ -51,8 +51,8 @@ type Options struct {
 	// resume path.
 	Resume bool
 	// FailFast stops the walk at the first failed step. Default (keep going): a
-	// failure only skips the steps that need it, except a dataset in a pack
-	// generation the binary cannot read, which always stops the walk.
+	// failure only skips the steps that need it, except a dataset the binary
+	// cannot read, which always stops the walk.
 	FailFast bool
 	// OnStepDone is called after every step the walk executed — including the
 	// ones a resume or an existing binary made a no-op, excluding only the ones
@@ -142,7 +142,7 @@ func Execute(p *plan.Plan, opts Options) ([]StepResult, error) {
 		if res.Status == StatusFailed {
 			Notef(opts.Output, "%s failed: %v", step.ID, res.Err)
 			bad[step.ID] = true
-			// A wrong pack generation is a setup error of the campaign, not a
+			// An unreadable dataset is a setup error of the campaign, not a
 			// failure of one dataset, so it stops the walk even without FailFast.
 			if opts.FailFast || errors.Is(res.Err, errPackGeneration) {
 				break

@@ -1,0 +1,35 @@
+{
+  "generations": [
+    {
+      "name": "packs-v6",
+      "reader_marker": {
+        "pattern": "^[[:space:]]*groupHasCounts[[:space:]]+uint8[[:space:]]*=",
+        "paths": ["cmd"]
+      },
+      "writer_commit": "a130b9e2",
+      "format_change": "the ledger pack index has a group directory and per-group item counts (stellar-rpc 4ca7bd1c, c8d48764); the trailer stays 44 bytes"
+    },
+    {
+      "name": "packs-v5",
+      "reader_marker": {
+        "pattern": "^[[:space:]]*trailerSize[[:space:]]*=[[:space:]]*44([^0-9]|$)",
+        "paths": ["cmd"]
+      },
+      "reader_absent": {
+        "pattern": "^[[:space:]]*dirEntryLen[[:space:]]*=",
+        "paths": ["cmd"]
+      },
+      "writer_commit": "4d30c258",
+      "format_change": "no packfile content hash, so the trailer is 44 bytes, not 76 (stellar-rpc#1128, 06927e1a)"
+    },
+    {
+      "name": "packs-v4",
+      "reader_marker": {
+        "pattern": "^[[:space:]]*trailerSize[[:space:]]*=[[:space:]]*76([^0-9]|$)",
+        "paths": ["cmd"]
+      },
+      "writer_commit": "6dd5740d",
+      "format_change": "the 2026-10 synthetic sets, frozen with the 76-byte trailer that carries the content hash"
+    }
+  ]
+}

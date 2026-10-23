@@ -160,11 +160,11 @@ in how that root is materialized:
 - **`packs-s3`** — the same fetch from an `s3://` prefix, with `aws s3 sync`. On EC2 the
   CLI signs with the box's instance role, which is what reads the private bucket the
   synthetic-ledger packs live in.
-  When the plan has a `pack_generation` and the location has a `packs-v4` or `packs-v5` path
-  segment, the runner fetches the tree of the generation the ref reads: a config that names
-  `…/sac-9000/packs-v4/cold` fetches `…/sac-9000/packs-v5/cold` at a ref from
-  stellar-rpc#1128 on, and the reverse at an older ref. Other locations, and the other kinds,
-  are never rewritten. `plan.json` keeps the configured location as the dataset step's
+  When the plan has a `pack_generation` and the location has a path segment that names a
+  registered generation ([Pack generations](#pack-generations)), the runner fetches the tree
+  of the generation the ref reads: a config that names `…/sac-9000/packs-v4/cold` fetches
+  `…/sac-9000/packs-v5/cold` at a ref that reads packs-v5, and `…/packs-v6/cold` at a ref
+  that reads packs-v6. Other locations, and the other kinds, are never rewritten. `plan.json` keeps the configured location as the dataset step's
   `configured_location` and the plan prints a note; `metadata.json` records the fetched
   location as `location` and the configured one as `configured_location`. Both fields are
   absent when nothing was rewritten.
@@ -178,14 +178,61 @@ Anything the runner materializes is built under `<root>.partial` and renamed ont
 `<root>` only once whole, so an interrupted preparation is never mistaken for a finished
 one. To force a re-fetch or a regeneration: `rm -rf $BENCH_ROOT/golden/<name>`.
 
+Before the build, `campaign run` lists the location of each `packs-s3` dataset it will fetch
+(its golden root is absent or empty). An empty location fails the campaign there, and names
+the generation the registry chose, for example `dataset sac-9000:
+s3://…/sac-9000/packs-v6/cold holds no objects — the registry chose packs-v6 for a130b9e2 by
+marker …, and packs-v6 is not uploaded for this dataset`. `--no-preflight` skips this check.
+
 After a `packs-local`, `packs-gs` or `packs-s3` dataset is ready, and before any leg, the
-runner reads the trailer of its first ledger pack (`<root>/ledgers/`, lexical order) and
-checks it against `pack_generation`: a valid trailer (magic, version, CRC32C) of 76 bytes is
-packs-v4, of 44 bytes packs-v5. On a mismatch the campaign stops, with or without
-`--fail-fast`, with an error such as `dataset sac-9000 is packs-v4 (…/00000001.pack);
-stellar-rpc 4d30c258 reads packs-v5 (stellar-rpc#1128)`. The usual cause is a golden root
-from an earlier fetch of the other generation: `rm -rf $BENCH_ROOT/golden/<name>` and
-resume. A plan without `pack_generation` checks nothing.
+runner proves that the built binary reads it. It runs the dataset step's `read_check`: a
+`bench ingest hot` of one ledger of the dataset's first chunk, with the same `--pack-dir` as
+the legs, `--close-interval=0`, and a scratch `--hot-dir` and `--out` under
+`$BENCH_ROOT/scratch/readcheck-<name>/`, which it removes before and after. It gets the same
+`GOMEMLIMIT` as the legs and takes about a second. When the binary fails, the campaign
+stops, with or without `--fail-fast`, with the binary's own error and the registry's choice:
+`… packfile: corrupt file: invalid magic number — dataset sac-9000 is packs-v4; the registry
+chose it for 4d30c258 by marker …`. The usual cause is a golden root from an earlier fetch of
+another generation: `rm -rf $BENCH_ROOT/golden/<name>` and resume. Only a plan with
+`static_libs` (the bench CLI that takes `--enable-rpcv2`) has a read check; older refs check
+nothing.
+
+### Pack generations
+
+A pack generation is one on-disk format of the dataset trees, named by its path segment
+(`packs-v4`, `packs-v5`, …). Each format change without a compatibility path is a new
+generation. The registry is
+[`internal/packgen/generations.json`](internal/packgen/generations.json), newest first. Each
+entry has:
+
+- `name`: the `packs-vN` path segment.
+- `reader_marker`: a `git grep -E` `pattern` and the `paths` it searches. The pattern must
+  match a non-test (`_test.go` excluded) file of a commit that reads this generation.
+- `reader_absent` (optional): a marker that must not match. Use it to keep an older entry
+  from matching a commit that has started the next format but not finished it.
+- `writer_commit`: the stellar-rpc commit that wrote the uploaded trees.
+- `format_change`: one line that says what changed.
+
+`run.DetectPackGeneration` picks the first entry whose markers match the built commit. No
+match means an unknown generation: dataset locations are not rewritten, and the read check
+still runs. The tests parse the registry, so a bad entry fails `go test`.
+
+To add a generation:
+
+1. Freeze the trees with the stellar-rpc commit that writes the new format, and verify
+   them.
+2. Upload each tree to `s3://stellar-rpc-bench/inputs/synthetic-ledgers/<set>/<profile>/packs-vN/cold`,
+   with `packs-vN/FREEZE.md` beside it.
+3. Add an entry at the top of `generations.json`. For `reader_marker`, choose a declaration
+   that the format change adds to the reader, such as a format constant. If the previous
+   entry's marker also matches the new commit, the order resolves it. If a commit between
+   the two would match the previous entry but reads neither format, add a `reader_absent`
+   to the previous entry.
+4. Add the commits to the cases of `TestDetectPackGeneration`, and dry-run `campaign plan` at
+   one ref of each generation.
+
+A ref whose generation is registered but not uploaded for a dataset fails at the location
+check above, before the build.
 
 ## Migrating a `.cfg` to `.toml`
 
@@ -373,14 +420,11 @@ clone at that commit, leaving out `_test.go` files, and records what it finds in
   build then runs `<bin> --enable-rpcv2 version`, and the build step fails when the binary
   prints `not available in this build`, so the legs never start with a binary that refuses
   rpcv2.
-- **`pack_generation`** (`run.DetectPackGeneration`): the dataset pack format the commit
-  reads, from the packfile `trailerSize` constant in its `cmd/` sources. `76` (the trailer
-  with the content hash, before stellar-rpc#1128) gets `"v4"`, `44` (from #1128 on) gets
-  `"v5"`. The trailer size is the marker because it is the one fact that both the reader
-  and the pack bytes carry, so the probe and the dataset check below test the same thing.
-  A commit without the constant gets no `pack_generation`, and its datasets are neither
-  rewritten nor checked; a size the runner does not know fails the probe. A dry run of a ref
-  it cannot resolve assumes `"v5"`.
+- **`pack_generation`** and **`pack_marker`** (`run.DetectPackGeneration`): the first
+  (newest) entry of the [pack generation registry](#pack-generations) whose markers match the
+  commit's sources, and the markers that matched. A commit that no entry matches gets
+  neither field, and its datasets are not rewritten. A dry run of a ref it cannot resolve
+  assumes the newest entry.
 
 The `fixture` dataset kind is the exception to the CLI shape: it always runs `bench-ingest
 fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a `fixture` subcommand,
