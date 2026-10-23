@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/stellar/stellar-rpc-benchmarks/runner/internal/plan"
@@ -158,6 +160,53 @@ func DetectEmptyColdOutDir(src, commit string) (bool, error) {
 		return false, fmt.Errorf("probe the bench ingest cold of %s in %s: %w", commit, src, err)
 	}
 	return ok, nil
+}
+
+// DetectPackGeneration reports the dataset pack generation commit reads, from
+// the packfile trailerSize its non-test cmd/ sources declare: 76 bytes before
+// stellar-rpc#1128 (plan.PackGenV4), 44 from it on (plan.PackGenV5). The
+// trailer size is the one fact both the reader and the dataset bytes share,
+// so it is what CheckPackGeneration tests the packs against. A commit that
+// declares none gets "", and a size the runner does not know is an error.
+func DetectPackGeneration(src, commit string) (plan.PackGeneration, error) {
+	out, err := exec.Command("git", "-C", src, "grep", "-h", "-E", trailerSizePattern, commit, "--",
+		"cmd", ":(exclude)*_test.go").Output()
+	var exitErr *exec.ExitError
+	switch {
+	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("probe the pack generation of %s in %s: %w", commit, src, err)
+	}
+	var gen plan.PackGeneration
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		size := trailerSizeValue.FindStringSubmatch(line)[1]
+		g, ok := packGenerationOfTrailerSize(size)
+		if !ok {
+			return "", fmt.Errorf("commit %s declares a %s-byte packfile trailer, which is neither packs-v4 "+
+				"(76) nor packs-v5 (44): teach run.DetectPackGeneration the new generation", commit, size)
+		}
+		if gen != "" && g != gen {
+			return "", fmt.Errorf("commit %s declares packfile trailers of both packs-%s and packs-%s", commit, gen, g)
+		}
+		gen = g
+	}
+	return gen, nil
+}
+
+// trailerSizePattern matches the packfile trailerSize constant declaration,
+// whose value trailerSizeValue captures.
+const trailerSizePattern = `^[[:space:]]*trailerSize[[:space:]]*=[[:space:]]*[0-9]+([^0-9]|$)`
+
+var trailerSizeValue = regexp.MustCompile(`trailerSize\s*=\s*([0-9]+)`)
+
+func packGenerationOfTrailerSize(size string) (plan.PackGeneration, bool) {
+	for _, g := range packGenerations {
+		if strconv.Itoa(g.trailerSize) == size {
+			return g.gen, true
+		}
+	}
+	return "", false
 }
 
 // declaresCommand reports whether commit's non-test cmd/ sources declare a

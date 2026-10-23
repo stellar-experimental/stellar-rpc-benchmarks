@@ -19,12 +19,21 @@ import (
 // <root> only once whole, so an interrupted preparation can never be mistaken
 // for a finished one — the golden-present check below is exactly that
 // distinction, and `rm -rf <root>` is the documented lever to force a re-fetch.
-func runDataset(s plan.Step, opts Options) StepResult {
+//
+// When the plan knows the pack generation its binary reads, a dataset of packs
+// another binary wrote is checked against it before any leg reads them.
+func runDataset(p *plan.Plan, s plan.Step, opts Options) StepResult {
 	if s.Dataset == nil {
 		return failure(s, errors.New("dataset step has no dataset spec"))
 	}
 	if err := prepareDataset(s, opts); err != nil {
 		return failure(s, err)
+	}
+	if p.PackGeneration != "" && checksPackGeneration(s.Dataset.Kind) {
+		if err := CheckPackGeneration(s.Dataset, p.PackGeneration, p.Bin); err != nil {
+			return failure(s, err)
+		}
+		Notef(opts.Output, "dataset %s: packs-%s, the generation %s reads", s.Dataset.Name, p.PackGeneration, filepath.Base(p.Bin))
 	}
 	return StepResult{ID: s.ID, Status: StatusOK}
 }

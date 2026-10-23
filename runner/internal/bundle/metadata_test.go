@@ -154,6 +154,30 @@ func TestMetadataResumed(t *testing.T) {
 	}
 }
 
+// TestMetadataLocations checks that a dataset the plan rewrote records the
+// location the campaign read and the configured one, and that the others keep
+// the configured location alone.
+func TestMetadataLocations(t *testing.T) {
+	in := goldenInput(t)
+	if got := marshal(t, in); strings.Contains(got, "configured_location") {
+		t.Errorf("no rewrite should record no configured_location:\n%s", got)
+	}
+	in.Locations = map[string]string{"packs": "gs://bucket/packs-v5/cold"}
+	got := marshal(t, in)
+	want := `      "location": "gs://bucket/packs-v5/cold",
+      "chunks": [
+        1,
+        2
+      ],
+      "configured_location": "gs://bucket/cold"`
+	if !strings.Contains(got, want) {
+		t.Errorf("manifest lacks\n%s\ngot:\n%s", want, got)
+	}
+	if strings.Count(got, "configured_location") != 1 {
+		t.Errorf("only the rewritten dataset should record configured_location:\n%s", got)
+	}
+}
+
 // TestMetadataGoMemLimit checks that campaign.gomemlimit is recorded when
 // resolved and absent otherwise.
 func TestMetadataGoMemLimit(t *testing.T) {

@@ -455,6 +455,17 @@ class DatasetSetTests(unittest.TestCase):
             "fixture": None,
         })
 
+    def test_rewritten_location_keeps_its_set(self):
+        # The runner records the packs-v5 location it fetched as `location` and
+        # the config's packs-v4 one as `configured_location`; both name one set.
+        meta = {"datasets": [
+            {"name": "sac-9000", "location":
+             "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1/sac-9000/packs-v5/cold",
+             "configured_location":
+             "s3://stellar-rpc-bench/inputs/synthetic-ledgers/2026-10-apply-load-20k-c1/sac-9000/packs-v4/cold"},
+        ]}
+        self.assertEqual(convert.dataset_sets(meta), {"sac-9000": "2026-10-apply-load-20k-c1"})
+
     def test_campaign_run_carries_sets(self):
         root = os.path.join(tempfile.mkdtemp(), "sets")
         fixtures.build_campaign_bundle(root, paced=True)

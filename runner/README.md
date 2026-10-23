@@ -160,6 +160,14 @@ in how that root is materialized:
 - **`packs-s3`** — the same fetch from an `s3://` prefix, with `aws s3 sync`. On EC2 the
   CLI signs with the box's instance role, which is what reads the private bucket the
   synthetic-ledger packs live in.
+  When the plan has a `pack_generation` and the location has a `packs-v4` or `packs-v5` path
+  segment, the runner fetches the tree of the generation the ref reads: a config that names
+  `…/sac-9000/packs-v4/cold` fetches `…/sac-9000/packs-v5/cold` at a ref from
+  stellar-rpc#1128 on, and the reverse at an older ref. Other locations, and the other kinds,
+  are never rewritten. `plan.json` keeps the configured location as the dataset step's
+  `configured_location` and the plan prints a note; `metadata.json` records the fetched
+  location as `location` and the configured one as `configured_location`. Both fields are
+  absent when nothing was rewritten.
 - **`bsb-s3`** — `location` is an S3 bucket path; an untimed cold backfill materializes
   `$BENCH_ROOT/golden/<name>/`, one chunk at a time.
 - **`fixture`** — no location and no network: each chunk in `chunks` is generated with
@@ -169,6 +177,15 @@ in how that root is materialized:
 Anything the runner materializes is built under `<root>.partial` and renamed onto
 `<root>` only once whole, so an interrupted preparation is never mistaken for a finished
 one. To force a re-fetch or a regeneration: `rm -rf $BENCH_ROOT/golden/<name>`.
+
+After a `packs-local`, `packs-gs` or `packs-s3` dataset is ready, and before any leg, the
+runner reads the trailer of its first ledger pack (`<root>/ledgers/`, lexical order) and
+checks it against `pack_generation`: a valid trailer (magic, version, CRC32C) of 76 bytes is
+packs-v4, of 44 bytes packs-v5. On a mismatch the campaign stops, with or without
+`--fail-fast`, with an error such as `dataset sac-9000 is packs-v4 (…/00000001.pack);
+stellar-rpc 4d30c258 reads packs-v5 (stellar-rpc#1128)`. The usual cause is a golden root
+from an earlier fetch of the other generation: `rm -rf $BENCH_ROOT/golden/<name>` and
+resume. A plan without `pack_generation` checks nothing.
 
 ## Migrating a `.cfg` to `.toml`
 
@@ -356,6 +373,14 @@ clone at that commit, leaving out `_test.go` files, and records what it finds in
   build then runs `<bin> --enable-rpcv2 version`, and the build step fails when the binary
   prints `not available in this build`, so the legs never start with a binary that refuses
   rpcv2.
+- **`pack_generation`** (`run.DetectPackGeneration`): the dataset pack format the commit
+  reads, from the packfile `trailerSize` constant in its `cmd/` sources. `76` (the trailer
+  with the content hash, before stellar-rpc#1128) gets `"v4"`, `44` (from #1128 on) gets
+  `"v5"`. The trailer size is the marker because it is the one fact that both the reader
+  and the pack bytes carry, so the probe and the dataset check below test the same thing.
+  A commit without the constant gets no `pack_generation`, and its datasets are neither
+  rewritten nor checked; a size the runner does not know fails the probe. A dry run of a ref
+  it cannot resolve assumes `"v5"`.
 
 The `fixture` dataset kind is the exception to the CLI shape: it always runs `bench-ingest
 fixture` and `bench-ingest cold`, and no merged stellar-rpc ref has a `fixture` subcommand,

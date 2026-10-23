@@ -57,6 +57,9 @@ type MetadataInput struct {
 
 	// GoMemLimit is the session's resolved Go memory limit; nil omits it.
 	GoMemLimit *memlimit.Resolved
+	// Locations maps a dataset name to the location the campaign read it
+	// from, for the datasets the plan rewrote (plan.RewrittenLocations).
+	Locations map[string]string
 }
 
 // metadataFile is the write-side of the manifest. It is a separate type from
@@ -105,6 +108,9 @@ type datasetMetadata struct {
 	Kind     string `json:"kind"`
 	Location string `json:"location"`
 	Chunks   []int  `json:"chunks"`
+	// ConfiguredLocation is the config's location when Location is the
+	// rewrite the campaign read instead.
+	ConfiguredLocation string `json:"configured_location,omitempty"`
 }
 
 // WriteMetadata writes <dir>/metadata.json. Written twice per campaign: up
@@ -155,12 +161,16 @@ func marshalMetadata(in MetadataInput) ([]byte, error) {
 	}
 	for i := range cfg.Datasets {
 		d := &cfg.Datasets[i]
-		m.Datasets = append(m.Datasets, datasetMetadata{
+		ds := datasetMetadata{
 			Name:     d.Name,
 			Kind:     d.Kind,
 			Location: d.LocationString(),
 			Chunks:   d.Chunks,
-		})
+		}
+		if loc, ok := in.Locations[d.Name]; ok && loc != ds.Location {
+			ds.ConfiguredLocation, ds.Location = ds.Location, loc
+		}
+		m.Datasets = append(m.Datasets, ds)
 	}
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {

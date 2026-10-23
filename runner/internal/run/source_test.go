@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -370,5 +371,39 @@ func TestDetectEmptyColdOutDir(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: DetectEmptyColdOutDir = %t, want %t", tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestDetectPackGeneration checks the probe for the packfile trailer size,
+// which a test file alone does not set.
+func TestDetectPackGeneration(t *testing.T) {
+	repo, none := originRepo(t)
+	pkg := "cmd/stellar-rpc/internal/rpcv2/packfile"
+	mustMkdir(t, filepath.Join(repo, pkg))
+	const decl = "package packfile\n\nconst (\n\tmagic = 0x48434C53\n\tversion     = 1\n\ttrailerSize = %s\n)\n"
+	v4 := commit(t, repo, pkg+"/packfile.go", fmt.Sprintf(decl, "76"))
+	testOnly := commit(t, repo, pkg+"/packfile_test.go", fmt.Sprintf(decl, "44"))
+	v5 := commit(t, repo, pkg+"/packfile.go", fmt.Sprintf(decl, "44"))
+	unknown := commit(t, repo, pkg+"/packfile.go", fmt.Sprintf(decl, "52"))
+	for _, tc := range []struct {
+		name   string
+		commit string
+		want   plan.PackGeneration
+	}{
+		{"no packfile library", none, ""},
+		{"before #1128", v4, plan.PackGenV4},
+		{"a 44-byte trailer in a test file only", testOnly, plan.PackGenV4},
+		{"from #1128 on", v5, plan.PackGenV5},
+	} {
+		got, err := DetectPackGeneration(repo, tc.commit)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: DetectPackGeneration = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got, err := DetectPackGeneration(repo, unknown); err == nil {
+		t.Errorf("DetectPackGeneration of a 52-byte trailer = %q, want an error", got)
 	}
 }
