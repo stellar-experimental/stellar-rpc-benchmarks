@@ -932,6 +932,32 @@
           "p99_ns": 205029029
         }
       ]
+    },
+    {
+      "id": "phase3b-8x-c772750e-20261023T061637Z",
+      "name": "phase3b-8x",
+      "date": "2026-10-23",
+      "kind": "synthetic",
+      "path": "runs/phase3b-8x-c772750e-20261023T061637Z.json",
+      "phase": "3b",
+      "machine": "c6id.8xlarge",
+      "hostname": "ip-172-31-2-203",
+      "commit": "c772750e6669fb7f5e7e702721f8c4f2244e6c3a",
+      "branch": "HEAD",
+      "ingest_p99": [
+        {
+          "unit": "sac-9000-c1",
+          "p99_ns": 227577236
+        },
+        {
+          "unit": "custom_token-5400-c1",
+          "p99_ns": 131290439
+        },
+        {
+          "unit": "soroswap-2700-c1",
+          "p99_ns": 107218732
+        }
+      ]
     }
   ]
 }
